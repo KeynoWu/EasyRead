@@ -111,6 +111,26 @@ class _ReaderSettingsPanelState extends ConsumerState<ReaderSettingsPanel> {
             ),
           ),
           const SizedBox(height: 16),
+          // 正文字体
+          _buildSection(
+            title: '正文字体',
+            child: SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(value: false, label: Text('无衬线')),
+                ButtonSegment(value: true, label: Text('衬线')),
+              ],
+              selected: {state.layoutConfig.fontFamily != null},
+              onSelectionChanged: (selection) {
+                final useSerif = selection.first;
+                notifier.updateLayout(LayoutConfig(
+                  fontSize: state.layoutConfig.fontSize,
+                  lineHeight: state.layoutConfig.lineHeight,
+                  fontFamily: useSerif ? 'Georgia' : null,
+                ));
+              },
+            ),
+          ),
+          const SizedBox(height: 16),
           // 主题选择
           _buildSection(
             title: '主题',

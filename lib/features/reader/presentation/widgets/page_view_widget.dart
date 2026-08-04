@@ -129,6 +129,8 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
                       fontSize: state.layoutConfig.fontSize,
                       height: state.layoutConfig.lineHeight,
                       color: state.theme.textColor,
+                      fontFamily: state.layoutConfig.fontFamily,
+                      fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
                     ),
                   ),
                 );
@@ -141,6 +143,8 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
                       fontSize: state.layoutConfig.fontSize + 4,
                       fontWeight: FontWeight.w700,
                       color: state.theme.textColor,
+                      fontFamily: state.layoutConfig.fontFamily,
+                      fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
                     ),
                   ),
                 );
@@ -153,6 +157,8 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
                     fontSize: state.layoutConfig.fontSize,
                     height: state.layoutConfig.lineHeight,
                     color: state.theme.textColor,
+                    fontFamily: state.layoutConfig.fontFamily,
+                    fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
                   ),
                 );
               case NodeType.image:

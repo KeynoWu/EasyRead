@@ -8,6 +8,7 @@ class LayoutConfig {
   final double paragraphSpacing;
   final double horizontalPadding;
   final FontWeight fontWeight;
+  final String? fontFamily; // null = 无衬线（系统默认）
 
   const LayoutConfig({
     this.fontSize = 18.0,
@@ -15,6 +16,7 @@ class LayoutConfig {
     this.paragraphSpacing = 12.0,
     this.horizontalPadding = 16.0,
     this.fontWeight = FontWeight.w400,
+    this.fontFamily,
   });
 }
 
@@ -150,6 +152,8 @@ class PageLayout {
       fontSize: config.fontSize,
       height: config.lineHeight,
       fontWeight: config.fontWeight,
+      fontFamily: config.fontFamily,
+      fontFamilyFallback: config.fontFamily != null ? ['serif'] : null,
     );
   }
 }
