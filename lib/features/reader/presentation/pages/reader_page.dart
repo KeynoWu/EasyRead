@@ -9,8 +9,15 @@ import '../widgets/reader_settings_panel.dart';
 
 class ReaderPage extends ConsumerStatefulWidget {
   final String bookId;
+  final String? sourceId;
+  final String? detailUrl;
 
-  const ReaderPage({super.key, required this.bookId});
+  const ReaderPage({
+    super.key,
+    required this.bookId,
+    this.sourceId,
+    this.detailUrl,
+  });
 
   @override
   ConsumerState<ReaderPage> createState() => _ReaderPageState();
@@ -34,7 +41,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       ref.read(readerProvider.notifier).loadChapter(
         bookId: widget.bookId,
         chapterIndex: startChapter,
-        sourceId: 'default',
+        sourceId: widget.sourceId ?? 'default',
+        detailUrl: widget.detailUrl,
       );
     });
   }

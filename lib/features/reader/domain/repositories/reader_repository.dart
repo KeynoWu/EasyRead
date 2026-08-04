@@ -1,13 +1,22 @@
 import '../entities/chapter.dart';
+import '../entities/chapter_catalog.dart';
 import '../entities/reading_progress.dart';
 
 /// 阅读器仓库接口
 abstract class ReaderRepository {
+  /// 获取章节目录（优先缓存，无缓存时从网络获取）
+  Future<ChapterCatalog> getCatalog({
+    required String bookId,
+    required String sourceId,
+    required String detailUrl,
+  });
+
   /// 获取章节内容（优先缓存，无缓存时从网络获取）
   Future<Chapter> getChapter({
     required String bookId,
     required int chapterIndex,
     required String sourceId,
+    String? detailUrl,
   });
 
   /// 保存阅读进度
@@ -25,5 +34,6 @@ abstract class ReaderRepository {
     required int startIndex,
     required int count,
     required String sourceId,
+    String? detailUrl,
   });
 }

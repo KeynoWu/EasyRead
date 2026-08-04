@@ -12,7 +12,7 @@ class SearchResultItem extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       child: InkWell(
-        onTap: () => context.push('/reader/${result.bookId}'),
+        onTap: () => context.push('/reader/${result.bookId}?sourceId=${result.sourceId}&detailUrl=${result.detailUrl ?? ''}'),
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.all(12),

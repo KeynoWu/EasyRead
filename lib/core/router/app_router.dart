@@ -22,7 +22,13 @@ class AppRouter {
         name: 'reader',
         builder: (context, state) {
           final bookId = state.pathParameters['bookId'] ?? '';
-          return ReaderPage(bookId: bookId);
+          final sourceId = state.uri.queryParameters['sourceId'];
+          final detailUrl = state.uri.queryParameters['detailUrl'];
+          return ReaderPage(
+            bookId: bookId,
+            sourceId: sourceId,
+            detailUrl: detailUrl,
+          );
         },
       ),
     ],

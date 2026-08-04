@@ -71,6 +71,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
     required String bookId,
     required int chapterIndex,
     required String sourceId,
+    String? detailUrl,
   }) async {
     state = state.copyWith(isLoading: true);
     try {
@@ -78,6 +79,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
         bookId: bookId,
         chapterIndex: chapterIndex,
         sourceId: sourceId,
+        detailUrl: detailUrl,
       );
       final nodes = _parser.parse(chapter.content);
       final layout = PageLayout(
@@ -103,6 +105,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
         startIndex: chapterIndex + 1,
         count: 2,
         sourceId: sourceId,
+        detailUrl: detailUrl,
       );
     } catch (e) {
       state = state.copyWith(isLoading: false);
