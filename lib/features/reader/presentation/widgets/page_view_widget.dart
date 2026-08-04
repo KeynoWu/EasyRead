@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/pagination/page_layout.dart';
 import '../../core/parser/node_tree.dart';
+import '../../../../core/theme/app_colors.dart';
 import '../providers/reader_provider.dart';
 import 'scroll_view_widget.dart';
 
@@ -99,7 +100,7 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
                     child: LinearProgressIndicator(
                       value: (state.currentPage + 1) / state.pages.length,
                       backgroundColor: state.theme.textColor.withOpacity(0.2),
-                      color: Colors.blue,
+                      color: AppColors.tint,
                     ),
                   ),
                 ),

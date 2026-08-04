@@ -24,6 +24,8 @@ class _MainShellState extends State<MainShell> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return Scaffold(
       body: IndexedStack(
         index: _currentIndex,
@@ -31,24 +33,38 @@ class _MainShellState extends State<MainShell> {
       ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
-          border: Border(
-            top: BorderSide(color: AppColors.separator.withValues(alpha: 0.3)),
-          ),
-        ),
-        child: BottomNavigationBar(
-          currentIndex: _currentIndex,
-          onTap: (index) => setState(() => _currentIndex = index),
-          backgroundColor: AppColors.background,
-          selectedItemColor: AppColors.tint,
-          unselectedItemColor: AppColors.textSecondary,
-          items: const [
-            BottomNavigationBarItem(icon: Icon(Icons.library_books), label: '书架'),
-            BottomNavigationBarItem(icon: Icon(Icons.search), label: '搜索'),
-            BottomNavigationBarItem(icon: Icon(Icons.link), label: '书源'),
-            BottomNavigationBarItem(icon: Icon(Icons.settings_outlined), label: '设置'),
+          color: isDark ? AppColors.darkSurface : AppColors.surface,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.06),
+              blurRadius: 16,
+              offset: const Offset(0, -2),
+            ),
           ],
         ),
+        child: SafeArea(
+          top: false,
+          child: BottomNavigationBar(
+            currentIndex: _currentIndex,
+            onTap: (index) => setState(() => _currentIndex = index),
+            backgroundColor: Colors.transparent,
+            items: [
+              _navItem(Icons.library_books_outlined, Icons.library_books, '书架', 0),
+              _navItem(Icons.search_outlined, Icons.search, '搜索', 1),
+              _navItem(Icons.link_outlined, Icons.link, '书源', 2),
+              _navItem(Icons.settings_outlined, Icons.settings, '设置', 3),
+            ],
+          ),
+        ),
       ),
+    );
+  }
+
+  BottomNavigationBarItem _navItem(IconData outline, IconData filled, String label, int index) {
+    return BottomNavigationBarItem(
+      icon: Icon(outline),
+      activeIcon: Icon(filled),
+      label: label,
     );
   }
 }

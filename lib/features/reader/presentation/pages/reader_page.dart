@@ -1,4 +1,5 @@
 import 'dart:convert';
+import '../../../../core/theme/app_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -261,68 +262,11 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                           style: TextStyle(color: state.theme.textColor, fontSize: 14),
                         ),
                       const Spacer(),
-                      // 上一章
-                      IconButton(
-                        icon: Icon(Icons.skip_previous, color: state.theme.textColor),
-                        onPressed: ref.read(readerProvider.notifier).hasPrevChapter
-                            ? () => ref.read(readerProvider.notifier).prevChapter()
-                            : null,
-                        tooltip: '上一章',
-                      ),
-                      // 下一章
-                      IconButton(
-                        icon: Icon(Icons.skip_next, color: state.theme.textColor),
-                        onPressed: ref.read(readerProvider.notifier).hasNextChapter
-                            ? () => ref.read(readerProvider.notifier).nextChapter()
-                            : null,
-                        tooltip: '下一章',
-                      ),
-                      // 笔记按钮
-                      IconButton(
-                        icon: Icon(Icons.sticky_note_2_outlined, color: state.theme.textColor),
-                        onPressed: _addNote,
-                        tooltip: '添加笔记',
-                      ),
-                      IconButton(
-                        icon: Icon(Icons.notes_outlined, color: state.theme.textColor),
-                        onPressed: _openNotes,
-                        tooltip: '笔记列表',
-                      ),
-                      // 章节搜索按钮
-                      IconButton(
-                        icon: Icon(Icons.search, color: state.theme.textColor),
-                        onPressed: _openChapterSearch,
-                        tooltip: '搜索本章',
-                      ),
-                      // 换源按钮
-                      if (_alternatives.isNotEmpty)
-                        IconButton(
-                          icon: Icon(Icons.swap_horiz, color: state.theme.textColor),
-                          onPressed: _openSourceSwitcher,
-                          tooltip: '切换书源',
-                        ),
-                      // 书签按钮
-                      IconButton(
-                        icon: Icon(Icons.bookmark_add_outlined, color: state.theme.textColor),
-                        onPressed: _toggleBookmark,
-                        tooltip: '添加书签',
-                      ),
-                      IconButton(
-                        icon: Icon(Icons.bookmarks_outlined, color: state.theme.textColor),
-                        onPressed: _openBookmarks,
-                        tooltip: '书签列表',
-                      ),
-                      // 目录按钮
-                      IconButton(
-                        icon: Icon(Icons.list, color: state.theme.textColor),
-                        onPressed: _openCatalog,
-                        tooltip: '章节目录',
-                      ),
                       // TTS 听书按钮
                       IconButton(
                         icon: Icon(
                           _isTtsPlaying ? Icons.stop_circle_outlined : Icons.play_circle_outline,
-                          color: _isTtsPlaying ? Colors.green : state.theme.textColor,
+                          color: _isTtsPlaying ? AppColors.tint : state.theme.textColor,
                         ),
                         onPressed: _toggleTts,
                         tooltip: _isTtsPlaying ? '停止朗读' : '朗读本章',
@@ -330,6 +274,85 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                       IconButton(
                         icon: Icon(Icons.settings, color: state.theme.textColor),
                         onPressed: () => ref.read(readerProvider.notifier).toggleSettings(),
+                      ),
+                      // 更多菜单
+                      PopupMenuButton<String>(
+                        icon: Icon(Icons.more_horiz, color: state.theme.textColor),
+                        color: Colors.white,
+                        onSelected: (value) {
+                          switch (value) {
+                            case 'prev':
+                              ref.read(readerProvider.notifier).prevChapter();
+                              break;
+                            case 'next':
+                              ref.read(readerProvider.notifier).nextChapter();
+                              break;
+                            case 'catalog':
+                              _openCatalog();
+                              break;
+                            case 'search':
+                              _openChapterSearch();
+                              break;
+                            case 'bookmark_add':
+                              _toggleBookmark();
+                              break;
+                            case 'bookmarks':
+                              _openBookmarks();
+                              break;
+                            case 'note_add':
+                              _addNote();
+                              break;
+                            case 'notes':
+                              _openNotes();
+                              break;
+                            case 'source':
+                              _openSourceSwitcher();
+                              break;
+                          }
+                        },
+                        itemBuilder: (context) => [
+                          PopupMenuItem(
+                            value: 'prev',
+                            enabled: ref.read(readerProvider.notifier).hasPrevChapter,
+                            child: const _MenuRow(icon: Icons.skip_previous, label: '上一章'),
+                          ),
+                          PopupMenuItem(
+                            value: 'next',
+                            enabled: ref.read(readerProvider.notifier).hasNextChapter,
+                            child: const _MenuRow(icon: Icons.skip_next, label: '下一章'),
+                          ),
+                          const PopupMenuDivider(),
+                          const PopupMenuItem(
+                            value: 'catalog',
+                            child: _MenuRow(icon: Icons.list, label: '章节目录'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'search',
+                            child: _MenuRow(icon: Icons.search, label: '搜索本章'),
+                          ),
+                          if (_alternatives.isNotEmpty)
+                            const PopupMenuItem(
+                              value: 'source',
+                              child: _MenuRow(icon: Icons.swap_horiz, label: '切换书源'),
+                            ),
+                          const PopupMenuDivider(),
+                          const PopupMenuItem(
+                            value: 'bookmark_add',
+                            child: _MenuRow(icon: Icons.bookmark_add_outlined, label: '添加书签'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'bookmarks',
+                            child: _MenuRow(icon: Icons.bookmarks_outlined, label: '书签列表'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'note_add',
+                            child: _MenuRow(icon: Icons.sticky_note_2_outlined, label: '添加笔记'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'notes',
+                            child: _MenuRow(icon: Icons.notes_outlined, label: '笔记列表'),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -347,6 +370,25 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 弹出菜单行
+class _MenuRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _MenuRow({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: AppColors.textSecondary),
+        const SizedBox(width: 12),
+        Text(label, style: const TextStyle(fontSize: 14)),
+      ],
     );
   }
 }

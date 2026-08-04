@@ -96,38 +96,40 @@ class _SearchPageState extends ConsumerState<SearchPage> {
             child: Text('输入关键词搜索书籍', style: TextStyle(color: AppColors.textSecondary)),
           );
         }
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return ListView(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              padding: const EdgeInsets.only(top: 8, bottom: 12),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('搜索历史', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                  TextButton(
+                  const Text('搜索历史', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                  TextButton.icon(
                     onPressed: _clearHistory,
-                    child: const Text('清空', style: TextStyle(fontSize: 12)),
+                    icon: const Icon(Icons.delete_sweep_outlined, size: 16),
+                    label: const Text('清空', style: TextStyle(fontSize: 12)),
                   ),
                 ],
               ),
             ),
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                children: history
-                    .map((keyword) => ListTile(
-                          dense: true,
-                          leading: const Icon(Icons.history, size: 18, color: AppColors.textSecondary),
-                          title: Text(keyword, style: const TextStyle(fontSize: 14)),
-                          trailing: const Icon(Icons.north_west, size: 14, color: AppColors.textSecondary),
-                          onTap: () {
-                            _searchController.text = keyword;
-                            _search(keyword);
-                          },
-                        ))
-                    .toList(),
-              ),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: history
+                  .map((keyword) => ActionChip(
+                        avatar: Icon(Icons.history, size: 16, color: AppColors.tint),
+                        label: Text(keyword, style: const TextStyle(fontSize: 13)),
+                        backgroundColor: isDark ? AppColors.darkSurface : Colors.white,
+                        side: const BorderSide(color: AppColors.separator),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                        onPressed: () {
+                          _searchController.text = keyword;
+                          _search(keyword);
+                        },
+                      ))
+                  .toList(),
             ),
           ],
         );

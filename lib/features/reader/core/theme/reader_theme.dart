@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../../core/theme/app_colors.dart';
 
 /// 阅读器主题预设
 class ReaderThemeConfig {
@@ -15,18 +16,18 @@ class ReaderThemeConfig {
   });
 }
 
-/// 阅读器主题集合
+/// 阅读器主题集合 — 纸感色系
 class ReaderThemes {
   static const List<ReaderThemeConfig> themes = [
-    ReaderThemeConfig(name: '日间', backgroundColor: Color(0xFFF5F0E8), textColor: Color(0xFF3C3C3C)),
-    ReaderThemeConfig(name: '夜间', backgroundColor: Color(0xFF000000), textColor: Color(0xFF888888)),
-    ReaderThemeConfig(name: '护眼绿', backgroundColor: Color(0xFFC7EDCC), textColor: Color(0xFF2C4C3C)),
-    ReaderThemeConfig(name: '羊皮纸', backgroundColor: Color(0xFFF5E6C8), textColor: Color(0xFF5C4A3C)),
+    ReaderThemeConfig(name: '日间', backgroundColor: AppColors.readDay, textColor: AppColors.readDayText),
+    ReaderThemeConfig(name: '夜间', backgroundColor: AppColors.readNight, textColor: AppColors.readNightText),
+    ReaderThemeConfig(name: '护眼绿', backgroundColor: AppColors.readGreen, textColor: AppColors.readGreenText),
+    ReaderThemeConfig(name: '羊皮纸', backgroundColor: AppColors.readSepia, textColor: AppColors.readSepiaText),
   ];
 
   static const ReaderThemeConfig defaultTheme = ReaderThemeConfig(
     name: '日间',
-    backgroundColor: Color(0xFFF5F0E8),
-    textColor: Color(0xFF3C3C3C),
+    backgroundColor: AppColors.readDay,
+    textColor: AppColors.readDayText,
   );
 }

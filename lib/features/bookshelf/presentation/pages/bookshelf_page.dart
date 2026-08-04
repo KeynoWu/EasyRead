@@ -203,7 +203,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Icon(Icons.auto_stories, size: 64, color: AppColors.textSecondary.withValues(alpha: 0.4)),
+                            Icon(Icons.auto_stories, size: 64, color: AppColors.tint.withValues(alpha: 0.5)),
                             const SizedBox(height: 16),
                             const Text('书架空空', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
                             const SizedBox(height: 8),
@@ -258,6 +258,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   }
 
   Widget _buildFilterChip(String label, bool selected, VoidCallback onTap) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
       padding: const EdgeInsets.only(right: 8),
       child: ChoiceChip(
@@ -265,6 +266,17 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
         selected: selected,
         onSelected: (_) => onTap(),
         visualDensity: VisualDensity.compact,
+        selectedColor: AppColors.tint,
+        backgroundColor: isDark ? AppColors.darkSurface : Colors.white,
+        labelStyle: TextStyle(
+          fontSize: 13,
+          fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+          color: selected ? Colors.white : (isDark ? AppColors.darkTextPrimary : AppColors.textPrimary),
+        ),
+        side: BorderSide(
+          color: selected ? AppColors.tint : AppColors.separator,
+        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       ),
     );
   }
