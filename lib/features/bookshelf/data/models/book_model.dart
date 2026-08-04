@@ -14,6 +14,7 @@ class BookModel extends HiveObject {
   final String? sourceId;
   final String? lastChapter;
   final double progress;
+  final String? group;
   final DateTime lastReadAt;
 
   BookModel({
@@ -24,6 +25,7 @@ class BookModel extends HiveObject {
     this.sourceId,
     this.lastChapter,
     this.progress = 0.0,
+    this.group,
     required this.lastReadAt,
   });
 
@@ -36,6 +38,7 @@ class BookModel extends HiveObject {
       sourceId: book.sourceId,
       lastChapter: book.lastChapter,
       progress: book.progress,
+      group: book.group,
       lastReadAt: book.lastReadAt,
     );
   }
@@ -49,6 +52,7 @@ class BookModel extends HiveObject {
       sourceId: sourceId,
       lastChapter: lastChapter,
       progress: progress,
+      group: group,
       lastReadAt: lastReadAt,
     );
   }
@@ -70,6 +74,7 @@ class BookModelAdapter extends TypeAdapter<BookModel> {
       lastChapter: reader.readBool() ? reader.readString() : null,
       progress: reader.readDouble(),
       lastReadAt: DateTime.fromMillisecondsSinceEpoch(reader.readInt()),
+      group: reader.readBool() ? reader.readString() : null,
     );
   }
 
@@ -87,5 +92,7 @@ class BookModelAdapter extends TypeAdapter<BookModel> {
     if (obj.lastChapter != null) writer.writeString(obj.lastChapter!);
     writer.writeDouble(obj.progress);
     writer.writeInt(obj.lastReadAt.millisecondsSinceEpoch);
+    writer.writeBool(obj.group != null);
+    if (obj.group != null) writer.writeString(obj.group!);
   }
 }

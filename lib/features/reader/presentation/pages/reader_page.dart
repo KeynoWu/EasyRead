@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../data/services/tts_service.dart';
 import '../providers/reader_provider.dart';
 import '../widgets/page_view_widget.dart';
 import '../widgets/reader_settings_panel.dart';
@@ -15,6 +16,9 @@ class ReaderPage extends ConsumerStatefulWidget {
 }
 
 class _ReaderPageState extends ConsumerState<ReaderPage> {
+  final TtsService _tts = TtsService();
+  bool _isTtsPlaying = false;
+
   @override
   void initState() {
     super.initState();
@@ -28,6 +32,25 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   }
 
   @override
+  void dispose() {
+    _tts.stop();
+    super.dispose();
+  }
+
+  Future<void> _toggleTts() async {
+    final state = ref.read(readerProvider);
+    if (state.currentChapter == null) return;
+
+    if (_isTtsPlaying) {
+      await _tts.stop();
+      setState(() => _isTtsPlaying = false);
+    } else {
+      await _tts.speak(state.currentChapter!.content);
+      setState(() => _isTtsPlaying = true);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final state = ref.watch(readerProvider);
 
@@ -36,10 +59,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       body: SafeArea(
         child: Stack(
           children: [
-            // 阅读区域
             Column(
               children: [
-                // 顶部导航栏
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   color: state.theme.backgroundColor,
@@ -56,6 +77,15 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                           style: TextStyle(color: state.theme.textColor, fontSize: 14),
                         ),
                       const Spacer(),
+                      // TTS 听书按钮
+                      IconButton(
+                        icon: Icon(
+                          _isTtsPlaying ? Icons.stop_circle_outlined : Icons.play_circle_outline,
+                          color: _isTtsPlaying ? Colors.green : state.theme.textColor,
+                        ),
+                        onPressed: _toggleTts,
+                        tooltip: _isTtsPlaying ? '停止朗读' : '朗读本章',
+                      ),
                       IconButton(
                         icon: Icon(Icons.settings, color: state.theme.textColor),
                         onPressed: () => ref.read(readerProvider.notifier).toggleSettings(),
@@ -63,11 +93,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                     ],
                   ),
                 ),
-                // 阅读内容
                 Expanded(child: ReaderPageView()),
               ],
             ),
-            // 设置面板
             if (state.showSettings)
               Positioned(
                 bottom: 0,

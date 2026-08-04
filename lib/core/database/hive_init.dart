@@ -1,6 +1,7 @@
 import 'package:hive_flutter/hive_flutter.dart';
 import '../../features/bookshelf/data/models/book_model.dart';
 import '../../features/book_source/data/models/book_source_model.dart';
+import '../../features/book_source/data/models/source_subscription_model.dart';
 import '../../features/reader/data/models/chapter_model.dart';
 import '../../features/reader/data/models/reading_progress_model.dart';
 
@@ -11,6 +12,7 @@ class HiveBoxes {
   static const String settings = 'settings';
   static const String chapters = 'chapters';
   static const String readingProgress = 'reading_progress';
+  static const String sourceSubscriptions = 'source_subscriptions';
 }
 
 /// 初始化 Hive 存储
@@ -18,6 +20,7 @@ Future<void> initHive() async {
   await Hive.initFlutter();
   Hive.registerAdapter(BookModelAdapter());
   Hive.registerAdapter(BookSourceModelAdapter());
+  Hive.registerAdapter(SourceSubscriptionModelAdapter());
   Hive.registerAdapter(ChapterModelAdapter());
   Hive.registerAdapter(ReadingProgressModelAdapter());
   await Hive.openBox<BookModel>(HiveBoxes.bookshelf);
@@ -25,4 +28,5 @@ Future<void> initHive() async {
   await Hive.openBox(HiveBoxes.settings);
   await Hive.openBox<ChapterModel>(HiveBoxes.chapters);
   await Hive.openBox<ReadingProgressModel>(HiveBoxes.readingProgress);
+  await Hive.openBox<SourceSubscriptionModel>(HiveBoxes.sourceSubscriptions);
 }

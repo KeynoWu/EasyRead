@@ -3,6 +3,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../bookshelf/presentation/pages/bookshelf_page.dart';
 import '../../../search/presentation/pages/search_page.dart';
 import '../../../book_source/presentation/pages/book_source_list_page.dart';
+import '../../../settings/presentation/pages/settings_page.dart';
 
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
@@ -18,6 +19,7 @@ class _MainShellState extends State<MainShell> {
     BookshelfPage(),
     SearchPage(),
     BookSourceListPage(),
+    SettingsPage(),
   ];
 
   @override
@@ -43,6 +45,7 @@ class _MainShellState extends State<MainShell> {
             BottomNavigationBarItem(icon: Icon(Icons.library_books), label: '书架'),
             BottomNavigationBarItem(icon: Icon(Icons.search), label: '搜索'),
             BottomNavigationBarItem(icon: Icon(Icons.link), label: '书源'),
+            BottomNavigationBarItem(icon: Icon(Icons.settings_outlined), label: '设置'),
           ],
         ),
       ),

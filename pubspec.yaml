@@ -44,6 +44,8 @@ dependencies:
   xml: ^7.0.1
   file_picker: ^11.0.3
   either_dart: ^1.0.0
+  path_provider: ^2.1.6
+  flutter_tts: ^4.2.5
 dev_dependencies:
   flutter_test:
     sdk: flutter
