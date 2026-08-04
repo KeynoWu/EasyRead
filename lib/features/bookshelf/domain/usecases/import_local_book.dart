@@ -12,7 +12,7 @@ class ImportLocalBook {
 
   /// 从本地文件导入
   Future<Book?> fromFile() async {
-    final result = await FilePicker.pickFiles(
+    final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['txt', 'epub'],
       allowMultiple: true,

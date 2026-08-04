@@ -42,7 +42,7 @@ dependencies:
   hive_flutter: ^1.1.0
   html: ^0.15.6
   xml: ^7.0.1
-  file_picker: ^11.0.3
+  file_picker: ^10.3.3
   either_dart: ^1.0.0
   path_provider: ^2.1.6
   flutter_tts: ^4.2.5
@@ -96,3 +96,6 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# 临时覆盖：flutter_plugin_android_lifecycle 2.0.35 要求 compileSdk 36，
+# 固定到不需要 36 的版本以兼容当前 Android 构建环境

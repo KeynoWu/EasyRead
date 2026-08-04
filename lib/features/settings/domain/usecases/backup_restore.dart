@@ -64,7 +64,7 @@ class BackupRestore {
   /// 从文件恢复备份
   Future<String?> restoreBackup() async {
     try {
-      final result = await FilePicker.pickFiles(
+      final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['json'],
         allowMultiple: false,

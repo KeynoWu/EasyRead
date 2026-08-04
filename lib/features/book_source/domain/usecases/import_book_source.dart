@@ -22,7 +22,7 @@ class ImportBookSource {
 
   /// 从文件导入
   Future<Either<String, List<BookSource>>> fromFile() async {
-    final result = await FilePicker.pickFiles(
+    final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['json'],
       allowMultiple: true,
