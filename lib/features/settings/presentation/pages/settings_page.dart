@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'purification_rules_page.dart';
+import 'reading_stats_page.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../domain/usecases/backup_restore.dart';
 import '../../../book_source/presentation/providers/book_source_provider.dart';
@@ -60,6 +61,15 @@ class SettingsPage extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () async {
               await Navigator.push(context, MaterialPageRoute(builder: (_) => const PurificationRulesPage()));
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.insights_outlined),
+            title: const Text('阅读统计'),
+            subtitle: const Text('查看阅读时长和记录'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () async {
+              await Navigator.push(context, MaterialPageRoute(builder: (_) => const ReadingStatsPage()));
             },
           ),
           const Divider(),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../data/services/tts_service.dart';
+import '../../../settings/domain/usecases/reading_stats_service.dart';
 import '../providers/reader_provider.dart';
 import '../widgets/page_view_widget.dart';
 import '../widgets/reader_settings_panel.dart';
@@ -17,11 +18,14 @@ class ReaderPage extends ConsumerStatefulWidget {
 
 class _ReaderPageState extends ConsumerState<ReaderPage> {
   final TtsService _tts = TtsService();
+  final ReadingStatsService _statsService = ReadingStatsService();
   bool _isTtsPlaying = false;
+  DateTime? _pageOpenTime;
 
   @override
   void initState() {
     super.initState();
+    _pageOpenTime = DateTime.now();
     Future.microtask(() {
       ref.read(readerProvider.notifier).loadChapter(
         bookId: widget.bookId,
@@ -34,6 +38,14 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   @override
   void dispose() {
     _tts.stop();
+    // 记录本次阅读时长
+    final openTime = _pageOpenTime;
+    if (openTime != null) {
+      final elapsed = DateTime.now().difference(openTime).inSeconds;
+      if (elapsed > 5) {
+        _statsService.recordSession(elapsed);
+      }
+    }
     super.dispose();
   }
 
