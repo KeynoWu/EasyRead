@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../../core/theme/app_colors.dart';
 import '../../data/services/bookmark_service.dart';
 import '../../domain/entities/bookmark.dart';
 
@@ -32,8 +33,8 @@ class _BookmarkSheetState extends State<BookmarkSheet> {
   Widget build(BuildContext context) {
     return Container(
       height: 400,
-      decoration: const BoxDecoration(
-        color: Colors.white,
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       child: Column(
@@ -60,7 +61,7 @@ class _BookmarkSheetState extends State<BookmarkSheet> {
                     final bookmark = bookmarks[index];
                     return ListTile(
                       dense: true,
-                      leading: const Icon(Icons.bookmark, color: Colors.amber),
+                      leading: const Icon(Icons.bookmark, color: AppColors.tint),
                       title: Text('第 ${bookmark.chapterIndex + 1} 章 · 第 ${bookmark.pageIndex + 1} 页'),
                       subtitle: Text(_formatTime(bookmark.createdAt)),
                       trailing: IconButton(

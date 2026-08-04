@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../../core/theme/app_colors.dart';
 import '../../data/services/note_service.dart';
 import '../../domain/entities/reading_note.dart';
 
@@ -32,8 +33,8 @@ class _NoteSheetState extends State<NoteSheet> {
   Widget build(BuildContext context) {
     return Container(
       height: 400,
-      decoration: const BoxDecoration(
-        color: Colors.white,
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       child: Column(
@@ -61,7 +62,7 @@ class _NoteSheetState extends State<NoteSheet> {
                     return Card(
                       child: ListTile(
                         dense: true,
-                        leading: const Icon(Icons.sticky_note_2_outlined, color: Colors.orange),
+                        leading: const Icon(Icons.sticky_note_2_outlined, color: AppColors.tint),
                         title: Text(
                           note.text,
                           maxLines: 2,

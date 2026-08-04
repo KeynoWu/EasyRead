@@ -16,41 +16,43 @@ class BookSourceImportPage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('导入书源')),
-      body: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _ImportButton(
-              icon: Icons.file_upload_outlined,
-              title: '从本地文件导入',
-              subtitle: '支持 JSON 格式书源文件',
-              onTap: () async {
-                final result = await useCase.fromFile();
-                if (!context.mounted) return;
-                _handleResult(context, result);
-              },
-            ),
-            const SizedBox(height: 12),
-            _ImportButton(
-              icon: Icons.link,
-              title: '从网络链接导入',
-              subtitle: '输入书源订阅地址',
-              onTap: () => _showUrlDialog(context, useCase),
-            ),
-            const SizedBox(height: 12),
-            _ImportButton(
-              icon: Icons.content_paste,
-              title: '从剪贴板导入',
-              subtitle: '粘贴书源 JSON 内容',
-              onTap: () async {
-                final result = await useCase.fromClipboard();
-                if (!context.mounted) return;
-                _handleResult(context, result);
-              },
-            ),
-          ],
-        ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const SizedBox(height: 8),
+          _ImportButton(
+            icon: Icons.file_upload_outlined,
+            iconColor: AppColors.tint,
+            iconBg: AppColors.tintSoft,
+            title: '从本地文件导入',
+            subtitle: '支持 JSON 格式书源文件',
+            onTap: () async {
+              final result = await useCase.fromFile();
+              _handleResult(context, result);
+            },
+          ),
+          const SizedBox(height: 12),
+          _ImportButton(
+            icon: Icons.link,
+            iconColor: AppColors.tint,
+            iconBg: AppColors.tintSoft,
+            title: '从网络链接导入',
+            subtitle: '输入书源订阅地址',
+            onTap: () => _showUrlDialog(context, useCase),
+          ),
+          const SizedBox(height: 12),
+          _ImportButton(
+            icon: Icons.content_paste,
+            iconColor: AppColors.tint,
+            iconBg: AppColors.tintSoft,
+            title: '从剪贴板导入',
+            subtitle: '粘贴书源 JSON 内容',
+            onTap: () async {
+              final result = await useCase.fromClipboard();
+              _handleResult(context, result);
+            },
+          ),
+        ],
       ),
     );
   }
@@ -59,25 +61,22 @@ class BookSourceImportPage extends ConsumerWidget {
     final controller = TextEditingController();
     showDialog(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (context) => AlertDialog(
         title: const Text('输入书源地址'),
         content: TextField(
           controller: controller,
           keyboardType: TextInputType.url,
-          decoration: const InputDecoration(
-            hintText: 'https://example.com/sources.json',
-          ),
+          decoration: const InputDecoration(hintText: 'https://example.com/sources.json'),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
+            onPressed: () => Navigator.pop(context),
             child: const Text('取消'),
           ),
           FilledButton(
             onPressed: () async {
-              Navigator.pop(dialogContext);
+              Navigator.pop(context);
               final result = await useCase.fromUrl(controller.text);
-              if (!context.mounted) return;
               _handleResult(context, result);
             },
             child: const Text('导入'),
@@ -106,12 +105,16 @@ class BookSourceImportPage extends ConsumerWidget {
 
 class _ImportButton extends StatelessWidget {
   final IconData icon;
+  final Color iconColor;
+  final Color iconBg;
   final String title;
   final String subtitle;
   final VoidCallback onTap;
 
   const _ImportButton({
     required this.icon,
+    required this.iconColor,
+    required this.iconBg,
     required this.title,
     required this.subtitle,
     required this.onTap,
@@ -119,26 +122,47 @@ class _ImportButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Card(
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Row(
             children: [
-              Icon(icon, size: 32, color: AppColors.tint),
-              const SizedBox(width: 16),
+              // 图标
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: iconBg,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, size: 22, color: iconColor),
+              ),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-                    Text(subtitle, style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: isDark ? AppColors.darkTextPrimary : AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                    ),
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right, color: AppColors.textSecondary),
+              const Icon(Icons.chevron_right, size: 18, color: AppColors.textSecondary),
             ],
           ),
         ),

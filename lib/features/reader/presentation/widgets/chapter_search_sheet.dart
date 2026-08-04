@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../../core/theme/app_colors.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/reader_provider.dart';
 
@@ -45,8 +46,8 @@ class _ChapterSearchSheetState extends ConsumerState<ChapterSearchSheet> {
     final totalMatches = _matches.length;
     return Container(
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      decoration: const BoxDecoration(
-        color: Colors.white,
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       child: Column(
@@ -87,7 +88,7 @@ class _ChapterSearchSheetState extends ConsumerState<ChapterSearchSheet> {
               totalMatches == 0
                   ? (_controller.text.isEmpty ? '输入关键词搜索' : '未找到匹配内容')
                   : '共 $_currentMatchIndex/${totalMatches - 1} 处 · 第 ${_currentMatchIndex + 1}/$totalMatches 处',
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
+              style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
             ),
           ),
         ],
