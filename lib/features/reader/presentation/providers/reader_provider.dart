@@ -5,6 +5,7 @@ import '../../core/parser/html_parser.dart';
 import '../../core/theme/reader_theme.dart';
 import '../../data/repositories/reader_repository_impl.dart';
 import '../../domain/entities/chapter.dart';
+import '../../domain/entities/chapter_catalog.dart';
 import '../../domain/entities/reading_progress.dart';
 
 final readerRepositoryProvider = Provider<ReaderRepositoryImpl>((ref) {
@@ -17,6 +18,7 @@ class ReaderState {
   final List<PageContent> pages;
   final int currentPage;
   final ReadingProgress? progress;
+  final ChapterCatalog? catalog;
   final LayoutConfig layoutConfig;
   final ReaderThemeConfig theme;
   final bool isLoading;
@@ -27,6 +29,7 @@ class ReaderState {
     this.pages = const [],
     this.currentPage = 0,
     this.progress,
+    this.catalog,
     this.layoutConfig = const LayoutConfig(),
     this.theme = ReaderThemes.defaultTheme,
     this.isLoading = false,
@@ -38,6 +41,7 @@ class ReaderState {
     List<PageContent>? pages,
     int? currentPage,
     ReadingProgress? progress,
+    ChapterCatalog? catalog,
     LayoutConfig? layoutConfig,
     ReaderThemeConfig? theme,
     bool? isLoading,
@@ -48,6 +52,7 @@ class ReaderState {
       pages: pages ?? this.pages,
       currentPage: currentPage ?? this.currentPage,
       progress: progress ?? this.progress,
+      catalog: catalog ?? this.catalog,
       layoutConfig: layoutConfig ?? this.layoutConfig,
       theme: theme ?? this.theme,
       isLoading: isLoading ?? this.isLoading,
@@ -59,6 +64,7 @@ class ReaderState {
 class ReaderNotifier extends Notifier<ReaderState> {
   late final ReaderRepositoryImpl _repository;
   final HtmlContentParser _parser = HtmlContentParser();
+  String? widgetDetailUrl;
 
   @override
   ReaderState build() {
@@ -73,6 +79,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
     required String sourceId,
     String? detailUrl,
   }) async {
+    widgetDetailUrl = detailUrl ?? widgetDetailUrl;
     state = state.copyWith(isLoading: true);
     try {
       final chapter = await _repository.getChapter(
@@ -98,6 +105,9 @@ class ReaderNotifier extends Notifier<ReaderState> {
         progress: progress,
         isLoading: false,
       );
+
+      // 异步加载目录
+      _loadCatalog(bookId: bookId, sourceId: sourceId, detailUrl: detailUrl);
 
       // 预加载后续 2 章
       _repository.preloadChapters(
@@ -158,6 +168,35 @@ class ReaderNotifier extends Notifier<ReaderState> {
   /// 切换主题
   void switchTheme(ReaderThemeConfig theme) {
     state = state.copyWith(theme: theme);
+  }
+
+  /// 加载章节目录
+  Future<void> _loadCatalog({
+    required String bookId,
+    required String sourceId,
+    String? detailUrl,
+  }) async {
+    if (detailUrl == null || detailUrl.isEmpty) return;
+    final catalog = await _repository.getCatalog(
+      bookId: bookId,
+      sourceId: sourceId,
+      detailUrl: detailUrl,
+    );
+    if (catalog.chapters.isNotEmpty) {
+      state = state.copyWith(catalog: catalog);
+    }
+  }
+
+  /// 跳转到指定章节
+  Future<void> jumpToChapter(int chapterIndex) async {
+    final chapter = state.currentChapter;
+    if (chapter == null) return;
+    await loadChapter(
+      bookId: chapter.bookId,
+      chapterIndex: chapterIndex,
+      sourceId: chapter.sourceId ?? 'default',
+      detailUrl: widgetDetailUrl,
+    );
   }
 
   void _saveProgress() {

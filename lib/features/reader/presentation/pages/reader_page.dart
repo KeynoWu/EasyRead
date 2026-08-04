@@ -5,6 +5,7 @@ import '../../data/services/tts_service.dart';
 import '../../../settings/domain/usecases/reading_stats_service.dart';
 import '../providers/reader_provider.dart';
 import '../widgets/page_view_widget.dart';
+import '../widgets/chapter_catalog_sheet.dart';
 import '../widgets/reader_settings_panel.dart';
 
 class ReaderPage extends ConsumerStatefulWidget {
@@ -61,6 +62,14 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     super.dispose();
   }
 
+  void _openCatalog() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => const ChapterCatalogSheet(),
+    );
+  }
+
   Future<void> _toggleTts() async {
     final state = ref.read(readerProvider);
     if (state.currentChapter == null) return;
@@ -101,6 +110,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                           style: TextStyle(color: state.theme.textColor, fontSize: 14),
                         ),
                       const Spacer(),
+                      // 目录按钮
+                      IconButton(
+                        icon: Icon(Icons.list, color: state.theme.textColor),
+                        onPressed: _openCatalog,
+                        tooltip: '章节目录',
+                      ),
                       // TTS 听书按钮
                       IconButton(
                         icon: Icon(
