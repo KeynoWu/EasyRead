@@ -77,8 +77,20 @@ class BookSourceImportPage extends ConsumerWidget {
           ),
           FilledButton(
             onPressed: () async {
-              Navigator.pop(context);
-              final result = await useCase.fromUrl(controller.text);
+              final url = controller.text.trim();
+              if (url.isEmpty) return;
+              Navigator.pop(context); // 关闭输入对话框
+              // 网络请求期间显示加载指示，避免"无响应"假象
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (_) => const Center(
+                  child: CircularProgressIndicator(),
+                ),
+              );
+              final result = await useCase.fromUrl(url);
+              if (!context.mounted) return;
+              Navigator.pop(context); // 关闭加载指示
               if (!context.mounted) return;
               _handleResult(context, result);
             },

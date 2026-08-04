@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
@@ -46,9 +47,16 @@ class ImportBookSource {
   }
 
   /// 从网络链接导入（支持单个书源 JSON 或书源列表 JSON 数组）
+  /// 整体超时 20s：避免不可达 URL 经重试链放大为数十秒无响应
   Future<Either<String, List<BookSource>>> fromUrl(String url) async {
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return const Left('请输入书源地址');
     try {
-      final content = await _client.getString(url);
+      final content = await _client
+          .getString(trimmed)
+          .timeout(const Duration(seconds: 20), onTimeout: () {
+        throw TimeoutException('请求超时（20 秒）');
+      });
       return _parseContent(content);
     } catch (e) {
       return Left('网络请求失败: $e');
