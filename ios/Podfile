@@ -1,3 +1,6 @@
+# 关闭 file_picker 的媒体选择依赖（仅需文件选择，避免拉取 DKImagePickerController）
+Pod::PICKER_MEDIA = false
+
 # Uncomment this line to define a global platform for your project
 # platform :ios, '13.0'
 
