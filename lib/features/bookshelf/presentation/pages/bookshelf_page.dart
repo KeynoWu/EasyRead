@@ -19,6 +19,8 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   bool _isGrid = true;
   String _sortMode = 'time'; // time | name | added
   String? _selectedGroup; // null = 全部
+  bool _editMode = false;
+  final Set<String> _selectedIds = {};
 
   Future<void> _importLocalBook() async {
     final repo = ref.read(bookshelfRepositoryProvider);
@@ -37,33 +39,152 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     }
   }
 
+  void _toggleEditMode() {
+    setState(() {
+      _editMode = !_editMode;
+      _selectedIds.clear();
+    });
+  }
+
+  void _toggleSelect(String id) {
+    setState(() {
+      if (_selectedIds.contains(id)) {
+        _selectedIds.remove(id);
+      } else {
+        _selectedIds.add(id);
+      }
+    });
+  }
+
+  Future<void> _deleteSelected() async {
+    if (_selectedIds.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除书籍'),
+        content: Text('确定要删除选中的 ${_selectedIds.length} 本书吗？'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final repo = ref.read(bookshelfRepositoryProvider);
+    await repo.deleteAll(_selectedIds.toList());
+    setState(() {
+      _editMode = false;
+      _selectedIds.clear();
+    });
+    ref.invalidate(bookshelfListProvider);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已删除')),
+      );
+    }
+  }
+
+  Future<void> _moveToGroup() async {
+    if (_selectedIds.isEmpty) return;
+    final books = await ref.read(bookshelfRepositoryProvider).getAll();
+    final groupManager = ManageBookGroup(repository: ref.read(bookshelfRepositoryProvider));
+    final groups = groupManager.getAllGroups(books);
+    if (!mounted) return;
+
+    final group = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('移动到分组'),
+        children: [
+          for (final g in groups)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, g),
+              child: Text(g),
+            ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, null),
+            child: const Text('不分组', style: TextStyle(color: AppColors.textSecondary)),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+    final repo = ref.read(bookshelfRepositoryProvider);
+    for (final id in _selectedIds) {
+      final book = await repo.getById(id);
+      if (book != null) {
+        await repo.save(Book(
+          id: book.id,
+          name: book.name,
+          author: book.author,
+          coverUrl: book.coverUrl,
+          sourceId: book.sourceId,
+          lastChapter: book.lastChapter,
+          progress: book.progress,
+          group: group,
+          lastReadAt: book.lastReadAt,
+        ));
+      }
+    }
+    setState(() {
+      _editMode = false;
+      _selectedIds.clear();
+    });
+    ref.invalidate(bookshelfListProvider);
+  }
+
   @override
   Widget build(BuildContext context) {
     final booksAsync = ref.watch(bookshelfListProvider);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('书架'),
+        title: Text(_editMode ? '已选择 ${_selectedIds.length} 本' : '书架'),
         actions: [
+          if (_editMode) ...[
+            IconButton(
+              icon: const Icon(Icons.delete_outline),
+              onPressed: _selectedIds.isEmpty ? null : _deleteSelected,
+              tooltip: '删除选中',
+            ),
+            IconButton(
+              icon: const Icon(Icons.drive_file_move_outline),
+              onPressed: _selectedIds.isEmpty ? null : _moveToGroup,
+              tooltip: '移动到分组',
+            ),
+          ],
           IconButton(
-            icon: const Icon(Icons.file_upload_outlined),
-            onPressed: _importLocalBook,
-            tooltip: '导入本地书籍',
+            icon: Icon(_editMode ? Icons.close : Icons.checklist),
+            onPressed: _toggleEditMode,
+            tooltip: _editMode ? '退出编辑' : '批量管理',
           ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.sort),
-            onSelected: (value) => setState(() => _sortMode = value),
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: 'time', child: Text('按阅读时间')),
-              const PopupMenuItem(value: 'name', child: Text('按书名')),
-              const PopupMenuItem(value: 'added', child: Text('按加入时间')),
-            ],
-          ),
-          IconButton(
-            icon: Icon(_isGrid ? Icons.view_list : Icons.grid_view),
-            onPressed: () => setState(() => _isGrid = !_isGrid),
-            tooltip: _isGrid ? '切换为列表' : '切换为网格',
-          ),
+          if (!_editMode) ...[
+            IconButton(
+              icon: const Icon(Icons.file_upload_outlined),
+              onPressed: _importLocalBook,
+              tooltip: '导入本地书籍',
+            ),
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.sort),
+              onSelected: (value) => setState(() => _sortMode = value),
+              itemBuilder: (context) => [
+                const PopupMenuItem(value: 'time', child: Text('按阅读时间')),
+                const PopupMenuItem(value: 'name', child: Text('按书名')),
+                const PopupMenuItem(value: 'added', child: Text('按加入时间')),
+              ],
+            ),
+            IconButton(
+              icon: Icon(_isGrid ? Icons.view_list : Icons.grid_view),
+              onPressed: () => setState(() => _isGrid = !_isGrid),
+              tooltip: _isGrid ? '切换为列表' : '切换为网格',
+            ),
+          ],
         ],
       ),
       body: booksAsync.when(
@@ -75,7 +196,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                   .filterByGroup(sorted, _selectedGroup);
           return Column(
             children: [
-              _buildGroupFilter(books),
+              if (!_editMode) _buildGroupFilter(books),
               Expanded(
                 child: filtered.isEmpty
                     ? Center(
@@ -97,8 +218,18 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                         ),
                       )
                     : _isGrid
-                        ? BookshelfGrid(books: filtered)
-                        : BookshelfList(books: filtered),
+                        ? BookshelfGrid(
+                            books: filtered,
+                            editMode: _editMode,
+                            selectedIds: _selectedIds,
+                            onBookTap: _editMode ? (b) => _toggleSelect(b.id) : null,
+                          )
+                        : BookshelfList(
+                            books: filtered,
+                            editMode: _editMode,
+                            selectedIds: _selectedIds,
+                            onBookTap: _editMode ? (b) => _toggleSelect(b.id) : null,
+                          ),
               ),
             ],
           );

@@ -5,5 +5,6 @@ abstract class BookshelfRepository {
   Future<Book?> getById(String id);
   Future<void> save(Book book);
   Future<void> delete(String id);
+  Future<void> deleteAll(List<String> ids);
   Future<void> updateProgress(String id, double progress);
 }

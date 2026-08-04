@@ -4,36 +4,65 @@ import '../../domain/entities/book.dart';
 
 class BookCard extends StatelessWidget {
   final Book book;
-  final VoidCallback? onTap;
+  final void Function(Book)? onBookTap;
+  final bool editMode;
+  final bool selected;
 
-  const BookCard({super.key, required this.book, this.onTap});
+  const BookCard({
+    super.key,
+    required this.book,
+    this.onBookTap,
+    this.editMode = false,
+    this.selected = false,
+  });
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: onTap,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      onTap: onBookTap == null ? null : () => onBookTap!(book),
+      child: Stack(
         children: [
-          Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Container(
-                width: double.infinity,
-                color: AppColors.separator.withValues(alpha: 0.2),
-                child: book.coverUrl != null
-                    ? Image.network(book.coverUrl!, fit: BoxFit.cover, errorBuilder: (_, _, _) => const Icon(Icons.book, size: 40))
-                    : const Icon(Icons.book, size: 40, color: AppColors.textSecondary),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    width: double.infinity,
+                    color: AppColors.separator.withValues(alpha: 0.2),
+                    child: book.coverUrl != null
+                        ? Image.network(book.coverUrl!, fit: BoxFit.cover, errorBuilder: (_, _, _) => const Icon(Icons.book, size: 40))
+                        : const Icon(Icons.book, size: 40, color: AppColors.textSecondary),
+                  ),
+                ),
               ),
-            ),
+              const SizedBox(height: 6),
+              Text(book.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+              if (book.progress > 0)
+                LinearProgressIndicator(
+                  value: book.progress,
+                  backgroundColor: AppColors.separator.withValues(alpha: 0.3),
+                  color: AppColors.tint,
+                ),
+            ],
           ),
-          const SizedBox(height: 6),
-          Text(book.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
-          if (book.progress > 0)
-            LinearProgressIndicator(
-              value: book.progress,
-              backgroundColor: AppColors.separator.withValues(alpha: 0.3),
-              color: AppColors.tint,
+          if (editMode)
+            Positioned(
+              top: 4,
+              right: 4,
+              child: Container(
+                padding: const EdgeInsets.all(2),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: selected ? AppColors.tint : Colors.black38,
+                ),
+                child: Icon(
+                  selected ? Icons.check : Icons.circle_outlined,
+                  size: 18,
+                  color: Colors.white,
+                ),
+              ),
             ),
         ],
       ),

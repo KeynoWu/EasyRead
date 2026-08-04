@@ -5,8 +5,16 @@ import 'book_card.dart';
 class BookshelfGrid extends StatelessWidget {
   final List<Book> books;
   final void Function(Book)? onBookTap;
+  final bool editMode;
+  final Set<String> selectedIds;
 
-  const BookshelfGrid({super.key, required this.books, this.onBookTap});
+  const BookshelfGrid({
+    super.key,
+    required this.books,
+    this.onBookTap,
+    this.editMode = false,
+    this.selectedIds = const {},
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -21,7 +29,9 @@ class BookshelfGrid extends StatelessWidget {
       itemCount: books.length,
       itemBuilder: (context, index) => BookCard(
         book: books[index],
-        onTap: () => onBookTap?.call(books[index]),
+        onBookTap: onBookTap,
+        editMode: editMode,
+        selected: selectedIds.contains(books[index].id),
       ),
     );
   }

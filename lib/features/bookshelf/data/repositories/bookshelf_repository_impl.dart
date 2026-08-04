@@ -32,6 +32,12 @@ class BookshelfRepositoryImpl implements BookshelfRepository {
   }
 
   @override
+  Future<void> deleteAll(List<String> ids) async {
+    final box = await Hive.openBox<BookModel>(HiveBoxes.bookshelf);
+    await box.deleteAll(ids);
+  }
+
+  @override
   Future<void> updateProgress(String id, double progress) async {
     final box = await Hive.openBox<BookModel>(HiveBoxes.bookshelf);
     final model = box.get(id);
