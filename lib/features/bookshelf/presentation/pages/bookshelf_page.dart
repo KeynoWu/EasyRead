@@ -67,7 +67,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
             child: const Text('删除'),
           ),
         ],

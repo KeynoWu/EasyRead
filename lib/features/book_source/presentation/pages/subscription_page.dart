@@ -104,11 +104,11 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.rss_feed, size: 64, color: Colors.grey),
+                  Icon(Icons.rss_feed, size: 64, color: AppColors.textSecondary),
                   SizedBox(height: 16),
                   Text('暂无订阅', style: TextStyle(fontSize: 16)),
                   SizedBox(height: 8),
-                  Text('添加订阅地址，自动更新书源', style: TextStyle(color: Colors.grey)),
+                  Text('添加订阅地址，自动更新书源', style: TextStyle(color: AppColors.textSecondary)),
                 ],
               ),
             );

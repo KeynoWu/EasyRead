@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../../core/theme/app_colors.dart';
 import '../../domain/entities/purification_rule.dart';
 import '../../domain/usecases/manage_purification_rules.dart';
 
@@ -106,11 +107,11 @@ class _PurificationRulesPageState extends State<PurificationRulesPage> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.cleaning_services, size: 64, color: Colors.grey),
+                  Icon(Icons.cleaning_services, size: 64, color: AppColors.textSecondary),
                   SizedBox(height: 16),
                   Text('暂无净化规则', style: TextStyle(fontSize: 16)),
                   SizedBox(height: 8),
-                  Text('点击右下角添加规则', style: TextStyle(color: Colors.grey)),
+                  Text('点击右下角添加规则', style: TextStyle(color: AppColors.textSecondary)),
                 ],
               ),
             );
