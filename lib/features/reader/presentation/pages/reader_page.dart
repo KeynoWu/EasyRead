@@ -110,6 +110,22 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                           style: TextStyle(color: state.theme.textColor, fontSize: 14),
                         ),
                       const Spacer(),
+                      // 上一章
+                      IconButton(
+                        icon: Icon(Icons.skip_previous, color: state.theme.textColor),
+                        onPressed: ref.read(readerProvider.notifier).hasPrevChapter
+                            ? () => ref.read(readerProvider.notifier).prevChapter()
+                            : null,
+                        tooltip: '上一章',
+                      ),
+                      // 下一章
+                      IconButton(
+                        icon: Icon(Icons.skip_next, color: state.theme.textColor),
+                        onPressed: ref.read(readerProvider.notifier).hasNextChapter
+                            ? () => ref.read(readerProvider.notifier).nextChapter()
+                            : null,
+                        tooltip: '下一章',
+                      ),
                       // 目录按钮
                       IconButton(
                         icon: Icon(Icons.list, color: state.theme.textColor),

@@ -199,6 +199,37 @@ class ReaderNotifier extends Notifier<ReaderState> {
     );
   }
 
+  /// 下一章
+  Future<void> nextChapter() async {
+    final chapter = state.currentChapter;
+    if (chapter == null) return;
+    final catalog = state.catalog;
+    if (catalog != null && chapter.index >= catalog.chapters.length - 1) return;
+    await jumpToChapter(chapter.index + 1);
+  }
+
+  /// 上一章
+  Future<void> prevChapter() async {
+    final chapter = state.currentChapter;
+    if (chapter == null || chapter.index <= 0) return;
+    await jumpToChapter(chapter.index - 1);
+  }
+
+  /// 是否有上一章
+  bool get hasPrevChapter {
+    final chapter = state.currentChapter;
+    return chapter != null && chapter.index > 0;
+  }
+
+  /// 是否有下一章
+  bool get hasNextChapter {
+    final chapter = state.currentChapter;
+    final catalog = state.catalog;
+    if (chapter == null) return false;
+    if (catalog == null) return true; // 未知目录时允许尝试
+    return chapter.index < catalog.chapters.length - 1;
+  }
+
   void _saveProgress() {
     if (state.currentChapter == null) return;
     final progress = ReadingProgress(
