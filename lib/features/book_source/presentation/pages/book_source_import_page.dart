@@ -27,17 +27,8 @@ class BookSourceImportPage extends ConsumerWidget {
               subtitle: '支持 JSON 格式书源文件',
               onTap: () async {
                 final result = await useCase.fromFile();
-                result.fold(
-                  (error) => ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(error)),
-                  ),
-                  (sources) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('成功导入 ${sources.length} 个书源')),
-                    );
-                    if (context.mounted) Navigator.pop(context);
-                  },
-                );
+                if (!context.mounted) return;
+                _handleResult(context, result);
               },
             ),
             const SizedBox(height: 12),
@@ -45,22 +36,70 @@ class BookSourceImportPage extends ConsumerWidget {
               icon: Icons.link,
               title: '从网络链接导入',
               subtitle: '输入书源订阅地址',
-              onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('功能开发中')),
-              ),
+              onTap: () => _showUrlDialog(context, useCase),
             ),
             const SizedBox(height: 12),
             _ImportButton(
               icon: Icons.content_paste,
               title: '从剪贴板导入',
               subtitle: '粘贴书源 JSON 内容',
-              onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('功能开发中')),
-              ),
+              onTap: () async {
+                final result = await useCase.fromClipboard();
+                if (!context.mounted) return;
+                _handleResult(context, result);
+              },
             ),
           ],
         ),
       ),
+    );
+  }
+
+  void _showUrlDialog(BuildContext context, ImportBookSource useCase) {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('输入书源地址'),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.url,
+          decoration: const InputDecoration(
+            hintText: 'https://example.com/sources.json',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              Navigator.pop(dialogContext);
+              final result = await useCase.fromUrl(controller.text);
+              if (!context.mounted) return;
+              _handleResult(context, result);
+            },
+            child: const Text('导入'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _handleResult(BuildContext context, dynamic result) {
+    if (!context.mounted) return;
+    result.fold(
+      (error) => ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error)),
+      ),
+      (sources) {
+        final count = sources is List ? sources.length : 1;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('成功导入 $count 个书源')),
+        );
+        if (context.mounted) Navigator.pop(context);
+      },
     );
   }
 }

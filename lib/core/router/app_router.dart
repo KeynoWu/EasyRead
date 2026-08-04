@@ -1,8 +1,6 @@
 import 'package:go_router/go_router.dart';
-import '../../features/bookshelf/presentation/pages/bookshelf_page.dart';
-import '../../features/book_source/presentation/pages/book_source_list_page.dart';
+import '../../features/shell/presentation/pages/main_shell.dart';
 import '../../features/book_source/presentation/pages/book_source_import_page.dart';
-import '../../features/search/presentation/pages/search_page.dart';
 import '../../features/reader/presentation/pages/reader_page.dart';
 
 class AppRouter {
@@ -11,18 +9,8 @@ class AppRouter {
     routes: [
       GoRoute(
         path: '/',
-        name: 'bookshelf',
-        builder: (context, state) => const BookshelfPage(),
-      ),
-      GoRoute(
-        path: '/search',
-        name: 'search',
-        builder: (context, state) => const SearchPage(),
-      ),
-      GoRoute(
-        path: '/book-sources',
-        name: 'bookSources',
-        builder: (context, state) => const BookSourceListPage(),
+        name: 'home',
+        builder: (context, state) => const MainShell(),
       ),
       GoRoute(
         path: '/book-source/import',

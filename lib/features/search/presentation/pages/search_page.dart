@@ -23,27 +23,37 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: TextField(
-          controller: _searchController,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: '搜索书籍',
-            border: InputBorder.none,
-          ),
-          onSubmitted: (value) => ref.refresh(searchResultsProvider(value)),
-        ),
-      ),
-      body: _searchController.text.isEmpty
-          ? const Center(child: Text('输入关键词搜索书籍', style: TextStyle(color: AppColors.textSecondary)))
-          : ref.watch(searchResultsProvider(_searchController.text)).when(
-              data: (results) => ListView.builder(
-                itemCount: results.length,
-                itemBuilder: (context, index) => SearchResultItem(result: results[index]),
+      appBar: AppBar(title: const Text('搜索')),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: TextField(
+              controller: _searchController,
+              autofocus: false,
+              decoration: InputDecoration(
+                hintText: '搜索书籍',
+                prefixIcon: const Icon(Icons.search),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               ),
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => Center(child: Text('搜索失败: $e')),
+              onSubmitted: (value) => ref.refresh(searchResultsProvider(value)),
             ),
+          ),
+          Expanded(
+            child: _searchController.text.isEmpty
+                ? const Center(child: Text('输入关键词搜索书籍', style: TextStyle(color: AppColors.textSecondary)))
+                : ref.watch(searchResultsProvider(_searchController.text)).when(
+                    data: (results) => ListView.builder(
+                      itemCount: results.length,
+                      itemBuilder: (context, index) => SearchResultItem(result: results[index]),
+                    ),
+                    loading: () => const Center(child: CircularProgressIndicator()),
+                    error: (e, _) => Center(child: Text('搜索失败: $e')),
+                  ),
+          ),
+        ],
+      ),
     );
   }
 }

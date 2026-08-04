@@ -9,14 +9,13 @@ final searchRepositoryProvider = Provider<SearchRepositoryImpl>((ref) {
 });
 
 final searchBooksProvider = Provider<SearchBooks>((ref) {
-  return SearchBooks(
-    searchRepo: ref.watch(searchRepositoryProvider),
-    sourceRepo: ref.watch(bookSourceRepositoryProvider),
-  );
+  final searchRepo = ref.watch(searchRepositoryProvider);
+  final sourceRepo = ref.watch(bookSourceRepositoryProvider);
+  return SearchBooks(searchRepo: searchRepo, sourceRepo: sourceRepo);
 });
 
 final searchResultsProvider = FutureProvider.family<List<SearchResult>, String>((ref, keyword) async {
   if (keyword.trim().isEmpty) return [];
   final searchBooks = ref.watch(searchBooksProvider);
-  return searchBooks.execute(keyword, '');
+  return searchBooks.executeMultiSource(keyword);
 });
