@@ -1,0 +1,16 @@
+{
+  "bookSourceName": "测试书源",
+  "bookSourceGroup": "测试",
+  "bookSourceUrl": "https://example.com",
+  "searchUrl": "https://example.com/search?keyword={{key}}",
+  "bookList": "div.book-list > div.item",
+  "bookName": "h3.title@text",
+  "bookAuthor": "span.author@text",
+  "coverUrl": "img.cover@src",
+  "bookDetailUrl": "a.detail@href",
+  "contentUrl": "https://example.com/chapter/{{id}}.html",
+  "chapterList": "ul.chapter-list > li",
+  "chapterName": "a@text",
+  "chapterUrl": "a@href",
+  "chapterContent": "div#content@html"
+}

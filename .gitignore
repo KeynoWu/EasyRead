@@ -1,0 +1,15 @@
+# Flutter
+.dart_tool/
+.packages
+build/
+*.iml
+.idea/
+.vscode/
+*.lock
+
+# Superpowers visual companion files
+.superpowers/
+
+# OS files
+.DS_Store
+Thumbs.db
