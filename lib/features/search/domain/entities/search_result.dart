@@ -6,6 +6,7 @@ class SearchResult {
   final String? detailUrl;
   final String sourceId;
   final String sourceName;
+  final List<SourceOption> alternatives;
 
   const SearchResult({
     required this.bookId,
@@ -15,5 +16,21 @@ class SearchResult {
     this.detailUrl,
     required this.sourceId,
     required this.sourceName,
+    this.alternatives = const [],
+  });
+}
+
+/// 可选书源
+class SourceOption {
+  final String bookId;
+  final String sourceId;
+  final String sourceName;
+  final String? detailUrl;
+
+  const SourceOption({
+    required this.bookId,
+    required this.sourceId,
+    required this.sourceName,
+    this.detailUrl,
   });
 }

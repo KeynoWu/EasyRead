@@ -32,13 +32,33 @@ class SearchBooks {
       allResults.addAll(resultList);
     }
 
-    final seen = <String>{};
-    final deduplicated = <SearchResult>[];
+    // 按书名分组：第一条为主结果，其余作为替代书源
+    final groups = <String, List<SearchResult>>{};
     for (final result in allResults) {
       final key = result.name.toLowerCase().trim();
-      if (seen.add(key)) {
-        deduplicated.add(result);
-      }
+      groups.putIfAbsent(key, () => []).add(result);
+    }
+
+    final deduplicated = <SearchResult>[];
+    for (final entry in groups.entries) {
+      final list = entry.value;
+      final primary = list.first;
+      final alternatives = list.skip(1).map((r) => SourceOption(
+        bookId: r.bookId,
+        sourceId: r.sourceId,
+        sourceName: r.sourceName,
+        detailUrl: r.detailUrl,
+      )).toList();
+      deduplicated.add(SearchResult(
+        bookId: primary.bookId,
+        name: primary.name,
+        author: primary.author,
+        coverUrl: primary.coverUrl,
+        detailUrl: primary.detailUrl,
+        sourceId: primary.sourceId,
+        sourceName: primary.sourceName,
+        alternatives: alternatives,
+      ));
     }
 
     return deduplicated;

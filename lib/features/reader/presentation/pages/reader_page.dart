@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -8,19 +9,23 @@ import '../../../settings/domain/usecases/reading_stats_service.dart';
 import '../providers/reader_provider.dart';
 import '../widgets/page_view_widget.dart';
 import '../widgets/bookmark_sheet.dart';
+import '../../../../features/search/domain/entities/search_result.dart';
 import '../widgets/chapter_catalog_sheet.dart';
 import '../widgets/reader_settings_panel.dart';
+import '../widgets/source_switcher_sheet.dart';
 
 class ReaderPage extends ConsumerStatefulWidget {
   final String bookId;
   final String? sourceId;
   final String? detailUrl;
+  final String? alternativesJson;
 
   const ReaderPage({
     super.key,
     required this.bookId,
     this.sourceId,
     this.detailUrl,
+    this.alternativesJson,
   });
 
   @override
@@ -31,6 +36,26 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   final TtsService _tts = TtsService();
   final ReadingStatsService _statsService = ReadingStatsService();
   final BookmarkService _bookmarkService = BookmarkService();
+
+  /// 解析替代书源
+  List<SourceOption> get _alternatives {
+    final json = widget.alternativesJson;
+    if (json == null || json.isEmpty) return [];
+    try {
+      final list = jsonDecode(json) as List;
+      return list.map((e) {
+        final map = e as Map<String, dynamic>;
+        return SourceOption(
+          bookId: map['bookId']?.toString() ?? '',
+          sourceId: map['sourceId']?.toString() ?? '',
+          sourceName: map['sourceName']?.toString() ?? '未知书源',
+          detailUrl: map['detailUrl']?.toString(),
+        );
+      }).toList();
+    } catch (_) {
+      return [];
+    }
+  }
   bool _isTtsPlaying = false;
   DateTime? _pageOpenTime;
 
@@ -111,6 +136,27 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     );
   }
 
+  Future<void> _openSourceSwitcher() async {
+    final state = ref.read(readerProvider);
+    final chapter = state.currentChapter;
+    if (chapter == null) return;
+
+    final selected = await showModalBottomSheet<SourceOption>(
+      context: context,
+      builder: (_) => SourceSwitcherSheet(
+        currentSourceId: chapter.sourceId ?? widget.sourceId ?? '',
+        currentSourceName: widget.sourceId != null ? '当前书源' : '当前书源',
+        alternatives: _alternatives,
+      ),
+    );
+    if (selected != null && mounted && selected.bookId.isNotEmpty) {
+      // 切换到新书源
+      context.pushReplacement(
+        '/reader/${selected.bookId}?sourceId=${selected.sourceId}&detailUrl=${selected.detailUrl ?? ''}',
+      );
+    }
+  }
+
   void _openCatalog() {
     showModalBottomSheet(
       context: context,
@@ -175,6 +221,13 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                             : null,
                         tooltip: '下一章',
                       ),
+                      // 换源按钮
+                      if (_alternatives.isNotEmpty)
+                        IconButton(
+                          icon: Icon(Icons.swap_horiz, color: state.theme.textColor),
+                          onPressed: _openSourceSwitcher,
+                          tooltip: '切换书源',
+                        ),
                       // 书签按钮
                       IconButton(
                         icon: Icon(Icons.bookmark_add_outlined, color: state.theme.textColor),

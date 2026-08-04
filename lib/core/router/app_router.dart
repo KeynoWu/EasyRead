@@ -24,10 +24,12 @@ class AppRouter {
           final bookId = state.pathParameters['bookId'] ?? '';
           final sourceId = state.uri.queryParameters['sourceId'];
           final detailUrl = state.uri.queryParameters['detailUrl'];
+          final alternativesJson = state.uri.queryParameters['alternatives'];
           return ReaderPage(
             bookId: bookId,
             sourceId: sourceId,
             detailUrl: detailUrl,
+            alternativesJson: alternativesJson,
           );
         },
       ),

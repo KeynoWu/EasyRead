@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../core/theme/app_colors.dart';
@@ -12,7 +13,17 @@ class SearchResultItem extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       child: InkWell(
-        onTap: () => context.push('/reader/${result.bookId}?sourceId=${result.sourceId}&detailUrl=${result.detailUrl ?? ''}'),
+        onTap: () {
+          final alts = jsonEncode(result.alternatives.map((a) => {
+            'bookId': a.bookId,
+            'sourceId': a.sourceId,
+            'sourceName': a.sourceName,
+            'detailUrl': a.detailUrl,
+          }).toList());
+          context.push(
+            '/reader/${result.bookId}?sourceId=${result.sourceId}&detailUrl=${result.detailUrl ?? ''}&alternatives=$alts',
+          );
+        },
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.all(12),
