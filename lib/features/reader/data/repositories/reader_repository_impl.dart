@@ -43,6 +43,8 @@ class ReaderRepositoryImpl implements ReaderRepository {
 
     // 写入缓存
     await cacheBox.put(cacheKey, ChapterModel.fromEntity(chapter));
+    // 缓存上限控制：超过 500 章自动淘汰最旧
+    await _trimCache(cacheBox);
     return chapter;
   }
 
@@ -82,5 +84,21 @@ class ReaderRepositoryImpl implements ReaderRepository {
         sourceId: sourceId,
       );
     }
+  }
+
+  /// 缓存上限控制：超过 [maxEntries] 时淘汰最旧的章节
+  static const int maxEntries = 500;
+
+  Future<void> _trimCache(Box<ChapterModel> box) async {
+    if (box.length <= maxEntries) return;
+    // 按缓存时间排序，保留最新 500 条
+    final entries = box.values.toList()
+      ..sort((a, b) {
+        final at = a.cachedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bt = b.cachedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return at.compareTo(bt);
+      });
+    final toRemove = entries.take(entries.length - maxEntries).map((e) => e.key);
+    await box.deleteAll(toRemove);
   }
 }
