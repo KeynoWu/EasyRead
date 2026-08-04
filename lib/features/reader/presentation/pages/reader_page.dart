@@ -26,10 +26,14 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   void initState() {
     super.initState();
     _pageOpenTime = DateTime.now();
-    Future.microtask(() {
+    Future.microtask(() async {
+      // 读取保存的进度，续读到正确章节
+      final repo = ref.read(readerRepositoryProvider);
+      final progress = await repo.loadProgress(widget.bookId);
+      final startChapter = progress?.chapterIndex ?? 0;
       ref.read(readerProvider.notifier).loadChapter(
         bookId: widget.bookId,
-        chapterIndex: 0,
+        chapterIndex: startChapter,
         sourceId: 'default',
       );
     });

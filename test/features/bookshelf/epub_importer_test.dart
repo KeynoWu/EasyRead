@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -69,7 +68,8 @@ Uint8List _buildMinimalEpub() {
   ));
 
   final encoder = ZipEncoder();
-  return Uint8List.fromList(encoder.encode(archive)!);
+  final encoded = encoder.encode(archive);
+  return Uint8List.fromList(encoded);
 }
 
 void main() {
