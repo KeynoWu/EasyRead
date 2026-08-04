@@ -1,8 +1,12 @@
 # 📖 易读 EasyRead
 
-一款**开源免费、纯工具属性**的多源小说阅读器，覆盖 Android + 鸿蒙平台。
+一款**开源免费、纯工具属性**的多源小说阅读器，覆盖 Android、iOS、macOS、Windows、Linux 等 Flutter 支持平台，Android 为主要发布目标。
 
 > 核心逻辑：「工具本体 + 用户自主导入书源」。产品不提供任何书籍内容、不内置书源、不运营内容平台，仅作为内容解析与阅读载体。
+
+## 📦 下载
+
+Android APK 发布包请到 [GitHub Releases](https://github.com/KeynoWu/EasyRead/releases/latest) 下载。
 
 ## ✨ 功能特性
 
@@ -76,6 +80,8 @@ flutter build apk --debug    # Debug 包
 flutter build apk --release  # 发布包
 ```
 
+Release 包输出路径：`build/app/outputs/flutter-apk/app-release.apk`。
+
 > **注意**：Android 构建要求 compileSdk 36（已在 `android/app/build.gradle.kts` 配置）。
 
 ## 📝 测试
@@ -84,7 +90,7 @@ flutter build apk --release  # 发布包
 flutter test
 ```
 
-当前 51 个测试用例覆盖：内容净化管线、书源规则解析、搜索去重、分页布局、TXT/EPUB 导入、阅读进度等核心逻辑。
+当前 60 个测试用例覆盖：内容净化管线、书源规则解析、搜索去重、分页布局、TXT/EPUB 导入、阅读进度、网络导入等核心逻辑。
 
 ## 📄 文档
 
