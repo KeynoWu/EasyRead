@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'purification_rules_page.dart';
 import 'reading_stats_page.dart';
+import 'webdav_config_page.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../domain/usecases/backup_restore.dart';
+import '../../domain/usecases/webdav_sync.dart';
 import '../../../book_source/presentation/providers/book_source_provider.dart';
 import '../../../bookshelf/presentation/providers/bookshelf_provider.dart';
 import '../../../reader/presentation/providers/reader_provider.dart';
@@ -44,6 +46,52 @@ class SettingsPage extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () async {
               final result = await backupRestore.restoreBackup();
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(result ?? '操作完成')),
+              );
+              ref.invalidate(bookshelfListProvider);
+              ref.invalidate(bookSourceListProvider);
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.cloud_outlined),
+            title: const Text('WebDAV 云同步'),
+            subtitle: const Text('配置服务器，云端备份与恢复'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () async {
+              await Navigator.push(context, MaterialPageRoute(builder: (_) => const WebDavConfigPage()));
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.cloud_upload_outlined),
+            title: const Text('上传到 WebDAV'),
+            subtitle: const Text('将当前数据备份上传到云端'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () async {
+              final json = await backupRestore.buildBackupJson();
+              final result = await WebDavSync().upload(json);
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(result ?? '上传成功')),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.cloud_download_outlined),
+            title: const Text('从 WebDAV 恢复'),
+            subtitle: const Text('从云端备份恢复数据'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () async {
+              final json = await WebDavSync().download();
+              if (!context.mounted) return;
+              if (json == null || json.startsWith('下载失败')) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(json ?? '下载失败')),
+                );
+                return;
+              }
+              final result = await backupRestore.restoreFromJson(json);
               if (!context.mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(content: Text(result ?? '操作完成')),
