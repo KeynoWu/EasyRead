@@ -18,4 +18,12 @@ abstract class ReaderRepository {
 
   /// 清除书籍的所有缓存章节
   Future<void> clearBookCache(String bookId);
+
+  /// 预加载后续章节到缓存
+  Future<void> preloadChapters({
+    required String bookId,
+    required int startIndex,
+    required int count,
+    required String sourceId,
+  });
 }

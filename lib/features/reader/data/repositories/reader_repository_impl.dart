@@ -65,4 +65,22 @@ class ReaderRepositoryImpl implements ReaderRepository {
     final keys = box.keys.where((k) => (k as String).startsWith('${bookId}_'));
     await box.deleteAll(keys);
   }
+
+  @override
+  Future<void> preloadChapters({
+    required String bookId,
+    required int startIndex,
+    required int count,
+    required String sourceId,
+  }) async {
+    for (int i = 0; i < count; i++) {
+      final index = startIndex + i;
+      // 只预加载缓存中不存在的章节
+      await getChapter(
+        bookId: bookId,
+        chapterIndex: index,
+        sourceId: sourceId,
+      );
+    }
+  }
 }

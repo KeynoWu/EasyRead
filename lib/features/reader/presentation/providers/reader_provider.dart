@@ -96,6 +96,14 @@ class ReaderNotifier extends Notifier<ReaderState> {
         progress: progress,
         isLoading: false,
       );
+
+      // 预加载后续 2 章
+      _repository.preloadChapters(
+        bookId: bookId,
+        startIndex: chapterIndex + 1,
+        count: 2,
+        sourceId: sourceId,
+      );
     } catch (e) {
       state = state.copyWith(isLoading: false);
     }
