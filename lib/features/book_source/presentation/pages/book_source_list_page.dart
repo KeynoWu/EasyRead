@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/book_source_provider.dart';
 import '../widgets/book_source_card.dart';
 import 'book_source_edit_page.dart';
+import 'subscription_page.dart';
 
 class BookSourceListPage extends ConsumerWidget {
   const BookSourceListPage({super.key});
@@ -29,6 +30,14 @@ class BookSourceListPage extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('书源管理'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.rss_feed),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => SubscriptionPage(repository: ref.read(bookSourceRepositoryProvider))),
+            ),
+            tooltip: '书源订阅',
+          ),
           IconButton(
             icon: const Icon(Icons.edit_outlined),
             onPressed: () => _openEditor(context, ref),
