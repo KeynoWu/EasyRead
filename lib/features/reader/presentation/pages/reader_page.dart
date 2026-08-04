@@ -9,6 +9,7 @@ import '../../../settings/domain/usecases/reading_stats_service.dart';
 import '../providers/reader_provider.dart';
 import '../widgets/page_view_widget.dart';
 import '../widgets/bookmark_sheet.dart';
+import '../widgets/chapter_search_sheet.dart';
 import '../../../../features/search/domain/entities/search_result.dart';
 import '../widgets/chapter_catalog_sheet.dart';
 import '../widgets/reader_settings_panel.dart';
@@ -157,6 +158,14 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     }
   }
 
+  void _openChapterSearch() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => const ChapterSearchSheet(),
+    );
+  }
+
   void _openCatalog() {
     showModalBottomSheet(
       context: context,
@@ -220,6 +229,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                             ? () => ref.read(readerProvider.notifier).nextChapter()
                             : null,
                         tooltip: '下一章',
+                      ),
+                      // 章节搜索按钮
+                      IconButton(
+                        icon: Icon(Icons.search, color: state.theme.textColor),
+                        onPressed: _openChapterSearch,
+                        tooltip: '搜索本章',
                       ),
                       // 换源按钮
                       if (_alternatives.isNotEmpty)

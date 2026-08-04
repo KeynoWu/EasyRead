@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/pagination/page_layout.dart';
+import '../../core/parser/node_tree.dart';
 
 import '../../core/parser/html_parser.dart';
 import '../../core/theme/reader_theme.dart';
@@ -180,6 +181,30 @@ class ReaderNotifier extends Notifier<ReaderState> {
   /// 切换阅读模式
   void switchMode(ReadingMode mode) {
     state = state.copyWith(readingMode: mode, currentPage: 0);
+  }
+
+  /// 在章节内搜索关键词，返回命中页码列表
+  List<int> searchInChapter(String keyword) {
+    if (keyword.trim().isEmpty || state.pages.isEmpty) return [];
+    final results = <int>[];
+    for (int i = 0; i < state.pages.length; i++) {
+      final pageText = state.pages[i].nodes
+          .where((n) => n.type == NodeType.paragraph || n.type == NodeType.text || n.type == NodeType.heading)
+          .map((n) => n.text)
+          .join();
+      if (pageText.contains(keyword)) {
+        results.add(i);
+      }
+    }
+    return results;
+  }
+
+  /// 跳转到第一个命中关键词的页面
+  bool jumpToMatch(String keyword) {
+    final matches = searchInChapter(keyword);
+    if (matches.isEmpty) return false;
+    jumpToPage(matches.first);
+    return true;
   }
 
   /// 加载章节目录
