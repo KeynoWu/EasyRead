@@ -1,3 +1,4 @@
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/pagination/page_layout.dart';
 import '../../core/parser/node_tree.dart';
@@ -8,9 +9,16 @@ import '../../data/repositories/reader_repository_impl.dart';
 import '../../domain/entities/chapter.dart';
 import '../../domain/entities/chapter_catalog.dart';
 import '../../domain/entities/reading_progress.dart';
+import '../../../book_source/presentation/providers/book_source_provider.dart';
+import '../../../settings/presentation/providers/purify_pipeline_provider.dart';
 
 final readerRepositoryProvider = Provider<ReaderRepositoryImpl>((ref) {
-  return ReaderRepositoryImpl();
+  // 注入真实书源仓库：否则默认 _EmptySourceRepo 会让所有章节读取返回占位内容
+  final sourceRepo = ref.watch(bookSourceRepositoryProvider);
+  final repo = ReaderRepositoryImpl(sourceRepo: sourceRepo);
+  // 净化规则异步加载完成后注入管线（默认空规则，不影响功能）
+  ref.watch(purifyPipelineProvider).whenData(repo.setPipeline);
+  return repo;
 });
 
 /// 阅读模式
@@ -28,6 +36,7 @@ class ReaderState {
   final bool isLoading;
   final bool showSettings;
   final ReadingMode readingMode;
+  final Size viewportSize;
 
   const ReaderState({
     this.readingMode = ReadingMode.page,
@@ -40,6 +49,7 @@ class ReaderState {
     this.theme = ReaderThemes.defaultTheme,
     this.isLoading = false,
     this.showSettings = false,
+    this.viewportSize = const Size(400, 600),
   });
 
   ReaderState copyWith({
@@ -53,6 +63,7 @@ class ReaderState {
     bool? isLoading,
     bool? showSettings,
     ReadingMode? readingMode,
+    Size? viewportSize,
   }) {
     return ReaderState(
       currentChapter: currentChapter ?? this.currentChapter,
@@ -65,6 +76,7 @@ class ReaderState {
       isLoading: isLoading ?? this.isLoading,
       showSettings: showSettings ?? this.showSettings,
       readingMode: readingMode ?? this.readingMode,
+      viewportSize: viewportSize ?? this.viewportSize,
     );
   }
 }
@@ -73,6 +85,9 @@ class ReaderNotifier extends Notifier<ReaderState> {
   late final ReaderRepositoryImpl _repository;
   final HtmlContentParser _parser = HtmlContentParser();
   String? widgetDetailUrl;
+
+  /// 请求序号：防止快速切章时旧请求覆盖新章节
+  int _loadSeq = 0;
 
   @override
   ReaderState build() {
@@ -87,6 +102,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
     required String sourceId,
     String? detailUrl,
   }) async {
+    final seq = ++_loadSeq;
     widgetDetailUrl = detailUrl ?? widgetDetailUrl;
     state = state.copyWith(isLoading: true);
     try {
@@ -96,15 +112,13 @@ class ReaderNotifier extends Notifier<ReaderState> {
         sourceId: sourceId,
         detailUrl: detailUrl,
       );
+      if (seq != _loadSeq) return; // 已被更新的请求取代
+
       final nodes = _parser.parse(chapter.content);
-      final layout = PageLayout(
-        viewWidth: 400,
-        viewHeight: 600,
-        config: state.layoutConfig,
-      );
-      final pages = layout.paginate(nodes);
+      final pages = _paginate(nodes);
 
       final progress = await _repository.loadProgress(bookId);
+      if (seq != _loadSeq) return;
 
       state = state.copyWith(
         currentChapter: chapter,
@@ -117,7 +131,8 @@ class ReaderNotifier extends Notifier<ReaderState> {
       // 异步加载目录
       _loadCatalog(bookId: bookId, sourceId: sourceId, detailUrl: detailUrl);
 
-      // 预加载后续 2 章
+      // 预加载后续 2 章（后台执行，不阻塞后续章节切换）
+      // ignore: discarded_futures
       _repository.preloadChapters(
         bookId: bookId,
         startIndex: chapterIndex + 1,
@@ -126,7 +141,32 @@ class ReaderNotifier extends Notifier<ReaderState> {
         detailUrl: detailUrl,
       );
     } catch (e) {
-      state = state.copyWith(isLoading: false);
+      if (seq == _loadSeq) {
+        state = state.copyWith(isLoading: false);
+      }
+    }
+  }
+
+  /// 使用当前视口与排版配置分页
+  List<PageContent> _paginate(List<TextNode> nodes) {
+    final vp = state.viewportSize;
+    final layout = PageLayout(
+      viewWidth: vp.width,
+      viewHeight: vp.height,
+      config: state.layoutConfig,
+    );
+    return layout.paginate(nodes);
+  }
+
+  /// 视口尺寸变化时更新分页（旋转 / 窗口缩放）
+  void setViewport(double width, double height) {
+    if (state.viewportSize.width == width && state.viewportSize.height == height) return;
+    state = state.copyWith(viewportSize: Size(width, height));
+    if (state.currentChapter != null) {
+      final nodes = _parser.parse(state.currentChapter!.content);
+      final pages = _paginate(nodes);
+      final clampedPage = state.currentPage.clamp(0, pages.isEmpty ? 0 : pages.length - 1);
+      state = state.copyWith(pages: pages, currentPage: clampedPage);
     }
   }
 
@@ -154,6 +194,23 @@ class ReaderNotifier extends Notifier<ReaderState> {
     }
   }
 
+  /// 滚动模式位置上报（offset 为 0~1 归一化位置）
+  void updateScrollOffset(double offset) {
+    if (state.currentChapter == null || state.readingMode != ReadingMode.scroll) return;
+    final current = state.progress;
+    state = state.copyWith(
+      progress: current == null
+          ? ReadingProgress(
+              bookId: state.currentChapter!.bookId,
+              chapterIndex: state.currentChapter!.index,
+              scrollOffset: offset,
+              updatedAt: DateTime.now(),
+            )
+          : current.copyWith(scrollOffset: offset, updatedAt: DateTime.now()),
+    );
+    _saveProgress();
+  }
+
   /// 切换设置面板
   void toggleSettings() {
     state = state.copyWith(showSettings: !state.showSettings);
@@ -164,12 +221,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
     state = state.copyWith(layoutConfig: config, currentPage: 0);
     if (state.currentChapter != null) {
       final nodes = _parser.parse(state.currentChapter!.content);
-      final layout = PageLayout(
-        viewWidth: 400,
-        viewHeight: 600,
-        config: config,
-      );
-      state = state.copyWith(pages: layout.paginate(nodes));
+      state = state.copyWith(pages: _paginate(nodes));
     }
   }
 
@@ -178,9 +230,16 @@ class ReaderNotifier extends Notifier<ReaderState> {
     state = state.copyWith(theme: theme);
   }
 
-  /// 切换阅读模式
+  /// 切换阅读模式（各模式使用自己的进度维度）
   void switchMode(ReadingMode mode) {
-    state = state.copyWith(readingMode: mode, currentPage: 0);
+    if (mode == ReadingMode.page) {
+      state = state.copyWith(
+        readingMode: mode,
+        currentPage: state.progress?.pageIndex ?? 0,
+      );
+    } else {
+      state = state.copyWith(readingMode: mode, currentPage: 0);
+    }
   }
 
   /// 在章节内搜索关键词，返回命中页码列表
@@ -214,13 +273,17 @@ class ReaderNotifier extends Notifier<ReaderState> {
     String? detailUrl,
   }) async {
     if (detailUrl == null || detailUrl.isEmpty) return;
-    final catalog = await _repository.getCatalog(
-      bookId: bookId,
-      sourceId: sourceId,
-      detailUrl: detailUrl,
-    );
-    if (catalog.chapters.isNotEmpty) {
-      state = state.copyWith(catalog: catalog);
+    try {
+      final catalog = await _repository.getCatalog(
+        bookId: bookId,
+        sourceId: sourceId,
+        detailUrl: detailUrl,
+      );
+      if (catalog.chapters.isNotEmpty) {
+        state = state.copyWith(catalog: catalog);
+      }
+    } catch (_) {
+      // 目录加载失败不影响正文阅读
     }
   }
 
@@ -268,14 +331,21 @@ class ReaderNotifier extends Notifier<ReaderState> {
   }
 
   void _saveProgress() {
-    if (state.currentChapter == null) return;
+    final chapter = state.currentChapter;
+    if (chapter == null) return;
     final progress = ReadingProgress(
-      bookId: state.currentChapter!.bookId,
-      chapterIndex: state.currentChapter!.index,
+      bookId: chapter.bookId,
+      chapterIndex: chapter.index,
+      paragraphOffset: state.progress?.paragraphOffset ?? 0,
+      scrollOffset: state.progress?.scrollOffset ?? 0,
       pageIndex: state.currentPage,
       updatedAt: DateTime.now(),
     );
-    _repository.saveProgress(progress);
+    try {
+      _repository.saveProgress(progress);
+    } catch (_) {
+      // 进度保存失败不影响阅读
+    }
   }
 }
 

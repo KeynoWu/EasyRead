@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../domain/entities/book.dart';
 import '../../domain/usecases/import_local_book.dart';
@@ -25,11 +26,11 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   Future<void> _importLocalBook() async {
     final repo = ref.read(bookshelfRepositoryProvider);
     final useCase = ImportLocalBook(repository: repo);
-    final book = await useCase.fromFile();
+    final books = await useCase.fromFile();
     if (!mounted) return;
-    if (book != null) {
+    if (books.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已导入《${book.name}》')),
+        SnackBar(content: Text('已导入 ${books.length} 本书')),
       );
       ref.invalidate(bookshelfListProvider);
     } else {
@@ -37,6 +38,15 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
         const SnackBar(content: Text('导入失败或已取消')),
       );
     }
+  }
+
+  /// 打开书籍阅读（续读上次进度）
+  void _openReader(Book book) {
+    final sourceId = book.sourceId;
+    context.push(
+      '/reader/${Uri.encodeComponent(book.id)}'
+      '${sourceId != null && sourceId.isNotEmpty ? '?sourceId=${Uri.encodeComponent(sourceId)}' : ''}',
+    );
   }
 
   void _toggleEditMode() {
@@ -115,22 +125,8 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     );
 
     if (!mounted) return;
-    final repo = ref.read(bookshelfRepositoryProvider);
     for (final id in _selectedIds) {
-      final book = await repo.getById(id);
-      if (book != null) {
-        await repo.save(Book(
-          id: book.id,
-          name: book.name,
-          author: book.author,
-          coverUrl: book.coverUrl,
-          sourceId: book.sourceId,
-          lastChapter: book.lastChapter,
-          progress: book.progress,
-          group: group,
-          lastReadAt: book.lastReadAt,
-        ));
-      }
+      await groupManager.setGroup(id, group);
     }
     setState(() {
       _editMode = false;
@@ -207,7 +203,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                             const SizedBox(height: 16),
                             const Text('书架空空', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
                             const SizedBox(height: 8),
-                            Text('去搜索添加书籍，或导入本地 TXT/EPUB', style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+                            const Text('去搜索添加书籍，或导入本地 TXT/EPUB', style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
                             const SizedBox(height: 24),
                             FilledButton.icon(
                               onPressed: _importLocalBook,
@@ -222,13 +218,13 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                             books: filtered,
                             editMode: _editMode,
                             selectedIds: _selectedIds,
-                            onBookTap: _editMode ? (b) => _toggleSelect(b.id) : null,
+                            onBookTap: _editMode ? (b) => _toggleSelect(b.id) : _openReader,
                           )
                         : BookshelfList(
                             books: filtered,
                             editMode: _editMode,
                             selectedIds: _selectedIds,
-                            onBookTap: _editMode ? (b) => _toggleSelect(b.id) : null,
+                            onBookTap: _editMode ? (b) => _toggleSelect(b.id) : _openReader,
                           ),
               ),
             ],
@@ -288,6 +284,8 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
         list.sort((a, b) => a.name.compareTo(b.name));
         break;
       case 'added':
+        // 本地导入的书籍 id 为创建时间戳；其他来源按最早时间兜底
+        list.sort((a, b) => _addedTime(b).compareTo(_addedTime(a)));
         break;
       case 'time':
       default:
@@ -295,5 +293,11 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
         break;
     }
     return list;
+  }
+
+  DateTime _addedTime(Book book) {
+    final ts = int.tryParse(book.id);
+    if (ts != null) return DateTime.fromMillisecondsSinceEpoch(ts);
+    return DateTime.fromMillisecondsSinceEpoch(0);
   }
 }

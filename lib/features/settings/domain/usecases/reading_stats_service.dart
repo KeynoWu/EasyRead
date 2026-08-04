@@ -6,12 +6,17 @@ import '../entities/reading_stats.dart';
 class ReadingStatsService {
   static const String _boxName = 'reading_stats';
 
+  Box<String>? _cachedBox;
+
+  Future<Box<String>> _box() async =>
+      _cachedBox ??= await Hive.openBox<String>(_boxName);
+
   // ---- 记录 ----
 
   /// 记录一次阅读会话（分钟数）
   Future<void> recordSession(int seconds) async {
     if (seconds <= 0) return;
-    final box = await Hive.openBox<String>(_boxName);
+    final box = await _box();
     final today = _todayKey();
     final current = _readDay(box, today);
     await box.put(today, jsonEncode({
@@ -24,7 +29,7 @@ class ReadingStatsService {
 
   /// 获取阅读统计汇总
   Future<ReadingStatsSummary> getSummary() async {
-    final box = await Hive.openBox<String>(_boxName);
+    final box = await _box();
     final days = <DailyReadingStats>[];
 
     for (final key in box.keys) {

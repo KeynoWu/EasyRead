@@ -7,25 +7,35 @@ import 'package:easy_read/features/book_source/domain/repositories/book_source_r
 
 class MockSearchRepository implements SearchRepository {
   @override
-  Future<List<SearchResult>> search(String keyword, String sourceId) async {
+  Future<List<SearchResult>> searchWithSource(String keyword, BookSource source) async {
     if (keyword.isEmpty) return [];
     return [
       SearchResult(
-        bookId: '1',
+        bookId: '${source.id}_1',
         name: '测试书籍',
         author: '测试作者',
-        sourceId: sourceId,
-        sourceName: '测试源',
+        detailUrl: 'http://example.com/book/1',
+        sourceId: source.id,
+        sourceName: source.name,
       ),
     ];
   }
 }
 
 class MockBookSourceRepository implements BookSourceRepository {
+  final List<BookSource> sources;
+
+  MockBookSourceRepository(this.sources);
+
   @override
-  Future<List<BookSource>> getAll() async => [];
+  Future<List<BookSource>> getAll() async => sources;
   @override
-  Future<BookSource?> getById(String id) async => null;
+  Future<BookSource?> getById(String id) async {
+    for (final s in sources) {
+      if (s.id == id) return s;
+    }
+    return null;
+  }
   @override
   Future<void> save(BookSource source) async {}
   @override
@@ -35,7 +45,8 @@ class MockBookSourceRepository implements BookSourceRepository {
   @override
   Future<void> importFromUrl(String url) async {}
   @override
-  Future<List<BookSource>> getEnabled() async => [];
+  Future<List<BookSource>> getEnabled() async =>
+      sources.where((s) => s.enabled).toList();
 }
 
 void main() {
@@ -43,20 +54,47 @@ void main() {
   late MockSearchRepository mockSearchRepo;
   late MockBookSourceRepository mockSourceRepo;
 
+  const testSource = BookSource(
+    id: 'src1',
+    name: '测试源',
+    bookSourceUrl: 'http://example.com',
+    rules: {'searchUrl': 'http://example.com/search?q={{key}}'},
+  );
+
   setUp(() {
     mockSearchRepo = MockSearchRepository();
-    mockSourceRepo = MockBookSourceRepository();
+    mockSourceRepo = MockBookSourceRepository([testSource]);
     useCase = SearchBooks(searchRepo: mockSearchRepo, sourceRepo: mockSourceRepo);
   });
 
   test('should return empty list for empty keyword', () async {
-    final results = await useCase.execute('', 'source1');
+    final results = await useCase.execute('', 'src1');
     expect(results, isEmpty);
   });
 
-  test('should return search results for valid keyword', () async {
-    final results = await useCase.execute('测试', 'source1');
+  test('should return empty list when source not found', () async {
+    final results = await useCase.execute('测试', 'nonexistent');
+    expect(results, isEmpty);
+  });
+
+  test('should search with source configuration', () async {
+    final results = await useCase.execute('测试', 'src1');
     expect(results.length, 1);
     expect(results.first.name, '测试书籍');
+    expect(results.first.sourceId, 'src1');
+  });
+
+  test('executeMultiSource should aggregate results', () async {
+    final results = await useCase.executeMultiSource('测试');
+    expect(results.length, 1);
+    expect(results.first.name, '测试书籍');
+    expect(results.first.sourceId, 'src1');
+  });
+
+  test('executeMultiSource should return empty when no sources', () async {
+    final emptyRepo = MockBookSourceRepository([]);
+    final emptyUseCase = SearchBooks(searchRepo: mockSearchRepo, sourceRepo: emptyRepo);
+    final results = await emptyUseCase.executeMultiSource('测试');
+    expect(results, isEmpty);
   });
 }

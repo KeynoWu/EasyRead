@@ -1,4 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 网络访问权限：书源抓取、搜索、WebDAV 同步、封面加载均依赖 Dio 网络请求 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="easy_read"
         android:name="${applicationName}"

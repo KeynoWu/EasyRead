@@ -32,13 +32,22 @@ class BookSourceModel extends HiveObject {
   }
 
   BookSource toEntity() {
+    Map<String, dynamic> rules = {};
+    try {
+      final decoded = jsonDecode(rulesJson);
+      if (decoded is Map) {
+        rules = Map<String, dynamic>.from(decoded);
+      }
+    } catch (_) {
+      // 损坏的规则 JSON 降级为空规则
+    }
     return BookSource(
       id: id,
       name: name,
       bookSourceUrl: bookSourceUrl,
       bookSourceGroup: bookSourceGroup,
       enabled: enabled,
-      rules: Map<String, dynamic>.from(jsonDecode(rulesJson) as Map),
+      rules: rules,
     );
   }
 }
@@ -57,13 +66,14 @@ class BookSourceModelAdapter extends TypeAdapter<BookSourceModel> {
       final value = reader.read();
       fields[key] = value;
     }
+    // 类型守卫：本地数据损坏/被外部修改时不崩溃
     return BookSourceModel(
-      id: fields[0] as String,
-      name: fields[1] as String,
-      bookSourceUrl: fields[2] as String?,
-      bookSourceGroup: fields[3] as String?,
-      enabled: fields[4] as bool? ?? true,
-      rulesJson: fields[5] as String,
+      id: fields[0] is String ? fields[0] as String : '',
+      name: fields[1] is String ? fields[1] as String : '',
+      bookSourceUrl: fields[2] is String ? fields[2] as String : null,
+      bookSourceGroup: fields[3] is String ? fields[3] as String : null,
+      enabled: fields[4] is bool ? fields[4] as bool : true,
+      rulesJson: fields[5] is String ? fields[5] as String : '{}',
     );
   }
 

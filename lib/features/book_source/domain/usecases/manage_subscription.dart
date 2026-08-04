@@ -1,8 +1,10 @@
 import 'dart:convert';
+import 'package:dio/dio.dart';
 import 'package:hive/hive.dart';
 import '../../../../core/network/dio_client.dart';
 import '../entities/source_subscription.dart';
 import '../entities/book_source.dart';
+import '../usecases/parse_book_source_rule.dart';
 import '../../data/models/source_subscription_model.dart';
 import '../repositories/book_source_repository.dart';
 
@@ -18,13 +20,18 @@ class ManageSubscription {
 
   static const String _boxName = 'source_subscriptions';
 
+  Box<SourceSubscriptionModel>? _cachedBox;
+
+  Future<Box<SourceSubscriptionModel>> _box() async =>
+      _cachedBox ??= await Hive.openBox<SourceSubscriptionModel>(_boxName);
+
   Future<List<SourceSubscription>> getAll() async {
-    final box = await Hive.openBox<SourceSubscriptionModel>(_boxName);
+    final box = await _box();
     return box.values.map((e) => e.toEntity()).toList();
   }
 
   Future<void> add(String name, String url) async {
-    final box = await Hive.openBox<SourceSubscriptionModel>(_boxName);
+    final box = await _box();
     final sub = SourceSubscriptionModel(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       name: name,
@@ -34,7 +41,7 @@ class ManageSubscription {
   }
 
   Future<void> remove(String id) async {
-    final box = await Hive.openBox<SourceSubscriptionModel>(_boxName);
+    final box = await _box();
     await box.delete(id);
   }
 
@@ -49,7 +56,7 @@ class ManageSubscription {
       }
 
       // 更新订阅状态
-      final box = await Hive.openBox<SourceSubscriptionModel>(_boxName);
+      final box = await _box();
       final model = SourceSubscriptionModel.fromEntity(
         subscription.copyWith(
           lastUpdatedAt: DateTime.now(),
@@ -60,15 +67,34 @@ class ManageSubscription {
 
       return sources.length;
     } catch (e) {
-      final box = await Hive.openBox<SourceSubscriptionModel>(_boxName);
+      final box = await _box();
       final model = SourceSubscriptionModel.fromEntity(
         subscription.copyWith(
-          lastUpdateResult: '更新失败: $e',
+          lastUpdateResult: '更新失败: ${_friendlyError(e)}',
         ),
       );
       await box.put(subscription.id, model);
       return 0;
     }
+  }
+
+  /// 异常转友好提示，避免将服务器细节持久化展示
+  static String _friendlyError(Object error) {
+    if (error is DioException) {
+      switch (error.type) {
+        case DioExceptionType.connectionTimeout:
+        case DioExceptionType.receiveTimeout:
+        case DioExceptionType.sendTimeout:
+          return '连接超时';
+        case DioExceptionType.connectionError:
+          return '无法连接服务器';
+        case DioExceptionType.badResponse:
+          return '服务器响应异常';
+        default:
+          return '请求失败';
+      }
+    }
+    return '未知错误';
   }
 
   /// 更新所有订阅
@@ -96,7 +122,7 @@ class ManageSubscription {
           rules.remove('bookSourceGroup');
           rules.remove('bookSourceUrl');
           sources.add(BookSource(
-            id: map['bookSourceUrl']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString(),
+            id: map['bookSourceUrl']?.toString() ?? ParseBookSourceRule.uniqueFallbackId(),
             name: map['bookSourceName']?.toString() ?? '未命名书源',
             bookSourceUrl: map['bookSourceUrl']?.toString(),
             bookSourceGroup: map['bookSourceGroup']?.toString(),
@@ -110,7 +136,7 @@ class ManageSubscription {
         rules.remove('bookSourceGroup');
         rules.remove('bookSourceUrl');
         sources.add(BookSource(
-          id: map['bookSourceUrl']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString(),
+          id: map['bookSourceUrl']?.toString() ?? ParseBookSourceRule.uniqueFallbackId(),
           name: map['bookSourceName']?.toString() ?? '未命名书源',
           bookSourceUrl: map['bookSourceUrl']?.toString(),
           bookSourceGroup: map['bookSourceGroup']?.toString(),

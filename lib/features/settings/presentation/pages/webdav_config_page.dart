@@ -16,6 +16,8 @@ class _WebDavConfigPageState extends State<WebDavConfigPage> {
   late final TextEditingController _usernameController;
   late final TextEditingController _passwordController;
   bool _saving = false;
+  bool _passwordEdited = false;
+  bool _passwordLoading = true;
 
   @override
   void initState() {
@@ -23,7 +25,18 @@ class _WebDavConfigPageState extends State<WebDavConfigPage> {
     final config = _sync.getConfig();
     _urlController = TextEditingController(text: config.url);
     _usernameController = TextEditingController(text: config.username);
-    _passwordController = TextEditingController(text: config.password);
+    _passwordController = TextEditingController();
+    // 密码存于平台安全存储，异步回填；用户已手动输入时不被覆盖
+    _passwordController.addListener(() {
+      if (!_passwordLoading) _passwordEdited = true;
+    });
+    _sync.loadConfig().then((full) {
+      if (!mounted) return;
+      _passwordLoading = false;
+      if (!_passwordEdited) {
+        _passwordController.text = full.password;
+      }
+    });
   }
 
   @override
@@ -41,11 +54,16 @@ class _WebDavConfigPageState extends State<WebDavConfigPage> {
       username: _usernameController.text.trim(),
       password: _passwordController.text.trim(),
     );
-    await _sync.saveConfig(config);
+    String? message = '配置已保存';
+    try {
+      await _sync.saveConfig(config);
+    } catch (_) {
+      message = '保存失败：密码安全存储不可用';
+    }
     if (!mounted) return;
     setState(() => _saving = false);
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('配置已保存')),
+      SnackBar(content: Text(message)),
     );
   }
 

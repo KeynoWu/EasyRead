@@ -5,10 +5,21 @@ class TtsService {
   final FlutterTts _tts = FlutterTts();
   bool _isSpeaking = false;
 
+  /// 整章朗读完成回调（UI 用它复位播放状态）
+  void Function()? onComplete;
+
   TtsService() {
     _tts.setLanguage('zh-CN');
     _tts.setSpeechRate(0.5);
     _tts.setVolume(1.0);
+    _tts.setCompletionHandler(() {
+      _isSpeaking = false;
+      onComplete?.call();
+    });
+    _tts.setCancelHandler(() {
+      _isSpeaking = false;
+      onComplete?.call();
+    });
   }
 
   bool get isSpeaking => _isSpeaking;

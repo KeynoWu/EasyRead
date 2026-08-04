@@ -22,7 +22,10 @@ class SearchResultItem extends StatelessWidget {
             'detailUrl': a.detailUrl,
           }).toList());
           context.push(
-            '/reader/${result.bookId}?sourceId=${result.sourceId}&detailUrl=${result.detailUrl ?? ''}&alternatives=$alts',
+            '/reader/${Uri.encodeComponent(result.bookId)}'
+            '?sourceId=${Uri.encodeComponent(result.sourceId)}'
+            '&detailUrl=${Uri.encodeComponent(result.detailUrl ?? '')}'
+            '&alternatives=${Uri.encodeComponent(alts)}',
           );
         },
         borderRadius: BorderRadius.circular(14),
@@ -38,7 +41,7 @@ class SearchResultItem extends StatelessWidget {
                   height: 84,
                   color: AppColors.separator.withValues(alpha: 0.3),
                   child: result.coverUrl != null
-                      ? Image.network(result.coverUrl!, fit: BoxFit.cover, errorBuilder: (_, _, _) => const Icon(Icons.auto_stories, color: AppColors.textSecondary))
+                      ? Image.network(result.coverUrl!, fit: BoxFit.cover, cacheWidth: 180, errorBuilder: (_, _, _) => const Icon(Icons.auto_stories, color: AppColors.textSecondary))
                       : const Icon(Icons.auto_stories, color: AppColors.textSecondary),
                 ),
               ),

@@ -13,7 +13,7 @@ class PurifyPipeline {
     RegexPurifier? regexPurifier,
     LayoutPurifier? layoutPurifier,
   })  : tagPurifier = tagPurifier ?? TagPurifier(),
-        regexPurifier = regexPurifier ?? RegexPurifier(),
+        regexPurifier = regexPurifier ?? const RegexPurifier(),
         layoutPurifier = layoutPurifier ?? LayoutPurifier();
 
   /// 执行完整净化流程

@@ -6,9 +6,14 @@ class SearchHistoryService {
   static const String _boxName = 'search_history';
   static const int _maxEntries = 20;
 
+  Box<String>? _cachedBox;
+
+  Future<Box<String>> _box() async =>
+      _cachedBox ??= await Hive.openBox<String>(_boxName);
+
   /// 获取最近搜索关键词（新→旧）
   Future<List<String>> getRecent() async {
-    final box = await Hive.openBox<String>(_boxName);
+    final box = await _box();
     final list = box.get('keywords');
     if (list == null) return [];
     try {
@@ -21,7 +26,7 @@ class SearchHistoryService {
 
   /// 保存搜索关键词（去重，最新在前）
   Future<void> add(String keyword) async {
-    final box = await Hive.openBox<String>(_boxName);
+    final box = await _box();
     final recent = await getRecent();
     recent.remove(keyword);
     recent.insert(0, keyword);
@@ -33,7 +38,7 @@ class SearchHistoryService {
 
   /// 清空历史
   Future<void> clear() async {
-    final box = await Hive.openBox<String>(_boxName);
+    final box = await _box();
     await box.put('keywords', jsonEncode([]));
   }
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../providers/book_source_provider.dart';
 import '../widgets/book_source_card.dart';
 import 'book_source_edit_page.dart';
@@ -60,7 +61,7 @@ class BookSourceListPage extends ConsumerWidget {
         error: (e, _) => Center(child: Text('加载失败: $e')),
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => Navigator.pushNamed(context, '/book-source/import'),
+        onPressed: () => context.pushNamed('bookSourceImport'),
         child: const Icon(Icons.add),
       ),
     );

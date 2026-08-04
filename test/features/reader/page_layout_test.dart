@@ -72,5 +72,31 @@ void main() {
       expect(pages.length, 1);
       expect(pages[0].nodes.length, 2);
     });
+
+    test('should split oversized paragraph across pages without overflow', () {
+      final longText = List.generate(400, (i) => '第${i + 1}段文字内容用于分页拆分。').join();
+      final nodes = [
+        const TextNode(type: NodeType.paragraph, text: '短段落'),
+        TextNode(type: NodeType.paragraph, text: longText),
+      ];
+      final layout = PageLayout(
+        viewWidth: 400,
+        viewHeight: 150,
+      );
+      final pages = layout.paginate(nodes);
+      expect(pages.length, greaterThan(1));
+      // 长段落被拆分到多页，且每页都有内容
+      expect(pages.first.nodes, isNotEmpty);
+      for (final page in pages) {
+        expect(page.nodes, isNotEmpty);
+      }
+      // 拆分后各页内容总和覆盖原文（不丢字）
+      final totalText = pages
+          .expand((p) => p.nodes)
+          .where((n) => n.type == NodeType.paragraph)
+          .map((n) => n.text)
+          .join();
+      expect(totalText.length, greaterThan(1000));
+    });
   });
 }

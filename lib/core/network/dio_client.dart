@@ -20,7 +20,7 @@ class DioClient {
     _dio.interceptors.addAll([
       UaInterceptor(),
       RateLimitInterceptor(),
-      RetryInterceptor(),
+      RetryInterceptor(dio: _dio),
     ]);
   }
 
@@ -32,6 +32,9 @@ class DioClient {
   Dio get dio => _dio;
 
   Future<String> getString(String url, {Map<String, String>? headers, String? sourceId}) async {
+    if (!_isHttpUrl(url)) {
+      throw ArgumentError('不支持的 URL scheme: $url');
+    }
     final response = await _dio.get(
       url,
       options: Options(
@@ -40,5 +43,12 @@ class DioClient {
       ),
     );
     return response.data.toString();
+  }
+
+  /// 仅允许 http/https，阻止 file://、data: 等非预期 scheme（SSRF 防护）
+  static bool _isHttpUrl(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return false;
+    return uri.scheme == 'http' || uri.scheme == 'https';
   }
 }

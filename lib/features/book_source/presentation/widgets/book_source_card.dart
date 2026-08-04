@@ -59,7 +59,7 @@ class BookSourceCard extends StatelessWidget {
                           ),
                           child: Text(
                             source.bookSourceGroup!,
-                            style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                            style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
                           ),
                         ),
                       ),

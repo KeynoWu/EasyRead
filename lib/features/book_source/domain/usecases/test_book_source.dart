@@ -1,4 +1,5 @@
 import '../../../search/data/repositories/search_repository_impl.dart';
+import '../../../search/domain/repositories/search_repository.dart';
 import '../entities/book_source.dart';
 
 /// 书源校验结果
@@ -16,9 +17,9 @@ class BookSourceTestResult {
 
 /// 测试书源是否可用（用搜索 URL 尝试抓取）
 class TestBookSource {
-  final SearchRepositoryImpl _searchRepo;
+  final SearchRepository _searchRepo;
 
-  TestBookSource({SearchRepositoryImpl? searchRepo})
+  TestBookSource({SearchRepository? searchRepo})
       : _searchRepo = searchRepo ?? SearchRepositoryImpl();
 
   /// 用关键词测试书源搜索是否正常

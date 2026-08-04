@@ -1,36 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import '../../../../core/theme/app_colors.dart';
-import '../../../bookshelf/presentation/pages/bookshelf_page.dart';
-import '../../../search/presentation/pages/search_page.dart';
-import '../../../book_source/presentation/pages/book_source_list_page.dart';
-import '../../../settings/presentation/pages/settings_page.dart';
 
-class MainShell extends StatefulWidget {
-  const MainShell({super.key});
+/// 底部导航主框架 — 由 go_router 的 StatefulShellRoute 驱动，
+/// 各 tab 拥有独立导航栈且支持深链。
+class MainShell extends StatelessWidget {
+  final StatefulNavigationShell navigationShell;
 
-  @override
-  State<MainShell> createState() => _MainShellState();
-}
-
-class _MainShellState extends State<MainShell> {
-  int _currentIndex = 0;
-
-  final List<Widget> _pages = const [
-    BookshelfPage(),
-    SearchPage(),
-    BookSourceListPage(),
-    SettingsPage(),
-  ];
+  const MainShell({super.key, required this.navigationShell});
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _pages,
-      ),
+      body: navigationShell,
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: isDark ? AppColors.darkSurface : AppColors.surface,
@@ -45,26 +29,37 @@ class _MainShellState extends State<MainShell> {
         child: SafeArea(
           top: false,
           child: BottomNavigationBar(
-            currentIndex: _currentIndex,
-            onTap: (index) => setState(() => _currentIndex = index),
+            currentIndex: navigationShell.currentIndex,
+            onTap: (index) => navigationShell.goBranch(
+              index,
+              initialLocation: index == navigationShell.currentIndex,
+            ),
             backgroundColor: Colors.transparent,
-            items: [
-              _navItem(Icons.library_books_outlined, Icons.library_books, '书架', 0),
-              _navItem(Icons.search_outlined, Icons.search, '搜索', 1),
-              _navItem(Icons.link_outlined, Icons.link, '书源', 2),
-              _navItem(Icons.settings_outlined, Icons.settings, '设置', 3),
+            items: const [
+              BottomNavigationBarItem(
+                icon: Icon(Icons.library_books_outlined),
+                activeIcon: Icon(Icons.library_books),
+                label: '书架',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.search_outlined),
+                activeIcon: Icon(Icons.search),
+                label: '搜索',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.link_outlined),
+                activeIcon: Icon(Icons.link),
+                label: '书源',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.settings_outlined),
+                activeIcon: Icon(Icons.settings),
+                label: '设置',
+              ),
             ],
           ),
         ),
       ),
-    );
-  }
-
-  BottomNavigationBarItem _navItem(IconData outline, IconData filled, String label, int index) {
-    return BottomNavigationBarItem(
-      icon: Icon(outline),
-      activeIcon: Icon(filled),
-      label: label,
     );
   }
 }

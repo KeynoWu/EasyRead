@@ -132,7 +132,7 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
                         icon: const Icon(Icons.sync, size: 20),
                         onPressed: () async {
                           final count = await _manager.updateSubscription(sub);
-                          if (!mounted) return;
+                          if (!context.mounted) return;
                           _reload();
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(content: Text('更新了 $count 个书源')),

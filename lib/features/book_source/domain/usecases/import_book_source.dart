@@ -20,7 +20,7 @@ class ImportBookSource {
     DioClient? client,
   }) : _client = client ?? DioClient();
 
-  /// 从文件导入
+  /// 从文件导入（支持单个书源 JSON 或书源列表 JSON 数组）
   Future<Either<String, List<BookSource>>> fromFile() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
@@ -34,10 +34,8 @@ class ImportBookSource {
       final bytes = file.bytes;
       if (bytes == null) continue;
       final content = String.fromCharCodes(bytes);
-      final parsed = parser.execute(content);
-      if (parsed.isRight) {
-        parsed.fold((l) => null, (r) => sources.add(r));
-      }
+      final parsed = _parseContent(content);
+      parsed.fold((l) => null, (r) => sources.addAll(r));
     }
     if (sources.isEmpty) return const Left('未解析到有效书源');
 

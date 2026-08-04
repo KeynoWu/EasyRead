@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../parser/node_tree.dart';
 
@@ -40,6 +41,9 @@ class PageLayout {
     LayoutConfig? config,
   }) : config = config ?? const LayoutConfig();
 
+  /// 浮点容差：避免恰好填满时因精度误差误判溢出
+  static const double _epsilon = 0.5;
+
   /// 将 TextNode 列表拆分为多页
   List<PageContent> paginate(List<TextNode> nodes) {
     if (nodes.isEmpty) return [];
@@ -49,47 +53,60 @@ class PageLayout {
       textDirection: TextDirection.ltr,
     );
 
-    final contentWidth = viewWidth - config.horizontalPadding * 2;
+    final contentWidth = math.max(0.0, viewWidth - config.horizontalPadding * 2);
     final contentHeight = viewHeight;
 
     final currentPageNodes = <TextNode>[];
     var currentPageHeight = 0.0;
 
+    void flushPage() {
+      if (currentPageNodes.isEmpty) return;
+      pages.add(PageContent(
+        nodes: List.from(currentPageNodes),
+        pageIndex: pages.length,
+      ));
+      currentPageNodes.clear();
+      currentPageHeight = 0.0;
+    }
+
     for (final node in nodes) {
       final nodeHeight = _measureNodeHeight(node, textPainter, contentWidth);
 
-      // 如果当前节点加上当前页已超出一页，开始新页
-      if (currentPageHeight + nodeHeight > contentHeight && currentPageNodes.isNotEmpty) {
-        pages.add(PageContent(
-          nodes: List.from(currentPageNodes),
-          pageIndex: pages.length,
-        ));
-        currentPageNodes.clear();
-        currentPageHeight = 0.0;
+      // 当前节点放不下当前页剩余空间 → 翻页
+      if (currentPageHeight + nodeHeight > contentHeight + _epsilon &&
+          currentPageNodes.isNotEmpty) {
+        flushPage();
       }
 
-      // 单个节点超过一页时，需要拆分
-      if (nodeHeight > contentHeight && node.type == NodeType.paragraph) {
-        // 拆分长段落
-        final splitNodes = _splitParagraph(node, textPainter, contentWidth, contentHeight);
-        for (final splitNode in splitNodes) {
-          currentPageNodes.add(splitNode);
-          currentPageHeight += _measureNodeHeight(splitNode, textPainter, contentWidth);
+      if (nodeHeight <= contentHeight + _epsilon) {
+        currentPageNodes.add(node);
+        currentPageHeight += nodeHeight;
+      } else if (node.type == NodeType.paragraph) {
+        // 单个段落超高：按页高切分为多段，再逐段分配（含当前页剩余空间），保证不溢出
+        // 切分目标高度扣除段落间距，使切出的每段测量高度（含间距）不超过页高
+        final segments = _splitParagraph(
+          node,
+          textPainter,
+          contentWidth,
+          math.max(1.0, contentHeight - config.paragraphSpacing),
+        );
+        for (final segment in segments) {
+          final segHeight = _measureNodeHeight(segment, textPainter, contentWidth);
+          if (currentPageHeight + segHeight > contentHeight + _epsilon &&
+              currentPageNodes.isNotEmpty) {
+            flushPage();
+          }
+          currentPageNodes.add(segment);
+          currentPageHeight += segHeight;
         }
       } else {
+        // 非段落超高（罕见）：放入新页顶部，宁可截断视觉也不无限翻页
         currentPageNodes.add(node);
         currentPageHeight += nodeHeight;
       }
     }
 
-    // 最后一页
-    if (currentPageNodes.isNotEmpty) {
-      pages.add(PageContent(
-        nodes: List.from(currentPageNodes),
-        pageIndex: pages.length,
-      ));
-    }
-
+    flushPage();
     return pages;
   }
 
@@ -113,35 +130,51 @@ class PageLayout {
       case NodeType.lineBreak:
         return config.fontSize * config.lineHeight * 0.5;
       case NodeType.image:
-        return 200.0; // 图片占位高度
+        // 图片占位高度：不超过视口的 90%，小屏不溢出
+        return math.min(200.0, math.max(40.0, viewHeight * 0.9));
     }
   }
 
-  /// 拆分长段落为多段
-  List<TextNode> _splitParagraph(TextNode node, TextPainter textPainter, double width, double height) {
-    final chars = node.text.split('');
+  /// 拆分长段落为多段（每段高度不超过 [targetHeight]）。
+  /// 使用二分查找定位断点，复杂度 O(n·log n)，替代逐字符测量的 O(n²)。
+  List<TextNode> _splitParagraph(
+    TextNode node,
+    TextPainter textPainter,
+    double width,
+    double targetHeight,
+  ) {
+    final text = node.text;
+    if (text.isEmpty) return [node];
+
     final result = <TextNode>[];
-    final buffer = StringBuffer();
+    final style = _textStyle();
+    var start = 0;
 
-    for (int i = 0; i < chars.length; i++) {
-      buffer.write(chars[i]);
-
-      // 检查加上下一个字符是否会超出一页
-      if (i + 1 < chars.length) {
-        final testText = buffer.toString() + chars[i + 1];
-        textPainter.text = TextSpan(text: testText, style: _textStyle());
+    while (start < text.length) {
+      // 二分查找 [start, text.length] 内能放入 targetHeight 的最长前缀
+      var lo = start + 1;
+      var hi = text.length;
+      var best = start;
+      while (lo <= hi) {
+        final mid = (lo + hi) >> 1;
+        textPainter.text = TextSpan(text: text.substring(start, mid), style: style);
         textPainter.layout(maxWidth: width);
-
-        if (textPainter.height > height && buffer.toString().trim().isNotEmpty) {
-          result.add(TextNode(type: NodeType.paragraph, text: buffer.toString().trim()));
-          buffer.clear();
+        if (textPainter.height <= targetHeight + _epsilon) {
+          best = mid;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
         }
       }
-    }
-
-    final remaining = buffer.toString().trim();
-    if (remaining.isNotEmpty) {
-      result.add(TextNode(type: NodeType.paragraph, text: remaining));
+      // 极端情况（字体远大于页高）：至少推进一个字符，避免死循环
+      if (best <= start) {
+        best = start + 1;
+      }
+      final chunk = text.substring(start, best).trim();
+      if (chunk.isNotEmpty) {
+        result.add(TextNode(type: NodeType.paragraph, text: chunk));
+      }
+      start = best;
     }
 
     return result.isEmpty ? [node] : result;

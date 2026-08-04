@@ -74,10 +74,13 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       final repo = ref.read(readerRepositoryProvider);
       final progress = await repo.loadProgress(widget.bookId);
       final startChapter = progress?.chapterIndex ?? 0;
+      final sourceId = (widget.sourceId != null && widget.sourceId!.isNotEmpty)
+          ? widget.sourceId
+          : 'default';
       ref.read(readerProvider.notifier).loadChapter(
         bookId: widget.bookId,
         chapterIndex: startChapter,
-        sourceId: widget.sourceId ?? 'default',
+        sourceId: sourceId!,
         detailUrl: widget.detailUrl,
       );
     });
@@ -156,9 +159,18 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       ),
     );
     if (selected != null && mounted && selected.bookId.isNotEmpty) {
-      // 切换到新书源
+      // 切换到新书源（保留替代书源列表，参数做 URL 编码）
+      final alts = jsonEncode(_alternatives.map((a) => {
+        'bookId': a.bookId,
+        'sourceId': a.sourceId,
+        'sourceName': a.sourceName,
+        'detailUrl': a.detailUrl,
+      }).toList());
       context.pushReplacement(
-        '/reader/${selected.bookId}?sourceId=${selected.sourceId}&detailUrl=${selected.detailUrl ?? ''}',
+        '/reader/${Uri.encodeComponent(selected.bookId)}'
+        '?sourceId=${Uri.encodeComponent(selected.sourceId)}'
+        '&detailUrl=${Uri.encodeComponent(selected.detailUrl ?? '')}'
+        '&alternatives=${Uri.encodeComponent(alts)}',
       );
     }
   }
@@ -193,6 +205,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         text: controller.text.trim(),
         createdAt: DateTime.now(),
       ));
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('笔记已保存')),
       );
@@ -228,10 +241,13 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
 
     if (_isTtsPlaying) {
       await _tts.stop();
-      setState(() => _isTtsPlaying = false);
+      if (mounted) setState(() => _isTtsPlaying = false);
     } else {
+      _tts.onComplete = () {
+        if (mounted) setState(() => _isTtsPlaying = false);
+      };
       await _tts.speak(state.currentChapter!.content);
-      setState(() => _isTtsPlaying = true);
+      if (mounted) setState(() => _isTtsPlaying = true);
     }
   }
 
@@ -357,11 +373,11 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                     ],
                   ),
                 ),
-                Expanded(child: ReaderPageView()),
+                const Expanded(child: ReaderPageView()),
               ],
             ),
             if (state.showSettings)
-              Positioned(
+              const Positioned(
                 bottom: 0,
                 left: 0,
                 right: 0,

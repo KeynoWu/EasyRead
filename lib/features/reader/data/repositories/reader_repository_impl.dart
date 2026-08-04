@@ -1,4 +1,5 @@
 import 'package:hive/hive.dart';
+import '../../../../core/database/hive_init.dart';
 import '../../../../core/network/dio_client.dart';
 import '../../../../core/purification/purify_pipeline.dart';
 import '../../../../features/book_source/domain/entities/book_source.dart';
@@ -13,8 +14,16 @@ import '../models/reading_progress_model.dart';
 
 class ReaderRepositoryImpl implements ReaderRepository {
   final DioClient _client;
-  final PurifyPipeline _pipeline;
+  PurifyPipeline _pipeline;
   final BookSourceRepository _sourceRepo;
+  Box<ChapterModel>? _cachedChapterBox;
+  Box<ReadingProgressModel>? _cachedProgressBox;
+
+  Future<Box<ChapterModel>> _chapterBox() async =>
+      _cachedChapterBox ??= await Hive.openBox<ChapterModel>(HiveBoxes.chapters);
+
+  Future<Box<ReadingProgressModel>> _progressBox() async =>
+      _cachedProgressBox ??= await Hive.openBox<ReadingProgressModel>(HiveBoxes.readingProgress);
 
   ReaderRepositoryImpl({
     DioClient? client,
@@ -23,6 +32,11 @@ class ReaderRepositoryImpl implements ReaderRepository {
   })  : _client = client ?? DioClient(),
         _pipeline = pipeline ?? PurifyPipeline(),
         _sourceRepo = sourceRepo ?? _EmptySourceRepo();
+
+  /// 运行时注入净化规则（用户配置加载完成后调用）
+  void setPipeline(PurifyPipeline pipeline) {
+    _pipeline = pipeline;
+  }
 
   Future<BookSource?> _getSource(String sourceId) async {
     return _sourceRepo.getById(sourceId);
@@ -70,9 +84,9 @@ class ReaderRepositoryImpl implements ReaderRepository {
     required String sourceId,
     String? detailUrl,
   }) async {
-    // 先检查缓存
-    final cacheBox = await Hive.openBox<ChapterModel>('chapters');
-    final cacheKey = '${bookId}_$chapterIndex';
+    // 先检查缓存（key 含 sourceId，避免换源后读到其他书源的内容）
+    final cacheBox = await _chapterBox();
+    final cacheKey = '${bookId}_${sourceId}_$chapterIndex';
     final cached = cacheBox.get(cacheKey);
     if (cached != null) {
       return cached.toEntity();
@@ -80,13 +94,14 @@ class ReaderRepositoryImpl implements ReaderRepository {
 
     final source = await _getSource(sourceId);
     if (source == null || source.contentUrl == null) {
-      // 无书源规则时返回占位内容
-      return _placeholderChapter(cacheBox, cacheKey, bookId, chapterIndex, sourceId);
+      // 无书源规则时返回占位内容（不写入缓存，避免污染）
+      return _placeholderChapter(bookId, chapterIndex, sourceId);
     }
 
     try {
-      // 获取目录以确定章节 URL
+      // 获取目录以确定章节 URL 与真实标题
       var chapterUrl = '';
+      var chapterTitle = '';
       if (detailUrl != null && detailUrl.isNotEmpty) {
         final catalog = await getCatalog(
           bookId: bookId,
@@ -95,11 +110,12 @@ class ReaderRepositoryImpl implements ReaderRepository {
         );
         if (chapterIndex < catalog.chapters.length) {
           chapterUrl = catalog.chapters[chapterIndex].url;
+          chapterTitle = catalog.chapters[chapterIndex].title;
         }
       }
 
       if (chapterUrl.isEmpty) {
-        return _placeholderChapter(cacheBox, cacheKey, bookId, chapterIndex, sourceId);
+        return _placeholderChapter(bookId, chapterIndex, sourceId);
       }
 
       // 拉取章节内容
@@ -116,7 +132,12 @@ class ReaderRepositoryImpl implements ReaderRepository {
         content = _pipeline.purify(html);
       }
 
-      final title = '第${chapterIndex + 1}章';
+      if (content.trim().isEmpty) {
+        // 内容为空视为解析失败：不写入缓存，返回占位
+        return _placeholderChapter(bookId, chapterIndex, sourceId);
+      }
+
+      final title = chapterTitle.isEmpty ? '第${chapterIndex + 1}章' : chapterTitle;
       final chapter = Chapter(
         id: cacheKey,
         bookId: bookId,
@@ -131,7 +152,7 @@ class ReaderRepositoryImpl implements ReaderRepository {
       await _trimCache(cacheBox);
       return chapter;
     } catch (_) {
-      return _placeholderChapter(cacheBox, cacheKey, bookId, chapterIndex, sourceId);
+      return _placeholderChapter(bookId, chapterIndex, sourceId);
     }
   }
 
@@ -145,9 +166,10 @@ class ReaderRepositoryImpl implements ReaderRepository {
         .replaceAll('{{index}}', '$index');
   }
 
-  Chapter _placeholderChapter(Box<ChapterModel> cacheBox, String cacheKey, String bookId, int chapterIndex, String sourceId) {
-    final chapter = Chapter(
-      id: cacheKey,
+  /// 占位章节（加载失败/无规则时的兜底）。不写入缓存，避免把"加载中"内容持久化。
+  Chapter _placeholderChapter(String bookId, int chapterIndex, String sourceId) {
+    return Chapter(
+      id: '${bookId}_${sourceId}_$chapterIndex',
       bookId: bookId,
       title: '第${chapterIndex + 1}章',
       content: '章节内容加载中...',
@@ -155,26 +177,24 @@ class ReaderRepositoryImpl implements ReaderRepository {
       sourceId: sourceId,
       cachedAt: DateTime.now(),
     );
-    cacheBox.put(cacheKey, ChapterModel.fromEntity(chapter));
-    return chapter;
   }
 
   @override
   Future<void> saveProgress(ReadingProgress progress) async {
-    final box = await Hive.openBox<ReadingProgressModel>('reading_progress');
+    final box = await _progressBox();
     await box.put(progress.bookId, ReadingProgressModel.fromEntity(progress));
   }
 
   @override
   Future<ReadingProgress?> loadProgress(String bookId) async {
-    final box = await Hive.openBox<ReadingProgressModel>('reading_progress');
+    final box = await _progressBox();
     final model = box.get(bookId);
     return model?.toEntity();
   }
 
   @override
   Future<void> clearBookCache(String bookId) async {
-    final box = await Hive.openBox<ChapterModel>('chapters');
+    final box = await _chapterBox();
     final keys = box.keys.where((k) => (k as String).startsWith('${bookId}_'));
     await box.deleteAll(keys);
   }

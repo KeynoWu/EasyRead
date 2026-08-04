@@ -42,7 +42,7 @@ class BookCard extends StatelessWidget {
                   ),
                   clipBehavior: Clip.antiAlias,
                   child: book.coverUrl != null
-                      ? Image.network(book.coverUrl!, fit: BoxFit.cover, errorBuilder: (_, _, _) => _bookPlaceholder())
+                      ? Image.network(book.coverUrl!, fit: BoxFit.cover, cacheWidth: 240, errorBuilder: (_, _, _) => _bookPlaceholder())
                       : _bookPlaceholder(),
                 ),
                 if (editMode)

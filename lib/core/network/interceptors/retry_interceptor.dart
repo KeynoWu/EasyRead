@@ -1,13 +1,17 @@
 import 'package:dio/dio.dart';
 
-/// 自动重试 — 网络异常时最多重试 3 次，间隔递增
+/// 自动重试 — 网络异常时最多重试 3 次，间隔递增。
+/// 复用原 Dio 实例重试，保证 UA/限频等拦截器与超时配置仍然生效。
 class RetryInterceptor extends Interceptor {
+  final Dio _dio;
   final int _maxRetries;
   final Duration _baseDelay;
 
-  RetryInterceptor({int maxRetries = 3, Duration? baseDelay})
-      : _maxRetries = maxRetries,
-        _baseDelay = baseDelay ?? const Duration(seconds: 1);
+  RetryInterceptor({
+    required this._dio,
+    this._maxRetries = 3,
+    Duration? baseDelay,
+  })  : _baseDelay = baseDelay ?? const Duration(seconds: 1);
 
   @override
   Future<void> onError(DioException err, ErrorInterceptorHandler handler) async {
@@ -20,7 +24,7 @@ class RetryInterceptor extends Interceptor {
       extra: {...err.requestOptions.extra, 'retry_count': retryCount + 1},
     );
     try {
-      final response = await Dio().fetch(options);
+      final response = await _dio.fetch(options);
       handler.resolve(response);
     } catch (e) {
       handler.next(err);

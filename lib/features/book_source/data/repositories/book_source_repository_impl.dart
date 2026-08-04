@@ -5,31 +5,35 @@ import '../../domain/repositories/book_source_repository.dart';
 import '../models/book_source_model.dart';
 
 class BookSourceRepositoryImpl implements BookSourceRepository {
-  late final Box<BookSourceModel> _box;
+  Box<BookSourceModel>? _cachedBox;
+
+  Future<Box<BookSourceModel>> _box() async {
+    return _cachedBox ??= await Hive.openBox<BookSourceModel>(HiveBoxes.bookSources);
+  }
 
   @override
   Future<List<BookSource>> getAll() async {
-    _box = await Hive.openBox<BookSourceModel>(HiveBoxes.bookSources);
-    return _box.values.map((e) => e.toEntity()).toList();
+    final box = await _box();
+    return box.values.map((e) => e.toEntity()).toList();
   }
 
   @override
   Future<BookSource?> getById(String id) async {
-    _box = await Hive.openBox<BookSourceModel>(HiveBoxes.bookSources);
-    final model = _box.get(id);
+    final box = await _box();
+    final model = box.get(id);
     return model?.toEntity();
   }
 
   @override
   Future<void> save(BookSource source) async {
-    _box = await Hive.openBox<BookSourceModel>(HiveBoxes.bookSources);
-    await _box.put(source.id, BookSourceModel.fromEntity(source));
+    final box = await _box();
+    await box.put(source.id, BookSourceModel.fromEntity(source));
   }
 
   @override
   Future<void> delete(String id) async {
-    _box = await Hive.openBox<BookSourceModel>(HiveBoxes.bookSources);
-    await _box.delete(id);
+    final box = await _box();
+    await box.delete(id);
   }
 
   @override
@@ -39,12 +43,12 @@ class BookSourceRepositoryImpl implements BookSourceRepository {
 
   @override
   Future<void> importFromUrl(String url) async {
-    // Phase 2 实现
+    // 由 ImportBookSource usecase 处理
   }
 
   @override
   Future<List<BookSource>> getEnabled() async {
-    _box = await Hive.openBox<BookSourceModel>(HiveBoxes.bookSources);
-    return _box.values.where((e) => e.enabled).map((e) => e.toEntity()).toList();
+    final box = await _box();
+    return box.values.where((e) => e.enabled).map((e) => e.toEntity()).toList();
   }
 }

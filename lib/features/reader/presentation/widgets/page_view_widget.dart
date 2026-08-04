@@ -43,73 +43,84 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
     final state = ref.watch(readerProvider);
     final notifier = ref.read(readerProvider.notifier);
 
-    if (state.isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
+    return LayoutBuilder(builder: (context, constraints) {
+      // 真实视口尺寸上报分页引擎（帧末执行，避免 build 中改状态）
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ref
+              .read(readerProvider.notifier)
+              .setViewport(constraints.maxWidth, constraints.maxHeight);
+        }
+      });
 
-    if (state.pages.isEmpty) {
-      return const Center(child: Text('暂无内容'));
-    }
+      if (state.isLoading) {
+        return const Center(child: CircularProgressIndicator());
+      }
 
-    // 滚动模式
-    if (state.readingMode == ReadingMode.scroll) {
-      return const ReaderScrollView();
-    }
+      if (state.pages.isEmpty) {
+        return const Center(child: Text('暂无内容'));
+      }
 
-    _ensureController(state);
+      // 滚动模式
+      if (state.readingMode == ReadingMode.scroll) {
+        return const ReaderScrollView();
+      }
 
-    return Container(
-      color: state.theme.backgroundColor,
-      child: Column(
-        children: [
-          Expanded(
-            child: GestureDetector(
-              onTap: notifier.toggleSettings,
-              child: PageView.builder(
-                controller: _controller,
-                itemCount: state.pages.length,
-                onPageChanged: (index) {
-                  if (index != state.currentPage) {
-                    notifier.jumpToPage(index);
-                  }
-                },
-                itemBuilder: (context, index) {
-                  return _FlipPage(
-                    controller: _controller!,
-                    pageIndex: index,
-                    child: _buildPageContent(state.pages[index], state),
-                  );
-                },
+      _ensureController(state);
+
+      return Container(
+        color: state.theme.backgroundColor,
+        child: Column(
+          children: [
+            Expanded(
+              child: GestureDetector(
+                onTap: notifier.toggleSettings,
+                child: PageView.builder(
+                  controller: _controller,
+                  itemCount: state.pages.length,
+                  onPageChanged: (index) {
+                    if (index != state.currentPage) {
+                      notifier.jumpToPage(index);
+                    }
+                  },
+                  itemBuilder: (context, index) {
+                    return _FlipPage(
+                      controller: _controller!,
+                      pageIndex: index,
+                      child: _buildPageContent(state.pages[index], state),
+                    );
+                  },
+                ),
               ),
             ),
-          ),
-          // 进度条
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            color: state.theme.backgroundColor,
-            child: Row(
-              children: [
-                Text(
-                  '${state.currentPage + 1}/${state.pages.length}',
-                  style: TextStyle(color: state.theme.textColor, fontSize: 12),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(2),
-                    child: LinearProgressIndicator(
-                      value: (state.currentPage + 1) / state.pages.length,
-                      backgroundColor: state.theme.textColor.withOpacity(0.2),
-                      color: AppColors.tint,
+            // 进度条
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              color: state.theme.backgroundColor,
+              child: Row(
+                children: [
+                  Text(
+                    '${state.currentPage + 1}/${state.pages.length}',
+                    style: TextStyle(color: state.theme.textColor, fontSize: 12),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(2),
+                      child: LinearProgressIndicator(
+                        value: (state.currentPage + 1) / state.pages.length,
+                        backgroundColor: state.theme.textColor.withValues(alpha: 0.2),
+                        color: AppColors.tint,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
-      ),
-    );
+          ],
+        ),
+      );
+    });
   }
 
   Widget _buildPageContent(PageContent page, ReaderState state) {
@@ -164,7 +175,7 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
               case NodeType.image:
                 return Container(
                   height: 200,
-                  color: state.theme.textColor.withOpacity(0.1),
+                  color: state.theme.textColor.withValues(alpha: 0.1),
                   child: const Center(child: Icon(Icons.image, size: 48)),
                 );
             }

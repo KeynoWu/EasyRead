@@ -8,7 +8,7 @@ class AppTheme {
       useMaterial3: true,
       brightness: Brightness.light,
       scaffoldBackgroundColor: AppColors.background,
-      colorScheme: ColorScheme.light(
+      colorScheme: const ColorScheme.light(
         primary: AppColors.tint,
         onPrimary: Colors.white,
         secondary: AppColors.textSecondary,
@@ -96,7 +96,7 @@ class AppTheme {
       useMaterial3: true,
       brightness: Brightness.dark,
       scaffoldBackgroundColor: AppColors.darkBackground,
-      colorScheme: ColorScheme.dark(
+      colorScheme: const ColorScheme.dark(
         primary: AppColors.darkTint,
         onPrimary: Colors.black,
         secondary: AppColors.darkTextSecondary,

@@ -28,6 +28,7 @@ class BookSourceImportPage extends ConsumerWidget {
             subtitle: '支持 JSON 格式书源文件',
             onTap: () async {
               final result = await useCase.fromFile();
+              if (!context.mounted) return;
               _handleResult(context, result);
             },
           ),
@@ -49,6 +50,7 @@ class BookSourceImportPage extends ConsumerWidget {
             subtitle: '粘贴书源 JSON 内容',
             onTap: () async {
               final result = await useCase.fromClipboard();
+              if (!context.mounted) return;
               _handleResult(context, result);
             },
           ),
@@ -77,6 +79,7 @@ class BookSourceImportPage extends ConsumerWidget {
             onPressed: () async {
               Navigator.pop(context);
               final result = await useCase.fromUrl(controller.text);
+              if (!context.mounted) return;
               _handleResult(context, result);
             },
             child: const Text('导入'),

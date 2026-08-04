@@ -6,9 +6,14 @@ import '../../domain/entities/bookmark.dart';
 class BookmarkService {
   static const String _boxName = 'bookmarks';
 
+  Box<String>? _cachedBox;
+
+  Future<Box<String>> _box() async =>
+      _cachedBox ??= await Hive.openBox<String>(_boxName);
+
   /// 获取某本书的所有书签（按创建时间倒序）
   Future<List<Bookmark>> getBookmarks(String bookId) async {
-    final box = await Hive.openBox<String>(_boxName);
+    final box = await _box();
     final bookmarks = <Bookmark>[];
     for (final value in box.values) {
       try {
@@ -32,7 +37,7 @@ class BookmarkService {
 
   /// 添加书签
   Future<void> add(Bookmark bookmark) async {
-    final box = await Hive.openBox<String>(_boxName);
+    final box = await _box();
     await box.put(bookmark.id, jsonEncode({
       'id': bookmark.id,
       'book_id': bookmark.bookId,
@@ -44,7 +49,7 @@ class BookmarkService {
 
   /// 删除书签
   Future<void> remove(String id) async {
-    final box = await Hive.openBox<String>(_boxName);
+    final box = await _box();
     await box.delete(id);
   }
 

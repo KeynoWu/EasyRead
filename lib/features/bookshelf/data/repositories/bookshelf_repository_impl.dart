@@ -5,41 +5,46 @@ import '../../domain/repositories/bookshelf_repository.dart';
 import '../models/book_model.dart';
 
 class BookshelfRepositoryImpl implements BookshelfRepository {
+  Box<BookModel>? _cachedBox;
+
+  Future<Box<BookModel>> _box() async =>
+      _cachedBox ??= await Hive.openBox<BookModel>(HiveBoxes.bookshelf);
+
   @override
   Future<List<Book>> getAll() async {
-    final box = await Hive.openBox<BookModel>(HiveBoxes.bookshelf);
+    final box = await _box();
     return box.values.map((e) => e.toEntity()).toList()
       ..sort((a, b) => b.lastReadAt.compareTo(a.lastReadAt));
   }
 
   @override
   Future<Book?> getById(String id) async {
-    final box = await Hive.openBox<BookModel>(HiveBoxes.bookshelf);
+    final box = await _box();
     final model = box.get(id);
     return model?.toEntity();
   }
 
   @override
   Future<void> save(Book book) async {
-    final box = await Hive.openBox<BookModel>(HiveBoxes.bookshelf);
+    final box = await _box();
     await box.put(book.id, BookModel.fromEntity(book));
   }
 
   @override
   Future<void> delete(String id) async {
-    final box = await Hive.openBox<BookModel>(HiveBoxes.bookshelf);
+    final box = await _box();
     await box.delete(id);
   }
 
   @override
   Future<void> deleteAll(List<String> ids) async {
-    final box = await Hive.openBox<BookModel>(HiveBoxes.bookshelf);
+    final box = await _box();
     await box.deleteAll(ids);
   }
 
   @override
   Future<void> updateProgress(String id, double progress) async {
-    final box = await Hive.openBox<BookModel>(HiveBoxes.bookshelf);
+    final box = await _box();
     final model = box.get(id);
     if (model != null) {
       final updated = BookModel(
@@ -50,6 +55,7 @@ class BookshelfRepositoryImpl implements BookshelfRepository {
         sourceId: model.sourceId,
         lastChapter: model.lastChapter,
         progress: progress,
+        group: model.group,
         lastReadAt: DateTime.now(),
       );
       await box.put(id, updated);

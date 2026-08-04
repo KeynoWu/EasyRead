@@ -3,12 +3,47 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/parser/node_tree.dart';
 import '../providers/reader_provider.dart';
 
-/// 上下滚动阅读组件 — 整章连续滚动
-class ReaderScrollView extends ConsumerWidget {
+/// 上下滚动阅读组件 — 整章连续滚动，滚动位置按 0~1 归一化持久化
+class ReaderScrollView extends ConsumerStatefulWidget {
   const ReaderScrollView({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ReaderScrollView> createState() => _ReaderScrollViewState();
+}
+
+class _ReaderScrollViewState extends ConsumerState<ReaderScrollView> {
+  ScrollController? _controller;
+  double _lastReportedOffset = -1;
+  bool _restoredOffset = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = ScrollController();
+    _controller!.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _controller?.removeListener(_onScroll);
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    final controller = _controller;
+    if (controller == null || !controller.hasClients) return;
+    final max = controller.position.maxScrollExtent;
+    if (max <= 0) return;
+    final offset = (controller.position.pixels / max).clamp(0.0, 1.0);
+    // 节流：偏移变化超过 0.5% 才上报，避免每像素写 Hive
+    if ((offset - _lastReportedOffset).abs() < 0.005) return;
+    _lastReportedOffset = offset;
+    ref.read(readerProvider.notifier).updateScrollOffset(offset);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final state = ref.watch(readerProvider);
     final notifier = ref.read(readerProvider.notifier);
 
@@ -18,6 +53,23 @@ class ReaderScrollView extends ConsumerWidget {
 
     if (state.pages.isEmpty || state.currentChapter == null) {
       return const Center(child: Text('暂无内容'));
+    }
+
+    // 恢复上次滚动位置：进度可能晚于章节加载完成，build 中持续检查直到恢复
+    if (!_restoredOffset && state.progress != null && state.progress!.scrollOffset > 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _restoredOffset) return;
+        final controller = _controller;
+        final progress = ref.read(readerProvider).progress;
+        if (controller != null &&
+            controller.hasClients &&
+            controller.position.maxScrollExtent > 0 &&
+            progress != null &&
+            progress.scrollOffset > 0) {
+          controller.jumpTo(progress.scrollOffset * controller.position.maxScrollExtent);
+          _restoredOffset = true;
+        }
+      });
     }
 
     // 滚动模式：直接渲染整章节点（不按页拆分）
@@ -31,6 +83,7 @@ class ReaderScrollView extends ConsumerWidget {
             child: GestureDetector(
               onTap: notifier.toggleSettings,
               child: SingleChildScrollView(
+                controller: _controller,
                 padding: EdgeInsets.symmetric(
                   horizontal: state.layoutConfig.horizontalPadding,
                   vertical: 16,
@@ -85,6 +138,8 @@ class ReaderScrollView extends ConsumerWidget {
                 fontSize: state.layoutConfig.fontSize,
                 height: state.layoutConfig.lineHeight,
                 color: state.theme.textColor,
+                fontFamily: state.layoutConfig.fontFamily,
+                fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
               ),
             ),
           );
@@ -97,6 +152,8 @@ class ReaderScrollView extends ConsumerWidget {
                 fontSize: state.layoutConfig.fontSize + 4,
                 fontWeight: FontWeight.w700,
                 color: state.theme.textColor,
+                fontFamily: state.layoutConfig.fontFamily,
+                fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
               ),
             ),
           );
@@ -109,6 +166,8 @@ class ReaderScrollView extends ConsumerWidget {
               fontSize: state.layoutConfig.fontSize,
               height: state.layoutConfig.lineHeight,
               color: state.theme.textColor,
+              fontFamily: state.layoutConfig.fontFamily,
+              fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
             ),
           );
         case NodeType.image:

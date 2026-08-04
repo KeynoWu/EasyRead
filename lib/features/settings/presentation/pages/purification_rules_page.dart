@@ -1,16 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../domain/entities/purification_rule.dart';
 import '../../domain/usecases/manage_purification_rules.dart';
+import '../providers/purify_pipeline_provider.dart';
 
-class PurificationRulesPage extends StatefulWidget {
+class PurificationRulesPage extends ConsumerStatefulWidget {
   const PurificationRulesPage({super.key});
 
   @override
-  State<PurificationRulesPage> createState() => _PurificationRulesPageState();
+  ConsumerState<PurificationRulesPage> createState() => _PurificationRulesPageState();
 }
 
-class _PurificationRulesPageState extends State<PurificationRulesPage> {
+class _PurificationRulesPageState extends ConsumerState<PurificationRulesPage> {
   final _manager = ManagePurificationRules();
   late Future<List<PurificationRule>> _rulesFuture;
 
@@ -24,6 +26,12 @@ class _PurificationRulesPageState extends State<PurificationRulesPage> {
     setState(() {
       _rulesFuture = _manager.getAll();
     });
+  }
+
+  /// 规则变更后刷新页面并让阅读管线重新加载规则
+  void _refreshPipeline() {
+    ref.invalidate(purifyPipelineProvider);
+    _reload();
   }
 
   Future<void> _addRule() async {
@@ -55,12 +63,32 @@ class _PurificationRulesPageState extends State<PurificationRulesPage> {
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('保存')),
+          FilledButton(
+            onPressed: () {
+              // 保存前校验正则合法性
+              if (patternController.text.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('请输入正则表达式')),
+                );
+                return;
+              }
+              try {
+                RegExp(patternController.text);
+              } catch (_) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('正则表达式无效，请检查')),
+                );
+                return;
+              }
+              Navigator.pop(context, true);
+            },
+            child: const Text('保存'),
+          ),
         ],
       ),
     );
 
-    if (result == true && patternController.text.isNotEmpty) {
+    if (result == true) {
       final newRule = PurificationRule(
         id: rule?.id ?? DateTime.now().millisecondsSinceEpoch.toString(),
         name: nameController.text.isEmpty ? '未命名规则' : nameController.text,
@@ -73,18 +101,18 @@ class _PurificationRulesPageState extends State<PurificationRulesPage> {
       } else {
         await _manager.update(newRule);
       }
-      _reload();
+      _refreshPipeline();
     }
   }
 
   Future<void> _deleteRule(String id) async {
     await _manager.delete(id);
-    _reload();
+    _refreshPipeline();
   }
 
   Future<void> _toggleRule(PurificationRule rule) async {
     await _manager.update(rule.copyWith(enabled: !rule.enabled));
-    _reload();
+    _refreshPipeline();
   }
 
   @override

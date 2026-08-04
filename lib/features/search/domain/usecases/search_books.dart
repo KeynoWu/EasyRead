@@ -1,7 +1,7 @@
+import 'dart:async';
 import '../entities/search_result.dart';
 import '../repositories/search_repository.dart';
 import '../../../../features/book_source/domain/repositories/book_source_repository.dart';
-import '../../data/repositories/search_repository_impl.dart';
 
 class SearchBooks {
   final SearchRepository searchRepo;
@@ -12,31 +12,31 @@ class SearchBooks {
   /// 单源搜索
   Future<List<SearchResult>> execute(String keyword, String sourceId) async {
     if (keyword.trim().isEmpty) return [];
-    return searchRepo.search(keyword.trim(), sourceId);
+    final source = await sourceRepo.getById(sourceId);
+    if (source == null || !source.enabled) return [];
+    return searchRepo.searchWithSource(keyword.trim(), source);
   }
 
-  /// 多源聚合搜索
+  /// 多源聚合搜索（并发分发 + 按 书名|作者 分组去重）
   Future<List<SearchResult>> executeMultiSource(String keyword) async {
     if (keyword.trim().isEmpty) return [];
 
     final sources = await sourceRepo.getEnabled();
     if (sources.isEmpty) return [];
 
-    final searchImpl = searchRepo as SearchRepositoryImpl;
-
-    final futures = sources.map((source) => searchImpl.searchWithSource(keyword, source));
+    // 每个源独立超时，慢源不阻塞整体结果
+    final futures = sources.map((source) => searchRepo
+        .searchWithSource(keyword, source)
+        .timeout(const Duration(seconds: 10), onTimeout: () => <SearchResult>[]));
     final results = await Future.wait(futures);
 
-    final allResults = <SearchResult>[];
-    for (final resultList in results) {
-      allResults.addAll(resultList);
-    }
-
-    // 按书名分组：第一条为主结果，其余作为替代书源
+    // 按 书名|作者 分组：同名同作者视为同一本书，其余作为替代书源
     final groups = <String, List<SearchResult>>{};
-    for (final result in allResults) {
-      final key = result.name.toLowerCase().trim();
-      groups.putIfAbsent(key, () => []).add(result);
+    for (final resultList in results) {
+      for (final result in resultList) {
+        final key = '${result.name.toLowerCase().trim()}|${result.author?.toLowerCase().trim() ?? ''}';
+        groups.putIfAbsent(key, () => []).add(result);
+      }
     }
 
     final deduplicated = <SearchResult>[];

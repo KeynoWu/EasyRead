@@ -1,16 +1,50 @@
 import 'package:go_router/go_router.dart';
-import '../../features/shell/presentation/pages/main_shell.dart';
+import '../../features/bookshelf/presentation/pages/bookshelf_page.dart';
 import '../../features/book_source/presentation/pages/book_source_import_page.dart';
+import '../../features/book_source/presentation/pages/book_source_list_page.dart';
 import '../../features/reader/presentation/pages/reader_page.dart';
+import '../../features/search/presentation/pages/search_page.dart';
+import '../../features/settings/presentation/pages/settings_page.dart';
+import '../../features/shell/presentation/pages/main_shell.dart';
 
 class AppRouter {
   static final GoRouter router = GoRouter(
-    initialLocation: '/',
+    initialLocation: '/bookshelf',
     routes: [
-      GoRoute(
-        path: '/',
-        name: 'home',
-        builder: (context, state) => const MainShell(),
+      // 底部导航：书架 / 搜索 / 书源 / 设置（各 tab 可深链）
+      StatefulShellRoute.indexedStack(
+        builder: (context, state, navigationShell) =>
+            MainShell(navigationShell: navigationShell),
+        branches: [
+          StatefulShellBranch(routes: [
+            GoRoute(
+              path: '/bookshelf',
+              name: 'bookshelf',
+              builder: (context, state) => const BookshelfPage(),
+            ),
+          ]),
+          StatefulShellBranch(routes: [
+            GoRoute(
+              path: '/search',
+              name: 'search',
+              builder: (context, state) => const SearchPage(),
+            ),
+          ]),
+          StatefulShellBranch(routes: [
+            GoRoute(
+              path: '/book-source',
+              name: 'bookSource',
+              builder: (context, state) => const BookSourceListPage(),
+            ),
+          ]),
+          StatefulShellBranch(routes: [
+            GoRoute(
+              path: '/settings',
+              name: 'settings',
+              builder: (context, state) => const SettingsPage(),
+            ),
+          ]),
+        ],
       ),
       GoRoute(
         path: '/book-source/import',

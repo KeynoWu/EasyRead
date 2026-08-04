@@ -28,6 +28,7 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
     super.initState();
     final s = widget.source;
     _enabled = s?.enabled ?? true;
+    _searchable = s?.rules['searchable'] == null || s!.rules['searchable'] == true;
     _controllers = {
       'name': TextEditingController(text: s?.name ?? ''),
       'group': TextEditingController(text: s?.bookSourceGroup ?? ''),
@@ -43,7 +44,37 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
       'chapterName': TextEditingController(text: s?.rules['chapterName']?.toString() ?? ''),
       'chapterUrl': TextEditingController(text: s?.rules['chapterUrl']?.toString() ?? ''),
       'chapterContent': TextEditingController(text: s?.rules['chapterContent']?.toString() ?? ''),
+      'weight': TextEditingController(text: s?.rules['weight']?.toString() ?? ''),
+      'header': TextEditingController(text: s?.rules['header']?.toString() ?? ''),
+      'cookie': TextEditingController(text: s?.rules['cookie']?.toString() ?? ''),
+      'loginUrl': TextEditingController(text: s?.rules['loginUrl']?.toString() ?? ''),
     };
+  }
+
+  late bool _searchable;
+
+  /// 表单规则：保留原书源中未展示的规则字段，表单字段覆盖
+  Map<String, dynamic> _buildRules() {
+    final base = Map<String, dynamic>.from(widget.source?.rules ?? {});
+    const editableKeys = [
+      'searchUrl', 'bookList', 'bookName', 'bookAuthor', 'coverUrl', 'bookDetailUrl',
+      'contentUrl', 'chapterList', 'chapterName', 'chapterUrl', 'chapterContent',
+      'weight', 'header', 'cookie', 'loginUrl',
+    ];
+    for (final k in editableKeys) {
+      final text = _controllers[k]!.text.trim();
+      if (text.isEmpty) {
+        base.remove(k);
+      } else if (k == 'weight') {
+        // weight 以数字存储，非数字输入直接丢弃
+        final weight = int.tryParse(text);
+        if (weight != null) base[k] = weight;
+      } else {
+        base[k] = text;
+      }
+    }
+    base['searchable'] = _searchable;
+    return base;
   }
 
   @override
@@ -74,15 +105,8 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
     );
     if (keyword == null || keyword.isEmpty || !mounted) return;
 
-    // 构建测试书源
-    final rules = <String, dynamic>{
-      if (_controllers['searchUrl']!.text.trim().isNotEmpty) 'searchUrl': _controllers['searchUrl']!.text.trim(),
-      if (_controllers['bookList']!.text.trim().isNotEmpty) 'bookList': _controllers['bookList']!.text.trim(),
-      if (_controllers['bookName']!.text.trim().isNotEmpty) 'bookName': _controllers['bookName']!.text.trim(),
-      if (_controllers['bookAuthor']!.text.trim().isNotEmpty) 'bookAuthor': _controllers['bookAuthor']!.text.trim(),
-      if (_controllers['coverUrl']!.text.trim().isNotEmpty) 'coverUrl': _controllers['coverUrl']!.text.trim(),
-      if (_controllers['bookDetailUrl']!.text.trim().isNotEmpty) 'bookDetailUrl': _controllers['bookDetailUrl']!.text.trim(),
-    };
+    // 构建测试书源（含完整规则）
+    final rules = _buildRules();
     final source = TestBookSource().buildTestSource(
       name: name.isEmpty ? '测试' : name,
       url: _controllers['url']!.text.trim().isEmpty ? null : _controllers['url']!.text.trim(),
@@ -129,19 +153,7 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
       return;
     }
 
-    final rules = <String, dynamic>{
-      if (_controllers['searchUrl']!.text.trim().isNotEmpty) 'searchUrl': _controllers['searchUrl']!.text.trim(),
-      if (_controllers['bookList']!.text.trim().isNotEmpty) 'bookList': _controllers['bookList']!.text.trim(),
-      if (_controllers['bookName']!.text.trim().isNotEmpty) 'bookName': _controllers['bookName']!.text.trim(),
-      if (_controllers['bookAuthor']!.text.trim().isNotEmpty) 'bookAuthor': _controllers['bookAuthor']!.text.trim(),
-      if (_controllers['coverUrl']!.text.trim().isNotEmpty) 'coverUrl': _controllers['coverUrl']!.text.trim(),
-      if (_controllers['bookDetailUrl']!.text.trim().isNotEmpty) 'bookDetailUrl': _controllers['bookDetailUrl']!.text.trim(),
-      if (_controllers['contentUrl']!.text.trim().isNotEmpty) 'contentUrl': _controllers['contentUrl']!.text.trim(),
-      if (_controllers['chapterList']!.text.trim().isNotEmpty) 'chapterList': _controllers['chapterList']!.text.trim(),
-      if (_controllers['chapterName']!.text.trim().isNotEmpty) 'chapterName': _controllers['chapterName']!.text.trim(),
-      if (_controllers['chapterUrl']!.text.trim().isNotEmpty) 'chapterUrl': _controllers['chapterUrl']!.text.trim(),
-      if (_controllers['chapterContent']!.text.trim().isNotEmpty) 'chapterContent': _controllers['chapterContent']!.text.trim(),
-    };
+    final rules = _buildRules();
 
     final source = BookSource(
       id: widget.source?.id ?? DateTime.now().millisecondsSinceEpoch.toString(),
@@ -186,6 +198,12 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
             value: _enabled,
             onChanged: (v) => setState(() => _enabled = v),
           ),
+          SwitchListTile(
+            title: const Text('参与聚合搜索'),
+            subtitle: const Text('关闭后仅手动搜索该源'),
+            value: _searchable,
+            onChanged: (v) => setState(() => _searchable = v),
+          ),
           const Divider(),
           _sectionTitle('搜索规则'),
           _buildField('搜索 URL', 'searchUrl', hint: 'https://example.com/search?keyword={{key}}'),
@@ -203,6 +221,12 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
           const Divider(),
           _sectionTitle('内容规则'),
           _buildField('章节内容', 'chapterContent', hint: 'div#content@html', maxLines: 3),
+          const Divider(),
+          _sectionTitle('高级设置'),
+          _buildField('搜索权重', 'weight', hint: '数值越大优先级越高（默认 0）', keyboardType: TextInputType.number),
+          _buildField('请求头', 'header', hint: 'JSON 格式，如 {"Referer": "https://example.com"}', maxLines: 3),
+          _buildField('Cookie', 'cookie', hint: '登录后 Cookie'),
+          _buildField('登录 URL', 'loginUrl', hint: '需要登录时填写的登录地址'),
           const SizedBox(height: 24),
         ],
       ),
@@ -214,16 +238,17 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
       padding: const EdgeInsets.only(top: 8, bottom: 4),
       child: Text(
         title,
-        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
       ),
     );
   }
 
-  Widget _buildField(String label, String key, {String? hint, int maxLines = 1}) {
+  Widget _buildField(String label, String key, {String? hint, int maxLines = 1, TextInputType? keyboardType}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: TextField(
         controller: _controllers[key],
+        keyboardType: keyboardType,
         decoration: InputDecoration(
           labelText: label,
           hintText: hint,

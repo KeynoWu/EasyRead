@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:fast_gbk/fast_gbk.dart';
 
 /// TXT 书籍导入器 — 解析章节并返回章节列表
 class TxtImporter {
@@ -15,9 +16,10 @@ class TxtImporter {
     return (title, chapters);
   }
 
-  /// 识别编码（UTF-8 优先，失败则 Latin1 兜底）
+  /// 编码识别：UTF-8 优先，失败则尝试 GBK/GB18030（国内小说 TXT 常见编码），
+  /// 最后 Latin1 兜底。
   static String _decode(Uint8List bytes) {
-    // 尝试 UTF-8
+    // 尝试 UTF-8（严格模式，失败说明不是合法 UTF-8）
     try {
       final utf8Decoded = utf8.decode(bytes, allowMalformed: false);
       if (utf8Decoded.isNotEmpty) return utf8Decoded;
@@ -25,7 +27,14 @@ class TxtImporter {
       // fall through
     }
 
-    // Latin1 兜底（兼容部分 GBK 场景）
+    // GBK/GB18030（fast_gbk 对任意字节流均能解码，中文场景正确还原）
+    try {
+      return gbk.decode(bytes);
+    } catch (_) {
+      // fall through
+    }
+
+    // Latin1 兜底（纯单字节场景）
     return latin1.decode(bytes, allowInvalid: true);
   }
 

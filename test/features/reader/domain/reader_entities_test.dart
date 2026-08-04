@@ -23,7 +23,7 @@ void main() {
     });
 
     test('copyWith should preserve unchanged fields', () {
-      final chapter = Chapter(
+      const chapter = Chapter(
         id: 'ch1',
         bookId: 'book1',
         title: '第一章',

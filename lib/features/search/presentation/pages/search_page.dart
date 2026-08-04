@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
@@ -17,6 +18,10 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   final _historyService = SearchHistoryService();
   late Future<List<String>> _historyFuture;
 
+  /// 当前生效的搜索关键词（防抖后），驱动结果 provider
+  String _keyword = '';
+  Timer? _debounce;
+
   @override
   void initState() {
     super.initState();
@@ -25,19 +30,37 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _searchController.dispose();
     super.dispose();
   }
 
+  /// 输入防抖：停止输入 350ms 后自动搜索，避免每键触发全源网络请求
+  void _onKeywordChanged(String value) {
+    _debounce?.cancel();
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      setState(() => _keyword = '');
+      return;
+    }
+    _debounce = Timer(const Duration(milliseconds: 350), () {
+      if (!mounted) return;
+      setState(() => _keyword = trimmed);
+      _historyService.add(trimmed);
+    });
+  }
+
   void _search(String keyword) {
+    _debounce?.cancel();
     final trimmed = keyword.trim();
     if (trimmed.isEmpty) return;
+    // 同步输入框文本，避免输入框与结果关键词不一致
+    _searchController.text = trimmed;
     _historyService.add(trimmed);
     setState(() {
+      _keyword = trimmed;
       _historyFuture = _historyService.getRecent();
     });
-    // ignore: unused_result
-    ref.refresh(searchResultsProvider(trimmed));
   }
 
   void _clearHistory() async {
@@ -66,13 +89,14 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               ),
+              onChanged: _onKeywordChanged,
               onSubmitted: _search,
             ),
           ),
           Expanded(
-            child: _searchController.text.isEmpty
+            child: _keyword.isEmpty
                 ? _buildEmptyState()
-                : ref.watch(searchResultsProvider(_searchController.text)).when(
+                : ref.watch(searchResultsProvider(_keyword)).when(
                     data: (results) => ListView.builder(
                       itemCount: results.length,
                       itemBuilder: (context, index) => SearchResultItem(result: results[index]),
@@ -119,7 +143,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
               runSpacing: 8,
               children: history
                   .map((keyword) => ActionChip(
-                        avatar: Icon(Icons.history, size: 16, color: AppColors.tint),
+                        avatar: const Icon(Icons.history, size: 16, color: AppColors.tint),
                         label: Text(keyword, style: const TextStyle(fontSize: 13)),
                         backgroundColor: isDark ? AppColors.darkSurface : Colors.white,
                         side: const BorderSide(color: AppColors.separator),

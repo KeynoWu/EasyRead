@@ -6,9 +6,9 @@ import 'webdav_config_page.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../domain/usecases/backup_restore.dart';
 import '../../domain/usecases/webdav_sync.dart';
+import '../providers/purify_pipeline_provider.dart';
 import '../../../book_source/presentation/providers/book_source_provider.dart';
 import '../../../bookshelf/presentation/providers/bookshelf_provider.dart';
-import '../../../reader/presentation/providers/reader_provider.dart';
 
 class SettingsPage extends ConsumerWidget {
   const SettingsPage({super.key});
@@ -18,7 +18,6 @@ class SettingsPage extends ConsumerWidget {
     final backupRestore = BackupRestore(
       bookshelfRepo: ref.watch(bookshelfRepositoryProvider),
       sourceRepo: ref.watch(bookSourceRepositoryProvider),
-      readerRepo: ref.watch(readerRepositoryProvider),
     );
 
     return Scaffold(
@@ -55,6 +54,7 @@ class SettingsPage extends ConsumerWidget {
                 );
                 ref.invalidate(bookshelfListProvider);
                 ref.invalidate(bookSourceListProvider);
+                ref.invalidate(purifyPipelineProvider);
               },
             ),
             const _Divider(),
@@ -104,6 +104,7 @@ class SettingsPage extends ConsumerWidget {
                 );
                 ref.invalidate(bookshelfListProvider);
                 ref.invalidate(bookSourceListProvider);
+                ref.invalidate(purifyPipelineProvider);
               },
             ),
           ]),
@@ -132,14 +133,14 @@ class SettingsPage extends ConsumerWidget {
           ]),
 
           const _SectionHeader(title: '关于'),
-          _GroupCard(children: [
-            const ListTile(
+          const _GroupCard(children: [
+            ListTile(
               leading: Icon(Icons.info_outline),
               title: Text('版本'),
               subtitle: Text('v1.0.0'),
             ),
-            const _Divider(),
-            const ListTile(
+            _Divider(),
+            ListTile(
               leading: Icon(Icons.code),
               title: Text('开源许可'),
               subtitle: Text('MIT License'),
@@ -203,7 +204,7 @@ class _SectionHeader extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(28, 16, 16, 6),
       child: Text(
         title,
-        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
       ),
     );
   }

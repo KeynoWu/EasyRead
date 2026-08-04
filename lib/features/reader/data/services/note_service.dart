@@ -6,9 +6,14 @@ import '../../domain/entities/reading_note.dart';
 class NoteService {
   static const String _boxName = 'reading_notes';
 
+  Box<String>? _cachedBox;
+
+  Future<Box<String>> _box() async =>
+      _cachedBox ??= await Hive.openBox<String>(_boxName);
+
   /// 获取某本书的所有笔记（按创建时间倒序）
   Future<List<ReadingNote>> getNotes(String bookId) async {
-    final box = await Hive.openBox<String>(_boxName);
+    final box = await _box();
     final notes = <ReadingNote>[];
     for (final value in box.values) {
       try {
@@ -32,7 +37,7 @@ class NoteService {
 
   /// 添加笔记
   Future<void> add(ReadingNote note) async {
-    final box = await Hive.openBox<String>(_boxName);
+    final box = await _box();
     await box.put(note.id, jsonEncode({
       'id': note.id,
       'book_id': note.bookId,
@@ -44,7 +49,7 @@ class NoteService {
 
   /// 删除笔记
   Future<void> remove(String id) async {
-    final box = await Hive.openBox<String>(_boxName);
+    final box = await _box();
     await box.delete(id);
   }
 }
