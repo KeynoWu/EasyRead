@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../data/services/bookmark_service.dart';
+import '../../domain/entities/bookmark.dart';
 import '../../data/services/tts_service.dart';
 import '../../../settings/domain/usecases/reading_stats_service.dart';
 import '../providers/reader_provider.dart';
 import '../widgets/page_view_widget.dart';
+import '../widgets/bookmark_sheet.dart';
 import '../widgets/chapter_catalog_sheet.dart';
 import '../widgets/reader_settings_panel.dart';
 
@@ -27,6 +30,7 @@ class ReaderPage extends ConsumerStatefulWidget {
 class _ReaderPageState extends ConsumerState<ReaderPage> {
   final TtsService _tts = TtsService();
   final ReadingStatsService _statsService = ReadingStatsService();
+  final BookmarkService _bookmarkService = BookmarkService();
   bool _isTtsPlaying = false;
   DateTime? _pageOpenTime;
 
@@ -60,6 +64,51 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       }
     }
     super.dispose();
+  }
+
+  Future<void> _openBookmarks() async {
+    final state = ref.read(readerProvider);
+    if (state.currentChapter == null) return;
+
+    // 打开书签列表；若选择书签则跳转
+    final selected = await showModalBottomSheet<dynamic>(
+      context: context,
+      builder: (_) => BookmarkSheet(bookId: widget.bookId),
+    );
+    if (selected != null && mounted) {
+      final bookmark = selected;
+      await ref.read(readerProvider.notifier).jumpToChapter(bookmark.chapterIndex);
+      if (mounted) {
+        ref.read(readerProvider.notifier).jumpToPage(bookmark.pageIndex);
+      }
+    }
+  }
+
+  Future<void> _toggleBookmark() async {
+    final state = ref.read(readerProvider);
+    if (state.currentChapter == null) return;
+
+    final chapter = state.currentChapter!;
+    final exists = await _bookmarkService.exists(widget.bookId, chapter.index, state.currentPage);
+    if (exists) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('该位置已有书签')),
+      );
+      return;
+    }
+
+    await _bookmarkService.add(Bookmark(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      bookId: widget.bookId,
+      chapterIndex: chapter.index,
+      pageIndex: state.currentPage,
+      createdAt: DateTime.now(),
+    ));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('书签已添加')),
+    );
   }
 
   void _openCatalog() {
@@ -125,6 +174,17 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                             ? () => ref.read(readerProvider.notifier).nextChapter()
                             : null,
                         tooltip: '下一章',
+                      ),
+                      // 书签按钮
+                      IconButton(
+                        icon: Icon(Icons.bookmark_add_outlined, color: state.theme.textColor),
+                        onPressed: _toggleBookmark,
+                        tooltip: '添加书签',
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.bookmarks_outlined, color: state.theme.textColor),
+                        onPressed: _openBookmarks,
+                        tooltip: '书签列表',
                       ),
                       // 目录按钮
                       IconButton(
