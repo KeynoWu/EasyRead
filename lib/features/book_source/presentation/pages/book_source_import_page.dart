@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
@@ -80,17 +81,53 @@ class BookSourceImportPage extends ConsumerWidget {
               final url = controller.text.trim();
               if (url.isEmpty) return;
               Navigator.pop(context); // 关闭输入对话框
-              // 网络请求期间显示加载指示，避免"无响应"假象
+              debugPrint('[ImportPage] 显示加载指示, url=$url');
+              // 网络请求期间显示加载指示与进度，避免"无响应"假象
+              final cancelToken = CancelToken();
+              var progressText = '连接中...';
+              void Function(void Function())? updateDialog;
               showDialog(
                 context: context,
                 barrierDismissible: false,
-                builder: (_) => const Center(
-                  child: CircularProgressIndicator(),
+                builder: (dialogContext) => StatefulBuilder(
+                  builder: (dialogContext, setState) {
+                    updateDialog = setState;
+                    return AlertDialog(
+                      content: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const CircularProgressIndicator(),
+                          const SizedBox(height: 16),
+                          Text(progressText, textAlign: TextAlign.center),
+                        ],
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () {
+                            cancelToken.cancel();
+                            Navigator.pop(dialogContext);
+                          },
+                          child: const Text('取消'),
+                        ),
+                      ],
+                    );
+                  },
                 ),
               );
-              final result = await useCase.fromUrl(url);
+              final result = await useCase.fromUrl(
+                url,
+                cancelToken: cancelToken,
+                onProgress: (received, total) {
+                  final text = total > 0
+                      ? '已下载 ${(received / 1024 / 1024).toStringAsFixed(1)}MB / ${(total / 1024 / 1024).toStringAsFixed(1)}MB'
+                      : '已下载 ${(received / 1024 / 1024).toStringAsFixed(1)}MB...';
+                  updateDialog?.call(() => progressText = text);
+                },
+              );
+              debugPrint('[ImportPage] fromUrl 返回: $result');
               if (!context.mounted) return;
               Navigator.pop(context); // 关闭加载指示
+              debugPrint('[ImportPage] 加载指示已关闭');
               if (!context.mounted) return;
               _handleResult(context, result);
             },

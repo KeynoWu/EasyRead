@@ -45,6 +45,30 @@ class DioClient {
     return response.data.toString();
   }
 
+  /// 带下载进度回调的请求（大文件场景使用）
+  Future<String> getStringWithProgress(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    void Function(int received, int total)? onProgress,
+    CancelToken? cancelToken,
+  }) async {
+    if (!_isHttpUrl(url)) {
+      throw ArgumentError('不支持的 URL scheme: $url');
+    }
+    final response = await _dio.get<String>(
+      url,
+      options: Options(
+        headers: headers,
+        extra: {'source_id': sourceId},
+        responseType: ResponseType.plain,
+      ),
+      onReceiveProgress: onProgress,
+      cancelToken: cancelToken,
+    );
+    return response.data.toString();
+  }
+
   /// 仅允许 http/https，阻止 file://、data: 等非预期 scheme（SSRF 防护）
   static bool _isHttpUrl(String url) {
     final uri = Uri.tryParse(url);
