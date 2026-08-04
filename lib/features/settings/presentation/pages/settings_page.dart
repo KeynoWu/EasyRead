@@ -162,20 +162,16 @@ class _GroupCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    // 用 Material 承载圆角/背景/阴影，ListTile 的 ink 需要 Material ancestor
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      decoration: BoxDecoration(
+      child: Material(
         color: isDark ? AppColors.darkSurface : AppColors.surface,
         borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.03),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
+        elevation: 1,
+        shadowColor: Colors.black.withValues(alpha: isDark ? 0.2 : 0.06),
+        child: Column(children: children),
       ),
-      child: Column(children: children),
     );
   }
 }
