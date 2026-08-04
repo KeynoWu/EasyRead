@@ -85,6 +85,7 @@ class BookSourceImportPage extends ConsumerWidget {
               // 网络请求期间显示加载指示与进度，避免"无响应"假象
               final cancelToken = CancelToken();
               var progressText = '连接中...';
+              var dialogOpen = true;
               void Function(void Function())? updateDialog;
               showDialog(
                 context: context,
@@ -104,8 +105,8 @@ class BookSourceImportPage extends ConsumerWidget {
                       actions: [
                         TextButton(
                           onPressed: () {
+                            dialogOpen = false;
                             cancelToken.cancel();
-                            Navigator.pop(dialogContext);
                           },
                           child: const Text('取消'),
                         ),
@@ -118,8 +119,12 @@ class BookSourceImportPage extends ConsumerWidget {
                 url,
                 cancelToken: cancelToken,
                 onProgress: (received, total) {
+                  if (!dialogOpen) return;
+                  // gzip 响应里 total 可能是压缩大小，received 是解压大小，
+                  // 展示总量时用两者较大值，避免出现已下载超过总量。
+                  final displayTotal = total > received ? total : received;
                   final text = total > 0
-                      ? '已下载 ${(received / 1024 / 1024).toStringAsFixed(1)}MB / ${(total / 1024 / 1024).toStringAsFixed(1)}MB'
+                      ? '已下载 ${(received / 1024 / 1024).toStringAsFixed(1)}MB / ${(displayTotal / 1024 / 1024).toStringAsFixed(1)}MB'
                       : '已下载 ${(received / 1024 / 1024).toStringAsFixed(1)}MB...';
                   updateDialog?.call(() => progressText = text);
                 },

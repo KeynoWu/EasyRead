@@ -69,7 +69,15 @@ class ImportBookSource {
     try {
       final content = await _downloadWithIdleTimeout(trimmed, onProgress: onProgress, cancelToken: cancelToken);
       debugPrint('[ImportBookSource] 请求完成, 内容长度: ${content.length}');
-      return _parseContent(content);
+      return _parseContent(content).fold(
+        (error) => Left(error),
+        (sources) async {
+          for (final source in sources) {
+            await repository.save(source);
+          }
+          return Right(sources);
+        },
+      );
     } on DioException catch (e) {
       if (e.type == DioExceptionType.cancel) {
         return const Left('已取消下载');
@@ -89,6 +97,8 @@ class ImportBookSource {
     CancelToken? cancelToken,
   }) {
     final completer = Completer<String>();
+    final internalToken = CancelToken();
+    cancelToken?.whenCancel.then((_) => internalToken.cancel());
     var lastActivity = DateTime.now();
     late final Timer idleTimer;
     late final Timer totalTimer;
@@ -104,6 +114,7 @@ class ImportBookSource {
     );
     idleTimer = Timer.periodic(checkInterval, (_) {
       if (DateTime.now().difference(lastActivity) > idleTimeout) {
+        internalToken.cancel();
         finish();
         if (!completer.isCompleted) {
           completer.completeError(TimeoutException('下载中断：${idleTimeout.inSeconds} 秒无数据'));
@@ -111,6 +122,7 @@ class ImportBookSource {
       }
     });
     totalTimer = Timer(totalLimit, () {
+      internalToken.cancel();
       finish();
       if (!completer.isCompleted) {
         completer.completeError(TimeoutException('下载超时（${totalLimit.inMinutes} 分钟上限）'));
@@ -124,7 +136,7 @@ class ImportBookSource {
             lastActivity = DateTime.now();
             onProgress?.call(received, total);
           },
-          cancelToken: cancelToken,
+          cancelToken: internalToken,
         )
         .then((content) {
       finish();

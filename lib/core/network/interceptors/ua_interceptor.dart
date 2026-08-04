@@ -11,7 +11,7 @@ class UaInterceptor extends Interceptor {
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
     if (!options.headers.containsKey('User-Agent') && !options.headers.containsKey('user-agent')) {
-      options.headers['User-Agent'] = (_userAgents..shuffle()).first;
+      options.headers['User-Agent'] = (List<String>.of(_userAgents)..shuffle()).first;
     }
     handler.next(options);
   }

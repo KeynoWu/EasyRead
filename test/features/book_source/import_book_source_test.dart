@@ -61,6 +61,7 @@ class _SlowDownloadClient implements DioClient {
 /// 模拟 DioClient：下载中途停顿（超过空闲超时）
 class _StalledClient implements DioClient {
   final Duration stall;
+  bool sawCancelled = false;
 
   _StalledClient(this.stall);
 
@@ -82,6 +83,7 @@ class _StalledClient implements DioClient {
   }) async {
     onProgress?.call(100, 1000);
     await Future<void>.delayed(stall);
+    sawCancelled = cancelToken?.isCancelled ?? false;
     onProgress?.call(200, 1000);
     return '[]';
   }
@@ -90,8 +92,9 @@ class _StalledClient implements DioClient {
 void main() {
   group('ImportBookSource.fromUrl', () {
     test('should download slow but steadily streaming source without timeout', () async {
+      final repo = _MockSourceRepo();
       final useCase = ImportBookSource(
-        repository: _MockSourceRepo(),
+        repository: repo,
         parser: ParseBookSourceRule(),
         client: _SlowDownloadClient(),
         idleTimeout: const Duration(seconds: 5),
@@ -102,19 +105,23 @@ void main() {
         expect(sources.length, 1);
         expect(sources.first.name, '测试源');
       });
+      expect(repo.saved.length, 1, reason: '网络导入成功后应写入书源仓库');
     });
 
     test('should fail when download stalls beyond idle timeout', () async {
+      final client = _StalledClient(const Duration(milliseconds: 300));
       final useCase = ImportBookSource(
         repository: _MockSourceRepo(),
         parser: ParseBookSourceRule(),
-        client: _StalledClient(const Duration(milliseconds: 300)),
+        client: client,
         idleTimeout: const Duration(milliseconds: 100),
         totalLimit: const Duration(seconds: 10),
       );
       final result = await useCase.fromUrl('https://example.com/sources.json');
       expect(result.isLeft, isTrue);
       result.fold((l) => expect(l, contains('网络请求失败')), (r) => fail('不应成功'));
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      expect(client.sawCancelled, isTrue, reason: '空闲超时后应取消底层下载');
     });
 
     test('should report cancellation', () async {

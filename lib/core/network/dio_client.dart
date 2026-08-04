@@ -62,6 +62,9 @@ class DioClient {
         headers: headers,
         extra: {'source_id': sourceId},
         responseType: ResponseType.plain,
+        // 大文件下载的空闲判定由 ImportBookSource 控制，
+        // 这里用 Duration.zero 禁用 Dio 固定 receiveTimeout，避免其先于上层超时生效。
+        receiveTimeout: Duration.zero,
       ),
       onReceiveProgress: onProgress,
       cancelToken: cancelToken,
