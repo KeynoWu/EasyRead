@@ -1,0 +1,39 @@
+import 'dart:convert';
+import 'package:hive/hive.dart';
+
+/// 搜索历史服务
+class SearchHistoryService {
+  static const String _boxName = 'search_history';
+  static const int _maxEntries = 20;
+
+  /// 获取最近搜索关键词（新→旧）
+  Future<List<String>> getRecent() async {
+    final box = await Hive.openBox<String>(_boxName);
+    final list = box.get('keywords');
+    if (list == null) return [];
+    try {
+      final decoded = jsonDecode(list) as List;
+      return decoded.map((e) => e.toString()).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// 保存搜索关键词（去重，最新在前）
+  Future<void> add(String keyword) async {
+    final box = await Hive.openBox<String>(_boxName);
+    final recent = await getRecent();
+    recent.remove(keyword);
+    recent.insert(0, keyword);
+    if (recent.length > _maxEntries) {
+      recent.removeRange(_maxEntries, recent.length);
+    }
+    await box.put('keywords', jsonEncode(recent));
+  }
+
+  /// 清空历史
+  Future<void> clear() async {
+    final box = await Hive.openBox<String>(_boxName);
+    await box.put('keywords', jsonEncode([]));
+  }
+}
