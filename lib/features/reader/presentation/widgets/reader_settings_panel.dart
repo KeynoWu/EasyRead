@@ -1,14 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:screen_brightness/screen_brightness.dart';
 import '../../core/pagination/page_layout.dart';
 import '../../core/theme/reader_theme.dart';
 import '../providers/reader_provider.dart';
 
-class ReaderSettingsPanel extends ConsumerWidget {
+class ReaderSettingsPanel extends ConsumerStatefulWidget {
   const ReaderSettingsPanel({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ReaderSettingsPanel> createState() => _ReaderSettingsPanelState();
+}
+
+class _ReaderSettingsPanelState extends ConsumerState<ReaderSettingsPanel> {
+  double _brightness = 0.8;
+
+  @override
+  Widget build(BuildContext context) {
     final state = ref.watch(readerProvider);
     final notifier = ref.read(readerProvider.notifier);
 
@@ -22,12 +30,21 @@ class ReaderSettingsPanel extends ConsumerWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 亮度
+          // 亮度（阅读灯）
           _buildSection(
             title: '亮度',
             child: Slider(
-              value: 0.8,
-              onChanged: (_) {},
+              value: _brightness,
+              min: 0.1,
+              max: 1.0,
+              onChanged: (value) async {
+                setState(() => _brightness = value);
+                try {
+                  await ScreenBrightness().setApplicationScreenBrightness(value);
+                } catch (_) {
+                  // 平台不支持时忽略
+                }
+              },
             ),
           ),
           const SizedBox(height: 16),
