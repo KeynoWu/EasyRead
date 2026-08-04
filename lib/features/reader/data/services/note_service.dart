@@ -1,0 +1,50 @@
+import 'dart:convert';
+import 'package:hive/hive.dart';
+import '../../domain/entities/reading_note.dart';
+
+/// 阅读笔记服务 — Hive 持久化
+class NoteService {
+  static const String _boxName = 'reading_notes';
+
+  /// 获取某本书的所有笔记（按创建时间倒序）
+  Future<List<ReadingNote>> getNotes(String bookId) async {
+    final box = await Hive.openBox<String>(_boxName);
+    final notes = <ReadingNote>[];
+    for (final value in box.values) {
+      try {
+        final map = jsonDecode(value) as Map<String, dynamic>;
+        if (map['book_id'] == bookId) {
+          notes.add(ReadingNote(
+            id: map['id']?.toString() ?? '',
+            bookId: map['book_id']?.toString() ?? bookId,
+            chapterIndex: (map['chapter_index'] as num?)?.toInt() ?? 0,
+            text: map['text']?.toString() ?? '',
+            createdAt: DateTime.tryParse(map['created_at']?.toString() ?? '') ?? DateTime.now(),
+          ));
+        }
+      } catch (_) {
+        // 跳过损坏数据
+      }
+    }
+    notes.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return notes;
+  }
+
+  /// 添加笔记
+  Future<void> add(ReadingNote note) async {
+    final box = await Hive.openBox<String>(_boxName);
+    await box.put(note.id, jsonEncode({
+      'id': note.id,
+      'book_id': note.bookId,
+      'chapter_index': note.chapterIndex,
+      'text': note.text,
+      'created_at': note.createdAt.toIso8601String(),
+    }));
+  }
+
+  /// 删除笔记
+  Future<void> remove(String id) async {
+    final box = await Hive.openBox<String>(_boxName);
+    await box.delete(id);
+  }
+}

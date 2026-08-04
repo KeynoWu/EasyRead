@@ -3,13 +3,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../data/services/bookmark_service.dart';
+import '../../data/services/note_service.dart';
 import '../../domain/entities/bookmark.dart';
+import '../../domain/entities/reading_note.dart';
 import '../../data/services/tts_service.dart';
 import '../../../settings/domain/usecases/reading_stats_service.dart';
 import '../providers/reader_provider.dart';
 import '../widgets/page_view_widget.dart';
 import '../widgets/bookmark_sheet.dart';
 import '../widgets/chapter_search_sheet.dart';
+import '../widgets/note_sheet.dart';
 import '../../../../features/search/domain/entities/search_result.dart';
 import '../widgets/chapter_catalog_sheet.dart';
 import '../widgets/reader_settings_panel.dart';
@@ -37,6 +40,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   final TtsService _tts = TtsService();
   final ReadingStatsService _statsService = ReadingStatsService();
   final BookmarkService _bookmarkService = BookmarkService();
+  final NoteService _noteService = NoteService();
 
   /// 解析替代书源
   List<SourceOption> get _alternatives {
@@ -158,6 +162,49 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     }
   }
 
+  Future<void> _addNote() async {
+    final state = ref.read(readerProvider);
+    final chapter = state.currentChapter;
+    if (chapter == null) return;
+
+    final controller = TextEditingController();
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('添加笔记'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLines: 4,
+          decoration: const InputDecoration(hintText: '写下你的想法...'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('保存')),
+        ],
+      ),
+    );
+    if (saved == true && controller.text.trim().isNotEmpty && mounted) {
+      await _noteService.add(ReadingNote(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        bookId: widget.bookId,
+        chapterIndex: chapter.index,
+        text: controller.text.trim(),
+        createdAt: DateTime.now(),
+      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('笔记已保存')),
+      );
+    }
+  }
+
+  void _openNotes() {
+    showModalBottomSheet(
+      context: context,
+      builder: (_) => NoteSheet(bookId: widget.bookId),
+    );
+  }
+
   void _openChapterSearch() {
     showModalBottomSheet(
       context: context,
@@ -229,6 +276,17 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                             ? () => ref.read(readerProvider.notifier).nextChapter()
                             : null,
                         tooltip: '下一章',
+                      ),
+                      // 笔记按钮
+                      IconButton(
+                        icon: Icon(Icons.sticky_note_2_outlined, color: state.theme.textColor),
+                        onPressed: _addNote,
+                        tooltip: '添加笔记',
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.notes_outlined, color: state.theme.textColor),
+                        onPressed: _openNotes,
+                        tooltip: '笔记列表',
                       ),
                       // 章节搜索按钮
                       IconButton(
