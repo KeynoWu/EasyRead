@@ -81,6 +81,19 @@ class ReaderSettingsPanel extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 16),
+          // 阅读模式
+          _buildSection(
+            title: '阅读模式',
+            child: SegmentedButton<ReadingMode>(
+              segments: const [
+                ButtonSegment(value: ReadingMode.page, label: Text('翻页')),
+                ButtonSegment(value: ReadingMode.scroll, label: Text('滚动')),
+              ],
+              selected: {state.readingMode},
+              onSelectionChanged: (selection) => notifier.switchMode(selection.first),
+            ),
+          ),
+          const SizedBox(height: 16),
           // 主题选择
           _buildSection(
             title: '主题',

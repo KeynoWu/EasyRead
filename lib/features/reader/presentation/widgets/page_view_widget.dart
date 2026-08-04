@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/pagination/page_layout.dart';
 import '../../core/parser/node_tree.dart';
 import '../providers/reader_provider.dart';
+import 'scroll_view_widget.dart';
 
 /// 阅读器翻页组件 — PageView 驱动 + 仿真翻页动画
 class ReaderPageView extends ConsumerStatefulWidget {
@@ -47,6 +48,11 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
 
     if (state.pages.isEmpty) {
       return const Center(child: Text('暂无内容'));
+    }
+
+    // 滚动模式
+    if (state.readingMode == ReadingMode.scroll) {
+      return const ReaderScrollView();
     }
 
     _ensureController(state);

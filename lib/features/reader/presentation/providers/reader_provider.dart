@@ -12,6 +12,9 @@ final readerRepositoryProvider = Provider<ReaderRepositoryImpl>((ref) {
   return ReaderRepositoryImpl();
 });
 
+/// 阅读模式
+enum ReadingMode { page, scroll }
+
 /// 阅读器状态
 class ReaderState {
   final Chapter? currentChapter;
@@ -23,8 +26,10 @@ class ReaderState {
   final ReaderThemeConfig theme;
   final bool isLoading;
   final bool showSettings;
+  final ReadingMode readingMode;
 
   const ReaderState({
+    this.readingMode = ReadingMode.page,
     this.currentChapter,
     this.pages = const [],
     this.currentPage = 0,
@@ -46,6 +51,7 @@ class ReaderState {
     ReaderThemeConfig? theme,
     bool? isLoading,
     bool? showSettings,
+    ReadingMode? readingMode,
   }) {
     return ReaderState(
       currentChapter: currentChapter ?? this.currentChapter,
@@ -57,6 +63,7 @@ class ReaderState {
       theme: theme ?? this.theme,
       isLoading: isLoading ?? this.isLoading,
       showSettings: showSettings ?? this.showSettings,
+      readingMode: readingMode ?? this.readingMode,
     );
   }
 }
@@ -168,6 +175,11 @@ class ReaderNotifier extends Notifier<ReaderState> {
   /// 切换主题
   void switchTheme(ReaderThemeConfig theme) {
     state = state.copyWith(theme: theme);
+  }
+
+  /// 切换阅读模式
+  void switchMode(ReadingMode mode) {
+    state = state.copyWith(readingMode: mode, currentPage: 0);
   }
 
   /// 加载章节目录
