@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../domain/entities/book_source.dart';
 import '../../domain/repositories/book_source_repository.dart';
+import '../../domain/usecases/test_book_source.dart';
 
 /// 可视化书源编辑器
 class BookSourceEditPage extends StatefulWidget {
@@ -53,6 +54,72 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
     super.dispose();
   }
 
+  Future<void> _test() async {
+    final name = _controllers['name']!.text.trim();
+    final keywordController = TextEditingController(text: '测试');
+
+    final keyword = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('测试书源'),
+        content: TextField(
+          controller: keywordController,
+          decoration: const InputDecoration(hintText: '输入测试关键词'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(context, keywordController.text.trim()), child: const Text('测试')),
+        ],
+      ),
+    );
+    if (keyword == null || keyword.isEmpty || !mounted) return;
+
+    // 构建测试书源
+    final rules = <String, dynamic>{
+      if (_controllers['searchUrl']!.text.trim().isNotEmpty) 'searchUrl': _controllers['searchUrl']!.text.trim(),
+      if (_controllers['bookList']!.text.trim().isNotEmpty) 'bookList': _controllers['bookList']!.text.trim(),
+      if (_controllers['bookName']!.text.trim().isNotEmpty) 'bookName': _controllers['bookName']!.text.trim(),
+      if (_controllers['bookAuthor']!.text.trim().isNotEmpty) 'bookAuthor': _controllers['bookAuthor']!.text.trim(),
+      if (_controllers['coverUrl']!.text.trim().isNotEmpty) 'coverUrl': _controllers['coverUrl']!.text.trim(),
+      if (_controllers['bookDetailUrl']!.text.trim().isNotEmpty) 'bookDetailUrl': _controllers['bookDetailUrl']!.text.trim(),
+    };
+    final source = TestBookSource().buildTestSource(
+      name: name.isEmpty ? '测试' : name,
+      url: _controllers['url']!.text.trim().isEmpty ? null : _controllers['url']!.text.trim(),
+      group: _controllers['group']!.text.trim().isEmpty ? null : _controllers['group']!.text.trim(),
+      rules: rules,
+    );
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const AlertDialog(
+        content: Row(
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 16),
+            Text('测试中...'),
+          ],
+        ),
+      ),
+    );
+
+    final result = await TestBookSource().testSearch(source, keyword);
+    if (!mounted) return;
+    Navigator.pop(context); // 关闭加载对话框
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(result.success ? '✓ 测试成功' : '✗ 测试失败'),
+        content: Text(result.message),
+        actions: [
+          FilledButton(onPressed: () => Navigator.pop(context), child: const Text('确定')),
+        ],
+      ),
+    );
+  }
+
   Future<void> _save() async {
     final name = _controllers['name']!.text.trim();
     if (name.isEmpty) {
@@ -96,6 +163,11 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
       appBar: AppBar(
         title: Text(widget.source == null ? '新建书源' : '编辑书源'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.science_outlined),
+            onPressed: _test,
+            tooltip: '测试书源',
+          ),
           TextButton(
             onPressed: _save,
             child: const Text('保存'),
