@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../domain/entities/search_result.dart';
 
@@ -11,9 +12,7 @@ class SearchResultItem extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       child: InkWell(
-        onTap: () {
-          // Phase 2: 跳转到书籍详情页
-        },
+        onTap: () => context.push('/reader/${result.bookId}'),
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.all(12),

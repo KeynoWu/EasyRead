@@ -1,0 +1,127 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/pagination/page_layout.dart';
+import '../../core/theme/reader_theme.dart';
+import '../providers/reader_provider.dart';
+
+class ReaderSettingsPanel extends ConsumerWidget {
+  const ReaderSettingsPanel({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(readerProvider);
+    final notifier = ref.read(readerProvider.notifier);
+
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: state.theme.backgroundColor,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 亮度
+          _buildSection(
+            title: '亮度',
+            child: Slider(
+              value: 0.8,
+              onChanged: (_) {},
+            ),
+          ),
+          const SizedBox(height: 16),
+          // 字号
+          _buildSection(
+            title: '字号',
+            child: Row(
+              children: [
+                const Icon(Icons.text_fields, size: 16),
+                Expanded(
+                  child: Slider(
+                    value: state.layoutConfig.fontSize,
+                    min: 12,
+                    max: 32,
+                    divisions: 20,
+                    onChanged: (value) {
+                      notifier.updateLayout(LayoutConfig(
+                        fontSize: value,
+                        lineHeight: state.layoutConfig.lineHeight,
+                      ));
+                    },
+                  ),
+                ),
+                const Icon(Icons.text_fields, size: 24),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          // 行距
+          _buildSection(
+            title: '行距',
+            child: Row(
+              children: [
+                const Text('紧凑', style: TextStyle(fontSize: 12)),
+                Expanded(
+                  child: Slider(
+                    value: state.layoutConfig.lineHeight,
+                    min: 1.0,
+                    max: 2.0,
+                    divisions: 10,
+                    onChanged: (value) {
+                      notifier.updateLayout(LayoutConfig(
+                        fontSize: state.layoutConfig.fontSize,
+                        lineHeight: value,
+                      ));
+                    },
+                  ),
+                ),
+                const Text('宽松', style: TextStyle(fontSize: 12)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          // 主题选择
+          _buildSection(
+            title: '主题',
+            child: Wrap(
+              spacing: 8,
+              children: ReaderThemes.themes.map((theme) {
+                final isSelected = state.theme.name == theme.name;
+                return GestureDetector(
+                  onTap: () => notifier.switchTheme(theme),
+                  child: Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: theme.backgroundColor,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: isSelected ? Colors.blue : Colors.grey.shade300,
+                        width: isSelected ? 2 : 1,
+                      ),
+                    ),
+                    child: Center(
+                      child: Text('A', style: TextStyle(color: theme.textColor, fontSize: 16)),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSection({required String title, required Widget child}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 8),
+        child,
+      ],
+    );
+  }
+}
