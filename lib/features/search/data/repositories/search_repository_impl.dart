@@ -25,7 +25,12 @@ class SearchRepositoryImpl implements SearchRepository {
     }
 
     try {
-      final url = source.searchUrl!.replaceAll('{{key}}', Uri.encodeComponent(keyword));
+      // 解析 Legado 搜索地址：URL 或 `URL,{json参数}`（method/body/charset）
+      final spec = _parseSearchUrl(source.searchUrl!);
+      final searchPath = spec?.url ?? source.searchUrl!;
+      // 相对路径基于书源域名拼接
+      final searchUrl = _resolveUrl(source.bookSourceUrl, searchPath);
+
       final headers = <String, String>{...source.requestHeaders};
       if (source.loginUrl != null &&
           source.loginUrl!.isNotEmpty &&
@@ -55,12 +60,32 @@ class SearchRepositoryImpl implements SearchRepository {
           }
         }
       }
-      final html = await _client.getString(
-        url,
-        headers: headers.isEmpty ? null : headers,
-        sourceId: source.id,
-        cancelToken: cancelToken,
-      );
+
+      final String html;
+      if (spec != null && spec.method == 'POST' && spec.body != null) {
+        // POST 表单：body 里 {{key}} 用表单编码替换
+        final body = spec.body!
+            .replaceAll('{{key}}', Uri.encodeQueryComponent(keyword));
+        html = await _client.postForm(
+          searchUrl,
+          headers: headers.isEmpty ? null : headers,
+          body: body,
+          sourceId: source.id,
+          charset: spec.charset,
+          cancelToken: cancelToken,
+        );
+      } else {
+        // GET 模板
+        final url = spec?.body != null
+            ? searchUrl
+            : searchUrl.replaceAll('{{key}}', Uri.encodeComponent(keyword));
+        html = await _client.getString(
+          url,
+          headers: headers.isEmpty ? null : headers,
+          sourceId: source.id,
+          cancelToken: cancelToken,
+        );
+      }
 
       final items = RuleEngine.extractElements(html, source.bookListRule);
       final results = <SearchResult>[];
@@ -101,6 +126,51 @@ class SearchRepositoryImpl implements SearchRepository {
     }
     return '${sourceId}_$index';
   }
+
+  /// 解析 Legado 搜索地址：`URL` 或 `URL,{json参数}`。
+  /// 参数：method（GET/POST）、body（POST 表单体）、charset（响应编码）。
+  static _SearchSpec? _parseSearchUrl(String raw) {
+    final comma = raw.indexOf(',{');
+    if (comma <= 0 || comma >= raw.length - 2) return null;
+    final url = raw.substring(0, comma).trim();
+    if (url.isEmpty) return null;
+    try {
+      // Legado 参数用单引号 JSON，Dart jsonDecode 需双引号（值内部无引号场景安全替换）
+      final params =
+          jsonDecode(raw.substring(comma + 1).replaceAll("'", '"')) as Map<String, dynamic>;
+      return _SearchSpec(
+        url: url,
+        method: (params['method']?.toString() ?? 'GET').toUpperCase(),
+        body: params['body']?.toString(),
+        charset: params['charset']?.toString(),
+      );
+    } catch (_) {
+      // 参数解析失败按普通 GET URL 处理
+      return null;
+    }
+  }
+
+  /// 相对路径基于书源域名拼接（如 /modules/article/search.php → https://host/modules/...）
+  static String _resolveUrl(String? base, String path) {
+    if (path.startsWith('http://') || path.startsWith('https://')) return path;
+    if (base == null || base.isEmpty) return path;
+    return Uri.parse(base).resolve(path).toString();
+  }
+}
+
+/// 解析后的搜索请求规格
+class _SearchSpec {
+  final String url;
+  final String method;
+  final String? body;
+  final String? charset;
+
+  const _SearchSpec({
+    required this.url,
+    required this.method,
+    this.body,
+    this.charset,
+  });
 }
 
 /// 登录 Cookie 会话缓存条目：记录抓取时间，TTL 过期后重新登录

@@ -50,7 +50,19 @@ class _SlowDownloadClient implements DioClient {
     return {};
   }
 
-  @override
+    @override
+  Future<String> postForm(
+    String url, {
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    return '';
+  }
+
+@override
   Future<String> getStringWithProgress(
     String url, {
     Map<String, String>? headers,
@@ -95,7 +107,19 @@ class _StalledClient implements DioClient {
     return {};
   }
 
-  @override
+    @override
+  Future<String> postForm(
+    String url, {
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    return '';
+  }
+
+@override
   Future<String> getStringWithProgress(
     String url, {
     Map<String, String>? headers,
@@ -131,7 +155,19 @@ class _TooLargeClient implements DioClient {
     return {};
   }
 
-  @override
+    @override
+  Future<String> postForm(
+    String url, {
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    return '';
+  }
+
+@override
   Future<String> getStringWithProgress(
     String url, {
     Map<String, String>? headers,

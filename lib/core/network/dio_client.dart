@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:dio/dio.dart';
+import 'package:fast_gbk/fast_gbk.dart';
 import 'package:flutter/foundation.dart';
 import 'interceptors/rate_limit_interceptor.dart';
 import 'interceptors/retry_interceptor.dart';
@@ -77,7 +79,8 @@ class DioClient {
     void Function(int received, int total)? onProgress,
     CancelToken? cancelToken,
   }) async {
-    final response = await _get(
+    final response = await _send(
+      'GET',
       url,
       headers: headers,
       sourceId: sourceId,
@@ -92,9 +95,74 @@ class DioClient {
     return response.data.toString();
   }
 
+  /// POST 表单请求（Legado 书源搜索等场景）。
+  /// [charset] 指定响应编码（gbk 等），默认 UTF-8。
+  Future<String> postForm(
+    String url, {
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    final response = await _send(
+      'POST',
+      url,
+      headers: {
+        ...?headers,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      data: body,
+      sourceId: sourceId,
+      responseType: ResponseType.bytes,
+      cancelToken: cancelToken,
+    );
+    return _decodeBody(response.data, charset);
+  }
+
+  /// 按 charset 解码响应字节
+  static String _decodeBody(dynamic data, String? charset) {
+    if (data is! List<int>) return data?.toString() ?? '';
+    final lower = charset?.toLowerCase();
+    if (lower == 'gbk' || lower == 'gb2312' || lower == 'gb18030') {
+      try {
+        return gbk.decode(data);
+      } catch (_) {
+        // GBK 解码失败回退 UTF-8
+      }
+    }
+    return utf8.decode(data, allowMalformed: true);
+  }
+
   Future<Response<dynamic>> _get(
     String url, {
     Map<String, String>? headers,
+    String? sourceId,
+    Map<String, dynamic>? extra,
+    ResponseType? responseType,
+    Duration? receiveTimeout,
+    void Function(int received, int total)? onReceiveProgress,
+    CancelToken? cancelToken,
+  }) {
+    return _send(
+      'GET',
+      url,
+      headers: headers,
+      sourceId: sourceId,
+      extra: extra,
+      responseType: responseType,
+      receiveTimeout: receiveTimeout,
+      onReceiveProgress: onReceiveProgress,
+      cancelToken: cancelToken,
+    );
+  }
+
+  /// 通用请求：重定向安全处理（SSRF 每跳校验 / 禁 HTTPS 降级 / 跨域清敏感头 / 上限 5 跳）
+  Future<Response<dynamic>> _send(
+    String method,
+    String url, {
+    Map<String, String>? headers,
+    Object? data,
     String? sourceId,
     Map<String, dynamic>? extra,
     ResponseType? responseType,
@@ -107,19 +175,28 @@ class DioClient {
     var currentUri = Uri.parse(current);
     for (var i = 0; i < 5; i++) {
       _assertSafeUrl(current);
-      final response = await _dio.get<dynamic>(
-        current,
-        options: Options(
-          headers: activeHeaders,
-          extra: {'source_id': sourceId, ...?extra},
-          responseType: responseType ?? ResponseType.json,
-          receiveTimeout: receiveTimeout,
-          followRedirects: false,
-          validateStatus: (status) => status != null && status < 400,
-        ),
-        onReceiveProgress: onReceiveProgress,
-        cancelToken: cancelToken,
+      final options = Options(
+        headers: activeHeaders,
+        extra: {'source_id': sourceId, ...?extra},
+        responseType: responseType ?? ResponseType.json,
+        receiveTimeout: receiveTimeout,
+        followRedirects: false,
+        validateStatus: (status) => status != null && status < 400,
       );
+      final response = method == 'POST'
+          ? await _dio.post<dynamic>(
+              current,
+              data: data,
+              options: options,
+              onReceiveProgress: onReceiveProgress,
+              cancelToken: cancelToken,
+            )
+          : await _dio.get<dynamic>(
+              current,
+              options: options,
+              onReceiveProgress: onReceiveProgress,
+              cancelToken: cancelToken,
+            );
       final statusCode = response.statusCode ?? 0;
       if (statusCode >= 300 && statusCode < 400) {
         final location = response.headers.value('location');
