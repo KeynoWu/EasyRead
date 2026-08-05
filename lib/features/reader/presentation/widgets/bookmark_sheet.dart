@@ -67,7 +67,7 @@ class _BookmarkSheetState extends State<BookmarkSheet> {
                       trailing: IconButton(
                         icon: const Icon(Icons.delete_outline, size: 20),
                         onPressed: () async {
-                          await _service.remove(bookmark.id);
+                          await _service.remove(widget.bookId, bookmark.id);
                           _reload();
                         },
                       ),

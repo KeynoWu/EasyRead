@@ -1,33 +1,74 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../bookshelf/domain/entities/book.dart';
+import '../../../bookshelf/presentation/providers/bookshelf_provider.dart';
 import '../../domain/entities/search_result.dart';
 
-class SearchResultItem extends StatelessWidget {
+class SearchResultItem extends ConsumerStatefulWidget {
   final SearchResult result;
 
   const SearchResultItem({super.key, required this.result});
 
   @override
+  ConsumerState<SearchResultItem> createState() => _SearchResultItemState();
+}
+
+class _SearchResultItemState extends ConsumerState<SearchResultItem> {
+  bool _busy = false;
+
+  Future<void> _openReader() async {
+    if (_busy) return;
+    _busy = true;
+    final result = widget.result;
+    try {
+      final alts = jsonEncode(result.alternatives.map((a) => {
+        'bookId': a.bookId,
+        'sourceId': a.sourceId,
+        'sourceName': a.sourceName,
+        'detailUrl': a.detailUrl,
+      }).toList());
+      await ref.read(bookshelfRepositoryProvider).save(Book(
+        id: result.bookId,
+        name: result.name,
+        author: result.author,
+        coverUrl: result.coverUrl,
+        sourceId: result.sourceId,
+        lastReadAt: DateTime.now(),
+      ));
+      await ref.read(bookDetailServiceProvider).save(
+        result.bookId,
+        detailUrl: result.detailUrl,
+        alternativesJson: alts,
+      );
+      ref.invalidate(bookshelfListProvider);
+      if (!mounted) return;
+      context.push(
+        '/reader/${Uri.encodeComponent(result.bookId)}'
+        '?sourceId=${Uri.encodeComponent(result.sourceId)}'
+        '&detailUrl=${Uri.encodeComponent(result.detailUrl ?? '')}'
+        '&alternatives=${Uri.encodeComponent(alts)}',
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('加入书架失败，请重试')),
+        );
+      }
+    } finally {
+      _busy = false;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final result = widget.result;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Card(
       child: InkWell(
-        onTap: () {
-          final alts = jsonEncode(result.alternatives.map((a) => {
-            'bookId': a.bookId,
-            'sourceId': a.sourceId,
-            'sourceName': a.sourceName,
-            'detailUrl': a.detailUrl,
-          }).toList());
-          context.push(
-            '/reader/${Uri.encodeComponent(result.bookId)}'
-            '?sourceId=${Uri.encodeComponent(result.sourceId)}'
-            '&detailUrl=${Uri.encodeComponent(result.detailUrl ?? '')}'
-            '&alternatives=${Uri.encodeComponent(alts)}',
-          );
-        },
+        onTap: _openReader,
         borderRadius: BorderRadius.circular(14),
         child: Padding(
           padding: const EdgeInsets.all(12),

@@ -48,6 +48,9 @@ class WebDavSync {
   }
 
   Future<void> saveConfig(WebDavConfig config) async {
+    if (!_isAllowedWebDavUrl(config.url)) {
+      throw ArgumentError('WebDAV 地址必须使用 HTTPS（本机测试可允许 localhost HTTP）');
+    }
     final box = await Hive.openBox<String>(_boxName);
     await box.put('config', jsonEncode({
       'url': config.url,
@@ -71,7 +74,8 @@ class WebDavSync {
   /// 上传备份到 WebDAV
   Future<String?> upload(String backupJson) async {
     final config = await loadConfig();
-    if (!config.isConfigured) return '未配置 WebDAV';
+    final configError = _configError(config);
+    if (configError != null) return configError;
     try {
       await _dio(config).put(
         _fileName,
@@ -87,9 +91,13 @@ class WebDavSync {
   /// 从 WebDAV 下载备份
   Future<String?> download() async {
     final config = await loadConfig();
-    if (!config.isConfigured) return '未配置 WebDAV';
+    final configError = _configError(config);
+    if (configError != null) return configError;
     try {
-      final response = await _dio(config).get(_fileName);
+      final response = await _dio(config).get(
+        _fileName,
+        options: Options(responseType: ResponseType.plain),
+      );
       return response.data.toString();
     } catch (e) {
       return '下载失败: ${_friendlyError(e)}';
@@ -99,13 +107,33 @@ class WebDavSync {
   /// 测试连接
   Future<String?> testConnection() async {
     final config = await loadConfig();
-    if (!config.isConfigured) return '未配置 WebDAV';
+    final configError = _configError(config);
+    if (configError != null) return configError;
     try {
       await _dio(config).get('');
       return null;
     } catch (e) {
       return '连接失败: ${_friendlyError(e)}';
     }
+  }
+
+  static bool _isAllowedWebDavUrl(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return false;
+    if (uri.scheme == 'https') return true;
+    if (uri.scheme == 'http' &&
+        (uri.host == 'localhost' || uri.host == '127.0.0.1' || uri.host == '::1')) {
+      return true;
+    }
+    return false;
+  }
+
+  static String? _configError(WebDavConfig config) {
+    if (!config.isConfigured) return '未配置 WebDAV';
+    if (!_isAllowedWebDavUrl(config.url)) {
+      return 'WebDAV 地址必须使用 HTTPS';
+    }
+    return null;
   }
 
   /// 将异常转换为不含服务器细节的友好提示，避免泄露状态码与响应体

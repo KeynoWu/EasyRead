@@ -21,6 +21,8 @@ class ImportBookSource {
   final Duration idleTimeout;
   /// 总时限：整个下载不能超过该时长
   final Duration totalLimit;
+  /// 单个书源文件最大字节数，防止恶意/异常大文件耗尽内存
+  static const int maxSourceBytes = 50 * 1024 * 1024;
 
   ImportBookSource({
     required this.repository,
@@ -43,7 +45,7 @@ class ImportBookSource {
     for (final file in result.files) {
       final bytes = file.bytes;
       if (bytes == null) continue;
-      final content = String.fromCharCodes(bytes);
+      final content = _decodeUtf8(bytes);
       final parsed = _parseContent(content);
       parsed.fold((l) => null, (r) => sources.addAll(r));
     }
@@ -100,6 +102,7 @@ class ImportBookSource {
     final internalToken = CancelToken();
     cancelToken?.whenCancel.then((_) => internalToken.cancel());
     var lastActivity = DateTime.now();
+    var sizeExceeded = false;
     late final Timer idleTimer;
     late final Timer totalTimer;
 
@@ -134,6 +137,15 @@ class ImportBookSource {
           url,
           onProgress: (received, total) {
             lastActivity = DateTime.now();
+            if (received > maxSourceBytes) {
+              sizeExceeded = true;
+              internalToken.cancel();
+              finish();
+              if (!completer.isCompleted) {
+                completer.completeError(TimeoutException('文件超过大小限制'));
+              }
+              return;
+            }
             onProgress?.call(received, total);
           },
           cancelToken: internalToken,
@@ -143,7 +155,13 @@ class ImportBookSource {
       if (!completer.isCompleted) completer.complete(content);
     }).catchError((Object e) {
       finish();
-      if (!completer.isCompleted) completer.completeError(e);
+      if (!completer.isCompleted) {
+        if (sizeExceeded) {
+          completer.completeError(TimeoutException('文件超过大小限制'));
+        } else {
+          completer.completeError(e);
+        }
+      }
     });
 
     return completer.future;
@@ -173,7 +191,20 @@ class ImportBookSource {
     if (data == null || data.text == null || data.text!.isEmpty) {
       return const Left('剪贴板为空');
     }
-    return _parseContent(data.text!);
+    return _parseContent(data.text!).fold(
+      (l) => Left(l),
+      (sources) async {
+        for (final source in sources) {
+          await repository.save(source);
+        }
+        return Right(sources);
+      },
+    );
+  }
+
+  static String _decodeUtf8(List<int> bytes) {
+    final content = utf8.decode(bytes, allowMalformed: true);
+    return content.startsWith('\uFEFF') ? content.substring(1) : content;
   }
 
   /// 解析内容（支持单个书源对象或书源数组）

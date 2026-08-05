@@ -15,9 +15,13 @@ class BookmarkService {
   Future<List<Bookmark>> getBookmarks(String bookId) async {
     final box = await _box();
     final bookmarks = <Bookmark>[];
-    for (final value in box.values) {
+    for (final entry in box.toMap().entries) {
+      final key = entry.key.toString();
+      if (key.contains('|') && !key.startsWith('$bookId|')) {
+        continue;
+      }
       try {
-        final map = jsonDecode(value) as Map<String, dynamic>;
+        final map = jsonDecode(entry.value) as Map<String, dynamic>;
         if (map['book_id'] == bookId) {
           bookmarks.add(Bookmark(
             id: map['id']?.toString() ?? '',
@@ -38,7 +42,7 @@ class BookmarkService {
   /// 添加书签
   Future<void> add(Bookmark bookmark) async {
     final box = await _box();
-    await box.put(bookmark.id, jsonEncode({
+    await box.put('${bookmark.bookId}|${bookmark.id}', jsonEncode({
       'id': bookmark.id,
       'book_id': bookmark.bookId,
       'chapter_index': bookmark.chapterIndex,
@@ -47,10 +51,31 @@ class BookmarkService {
     }));
   }
 
-  /// 删除书签
-  Future<void> remove(String id) async {
+  /// 删除指定书籍下的书签
+  Future<void> remove(String bookId, String id) async {
     final box = await _box();
-    await box.delete(id);
+    String? key;
+    if (box.containsKey('$bookId|$id')) {
+      key = '$bookId|$id';
+    } else {
+      for (final candidate in box.keys) {
+        if (candidate.toString() == id) {
+          final raw = box.get(candidate);
+          if (raw == null) continue;
+          try {
+            final map = jsonDecode(raw) as Map<String, dynamic>;
+            if (map['book_id'] == bookId) {
+              key = candidate.toString();
+              break;
+            }
+          } catch (_) {
+            // 跳过损坏数据
+          }
+        }
+      }
+    }
+    if (key == null) return;
+    await box.delete(key);
   }
 
   /// 检查某位置是否已有书签

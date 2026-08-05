@@ -18,12 +18,14 @@ class ParseBookSourceRule {
       rules.remove('bookSourceName');
       rules.remove('bookSourceGroup');
       rules.remove('bookSourceUrl');
+      rules.remove('enabled');
 
       final source = BookSource(
         id: map['bookSourceUrl']?.toString() ?? uniqueFallbackId(),
         name: map['bookSourceName']?.toString() ?? '未命名书源',
         bookSourceUrl: map['bookSourceUrl']?.toString(),
         bookSourceGroup: map['bookSourceGroup']?.toString(),
+        enabled: BookSource.parseBool(map['enabled']) ?? true,
         rules: rules,
       );
       return Right(source);

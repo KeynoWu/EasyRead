@@ -43,4 +43,24 @@ void main() {
     final result = useCase.execute(json);
     expect(result.isLeft, true);
   });
+
+  test('should parse string boolean enabled value', () {
+    const json = '''
+    {
+      "bookSourceName": "禁用源",
+      "bookSourceUrl": "https://test.com",
+      "enabled": "false",
+      "searchUrl": "https://test.com/search?keyword={{key}}"
+    }
+    ''';
+    final result = useCase.execute(json);
+    expect(result.isRight, true);
+    result.fold(
+      (l) => fail('Expected Right'),
+      (source) {
+        expect(source.enabled, isFalse);
+        expect(source.rules.containsKey('enabled'), isFalse);
+      },
+    );
+  });
 }

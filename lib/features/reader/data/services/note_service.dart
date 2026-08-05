@@ -15,9 +15,13 @@ class NoteService {
   Future<List<ReadingNote>> getNotes(String bookId) async {
     final box = await _box();
     final notes = <ReadingNote>[];
-    for (final value in box.values) {
+    for (final entry in box.toMap().entries) {
+      final key = entry.key.toString();
+      if (key.contains('|') && !key.startsWith('$bookId|')) {
+        continue;
+      }
       try {
-        final map = jsonDecode(value) as Map<String, dynamic>;
+        final map = jsonDecode(entry.value) as Map<String, dynamic>;
         if (map['book_id'] == bookId) {
           notes.add(ReadingNote(
             id: map['id']?.toString() ?? '',
@@ -38,7 +42,7 @@ class NoteService {
   /// 添加笔记
   Future<void> add(ReadingNote note) async {
     final box = await _box();
-    await box.put(note.id, jsonEncode({
+    await box.put('${note.bookId}|${note.id}', jsonEncode({
       'id': note.id,
       'book_id': note.bookId,
       'chapter_index': note.chapterIndex,
@@ -47,9 +51,30 @@ class NoteService {
     }));
   }
 
-  /// 删除笔记
-  Future<void> remove(String id) async {
+  /// 删除指定书籍下的笔记
+  Future<void> remove(String bookId, String id) async {
     final box = await _box();
-    await box.delete(id);
+    String? key;
+    if (box.containsKey('$bookId|$id')) {
+      key = '$bookId|$id';
+    } else {
+      for (final candidate in box.keys) {
+        if (candidate.toString() == id) {
+          final raw = box.get(candidate);
+          if (raw == null) continue;
+          try {
+            final map = jsonDecode(raw) as Map<String, dynamic>;
+            if (map['book_id'] == bookId) {
+              key = candidate.toString();
+              break;
+            }
+          } catch (_) {
+            // 跳过损坏数据
+          }
+        }
+      }
+    }
+    if (key == null) return;
+    await box.delete(key);
   }
 }

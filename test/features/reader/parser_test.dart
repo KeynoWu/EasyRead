@@ -13,6 +13,7 @@ void main() {
     const html = '<p>这是一段正文内容</p>';
     final nodes = parser.parse(html);
     expect(nodes.length, 1);
+    expect(nodes[0].type, NodeType.paragraph);
     expect(nodes[0].text, '这是一段正文内容');
   });
 
@@ -20,6 +21,7 @@ void main() {
     const html = '<p>第一段</p><p>第二段</p><p>第三段</p>';
     final nodes = parser.parse(html);
     expect(nodes.length, 3);
+    expect(nodes.every((n) => n.type == NodeType.paragraph), isTrue);
     expect(nodes[0].text, '第一段');
     expect(nodes[1].text, '第二段');
     expect(nodes[2].text, '第三段');
@@ -38,11 +40,9 @@ void main() {
   test('should handle br tags inside paragraph', () {
     const html = '<p>第一行<br>第二行</p>';
     final nodes = parser.parse(html);
-    // Recursive parsing produces: text("第一行"), lineBreak, text("第二行")
-    expect(nodes.length, 3);
-    expect(nodes[0].text, '第一行');
-    expect(nodes[1].type, NodeType.lineBreak);
-    expect(nodes[2].text, '第二行');
+    expect(nodes.length, 1);
+    expect(nodes[0].type, NodeType.paragraph);
+    expect(nodes[0].text, '第一行\n第二行');
   });
 
   test('should handle empty content', () {
@@ -57,7 +57,9 @@ void main() {
     expect(nodes.length, 3);
     expect(nodes[0].type, NodeType.heading);
     expect(nodes[0].text, '第一章');
+    expect(nodes[1].type, NodeType.paragraph);
     expect(nodes[1].text, '这是正文内容。');
+    expect(nodes[2].type, NodeType.paragraph);
     expect(nodes[2].text, '这是第二段。');
   });
 }

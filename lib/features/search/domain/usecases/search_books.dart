@@ -21,7 +21,10 @@ class SearchBooks {
   Future<List<SearchResult>> executeMultiSource(String keyword) async {
     if (keyword.trim().isEmpty) return [];
 
-    final sources = await sourceRepo.getEnabled();
+    final sources = (await sourceRepo.getEnabled())
+        .where((source) => source.searchable)
+        .toList()
+      ..sort((a, b) => (b.searchWeight ?? 0).compareTo(a.searchWeight ?? 0));
     if (sources.isEmpty) return [];
 
     // 每个源独立超时，慢源不阻塞整体结果

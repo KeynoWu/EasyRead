@@ -41,11 +41,17 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   }
 
   /// 打开书籍阅读（续读上次进度）
-  void _openReader(Book book) {
+  Future<void> _openReader(Book book) async {
+    final detail = await ref.read(bookDetailServiceProvider).get(book.id);
+    if (!mounted) return;
     final sourceId = book.sourceId;
+    final detailUrl = detail?.detailUrl;
+    final alternatives = detail?.alternativesJson;
     context.push(
       '/reader/${Uri.encodeComponent(book.id)}'
-      '${sourceId != null && sourceId.isNotEmpty ? '?sourceId=${Uri.encodeComponent(sourceId)}' : ''}',
+      '?sourceId=${Uri.encodeComponent(sourceId ?? '')}'
+      '&detailUrl=${Uri.encodeComponent(detailUrl ?? '')}'
+      '&alternatives=${Uri.encodeComponent(alternatives ?? '')}',
     );
   }
 
@@ -87,6 +93,10 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
 
     final repo = ref.read(bookshelfRepositoryProvider);
     await repo.deleteAll(_selectedIds.toList());
+    final detailService = ref.read(bookDetailServiceProvider);
+    for (final id in _selectedIds) {
+      await detailService.remove(id);
+    }
     setState(() {
       _editMode = false;
       _selectedIds.clear();

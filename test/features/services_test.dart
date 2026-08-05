@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
 import 'package:easy_read/features/search/data/services/search_history_service.dart';
 import 'package:easy_read/features/settings/domain/usecases/reading_stats_service.dart';
+import 'package:easy_read/features/reader/data/services/bookmark_service.dart';
+import 'package:easy_read/features/reader/data/services/note_service.dart';
 import 'package:easy_read/features/reader/domain/entities/bookmark.dart';
 import 'package:easy_read/features/reader/domain/entities/reading_note.dart';
 
@@ -74,6 +76,100 @@ void main() {
       );
       expect(note.text, '这里写得真好');
       expect(note.chapterIndex, 1);
+    });
+  });
+
+  group('BookmarkService', () {
+    test('should isolate bookmarks by book and remove by id', () async {
+      final service = BookmarkService();
+      await service.add(Bookmark(
+        id: 'b1',
+        bookId: 'book1',
+        chapterIndex: 1,
+        pageIndex: 2,
+        createdAt: DateTime(2026, 1, 1),
+      ));
+      await service.add(Bookmark(
+        id: 'b2',
+        bookId: 'book2',
+        chapterIndex: 1,
+        pageIndex: 2,
+        createdAt: DateTime(2026, 1, 1),
+      ));
+
+      expect((await service.getBookmarks('book1')).length, 1);
+      await service.remove('book1', 'b1');
+      expect(await service.getBookmarks('book1'), isEmpty);
+      expect((await service.getBookmarks('book2')).length, 1);
+    });
+
+    test('should remove only the bookmark from the requested book', () async {
+      final service = BookmarkService();
+      await service.add(Bookmark(
+        id: 'same-id',
+        bookId: 'book1',
+        chapterIndex: 1,
+        pageIndex: 2,
+        createdAt: DateTime(2026, 1, 1),
+      ));
+      await service.add(Bookmark(
+        id: 'same-id',
+        bookId: 'book2',
+        chapterIndex: 1,
+        pageIndex: 2,
+        createdAt: DateTime(2026, 1, 1),
+      ));
+
+      await service.remove('book1', 'same-id');
+      expect(await service.getBookmarks('book1'), isEmpty);
+      expect((await service.getBookmarks('book2')).length, 1);
+    });
+  });
+
+  group('NoteService', () {
+    test('should isolate notes by book and remove by id', () async {
+      final service = NoteService();
+      await service.add(ReadingNote(
+        id: 'n1',
+        bookId: 'book1',
+        chapterIndex: 1,
+        text: '笔记1',
+        createdAt: DateTime(2026, 1, 1),
+      ));
+      await service.add(ReadingNote(
+        id: 'n2',
+        bookId: 'book2',
+        chapterIndex: 1,
+        text: '笔记2',
+        createdAt: DateTime(2026, 1, 1),
+      ));
+
+      expect((await service.getNotes('book1')).length, 1);
+      await service.remove('book1', 'n1');
+      expect(await service.getNotes('book1'), isEmpty);
+      expect((await service.getNotes('book2')).length, 1);
+    });
+
+    test('should remove only the note from the requested book', () async {
+      final service = NoteService();
+      await service.add(ReadingNote(
+        id: 'same-id',
+        bookId: 'book1',
+        chapterIndex: 1,
+        text: 'book1 note',
+        createdAt: DateTime(2026, 1, 1),
+      ));
+      await service.add(ReadingNote(
+        id: 'same-id',
+        bookId: 'book2',
+        chapterIndex: 1,
+        text: 'book2 note',
+        createdAt: DateTime(2026, 1, 1),
+      ));
+
+      await service.remove('book1', 'same-id');
+      expect(await service.getNotes('book1'), isEmpty);
+      expect((await service.getNotes('book2')).length, 1);
     });
   });
 }

@@ -107,6 +107,7 @@ class BookSourceImportPage extends ConsumerWidget {
                           onPressed: () {
                             dialogOpen = false;
                             cancelToken.cancel();
+                            Navigator.pop(dialogContext);
                           },
                           child: const Text('取消'),
                         ),
@@ -131,7 +132,7 @@ class BookSourceImportPage extends ConsumerWidget {
               );
               debugPrint('[ImportPage] fromUrl 返回: $result');
               if (!context.mounted) return;
-              Navigator.pop(context); // 关闭加载指示
+              if (dialogOpen) Navigator.pop(context); // 关闭加载指示
               debugPrint('[ImportPage] 加载指示已关闭');
               if (!context.mounted) return;
               _handleResult(context, result);

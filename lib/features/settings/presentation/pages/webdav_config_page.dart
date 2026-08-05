@@ -57,8 +57,8 @@ class _WebDavConfigPageState extends State<WebDavConfigPage> {
     String? message = '配置已保存';
     try {
       await _sync.saveConfig(config);
-    } catch (_) {
-      message = '保存失败：密码安全存储不可用';
+    } catch (e) {
+      message = '保存失败：$e';
     }
     if (!mounted) return;
     setState(() => _saving = false);
@@ -83,7 +83,8 @@ class _WebDavConfigPageState extends State<WebDavConfigPage> {
         padding: const EdgeInsets.all(16),
         children: [
           const Text(
-            '配置 WebDAV 服务器后，可将书架、书源数据备份到云端，支持跨设备同步。',
+            '配置 WebDAV 服务器后，可将书架、书源数据备份到云端，支持跨设备同步。'
+            '服务器地址必须使用 HTTPS；备份包含书源 Cookie 等敏感信息，请妥善保管。',
             style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
           ),
           const SizedBox(height: 16),

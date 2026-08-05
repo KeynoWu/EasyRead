@@ -83,6 +83,15 @@ flutter build apk --release  # 发布包
 Release 包输出路径：`build/app/outputs/flutter-apk/app-release.apk`。
 
 > **注意**：Android 构建要求 compileSdk 36（已在 `android/app/build.gradle.kts` 配置）。
+>
+> Release 签名不再回退到 debug key：本地可通过 `keystore.properties` 或
+> `RELEASE_STORE_FILE` / `RELEASE_STORE_PASSWORD` / `RELEASE_KEY_ALIAS` /
+> `RELEASE_KEY_PASSWORD` 环境变量配置。GitHub Release CI 必须配置
+> `ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` /
+> `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD` secrets，缺失时会直接构建失败。
+
+WebDAV 同步强制要求 HTTPS（仅允许 `localhost`/`127.0.0.1` 使用 HTTP 调试）。
+备份文件包含书源 Cookie 等敏感配置，请勿上传到不受信任的位置。
 
 ## 📝 测试
 
@@ -90,7 +99,7 @@ Release 包输出路径：`build/app/outputs/flutter-apk/app-release.apk`。
 flutter test
 ```
 
-当前 60 个测试用例覆盖：内容净化管线、书源规则解析、搜索去重、分页布局、TXT/EPUB 导入、阅读进度、网络导入等核心逻辑。
+当前 83 个测试用例覆盖：内容净化管线、书源规则解析、搜索去重与权重、分页布局、TXT/EPUB 导入、备份恢复、网络重试与重定向、导入、阅读进度等核心逻辑。
 
 ## 📄 文档
 

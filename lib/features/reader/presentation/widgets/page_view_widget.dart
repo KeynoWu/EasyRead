@@ -57,6 +57,32 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
         return const Center(child: CircularProgressIndicator());
       }
 
+      if (state.errorMessage != null) {
+        return Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline, color: AppColors.danger, size: 40),
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Text(
+                  state.errorMessage!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 14),
+                ),
+              ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: notifier.retryLoad,
+                icon: const Icon(Icons.refresh),
+                label: const Text('重试'),
+              ),
+            ],
+          ),
+        );
+      }
+
       if (state.pages.isEmpty) {
         return const Center(child: Text('暂无内容'));
       }

@@ -1,18 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../domain/entities/book_source.dart';
 import '../providers/book_source_provider.dart';
 import '../widgets/book_source_card.dart';
 import 'book_source_edit_page.dart';
 import 'subscription_page.dart';
 
-class BookSourceListPage extends ConsumerWidget {
+class BookSourceListPage extends ConsumerStatefulWidget {
   const BookSourceListPage({super.key});
 
-  Future<void> _openEditor(BuildContext context, WidgetRef ref, {String? sourceId}) async {
+  @override
+  ConsumerState<BookSourceListPage> createState() => _BookSourceListPageState();
+}
+
+class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
+  final Set<String> _pendingToggles = {};
+
+  Future<void> _openEditor({String? sourceId}) async {
     final repo = ref.read(bookSourceRepositoryProvider);
     final source = sourceId != null ? await repo.getById(sourceId) : null;
-    if (!context.mounted) return;
+    if (!mounted) return;
     final changed = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
@@ -24,8 +32,26 @@ class BookSourceListPage extends ConsumerWidget {
     }
   }
 
+  Future<void> _toggleSource(BookSource source) async {
+    if (_pendingToggles.contains(source.id)) return;
+    _pendingToggles.add(source.id);
+    try {
+      final repo = ref.read(bookSourceRepositoryProvider);
+      await repo.save(source.copyWith(enabled: !source.enabled));
+      ref.invalidate(bookSourceListProvider);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('书源状态更新失败')),
+        );
+      }
+    } finally {
+      _pendingToggles.remove(source.id);
+    }
+  }
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final sourcesAsync = ref.watch(bookSourceListProvider);
     return Scaffold(
       appBar: AppBar(
@@ -41,7 +67,7 @@ class BookSourceListPage extends ConsumerWidget {
           ),
           IconButton(
             icon: const Icon(Icons.edit_outlined),
-            onPressed: () => _openEditor(context, ref),
+            onPressed: () => _openEditor(),
             tooltip: '新建书源',
           ),
         ],
@@ -53,7 +79,8 @@ class BookSourceListPage extends ConsumerWidget {
             final source = sources[index];
             return BookSourceCard(
               source: source,
-              onTap: () => _openEditor(context, ref, sourceId: source.id),
+              onTap: () => _openEditor(sourceId: source.id),
+              onToggle: () => _toggleSource(source),
             );
           },
         ),

@@ -69,6 +69,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   void initState() {
     super.initState();
     _pageOpenTime = DateTime.now();
+    ref.read(readerProvider.notifier).resetForBook(widget.bookId, detailUrl: widget.detailUrl);
     Future.microtask(() async {
       // 读取保存的进度，续读到正确章节
       final repo = ref.read(readerRepositoryProvider);
@@ -88,6 +89,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
 
   @override
   void dispose() {
+    ref.read(readerProvider.notifier).syncShelfNow();
     _tts.stop();
     // 记录本次阅读时长
     final openTime = _pageOpenTime;

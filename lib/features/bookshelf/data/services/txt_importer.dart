@@ -4,12 +4,16 @@ import 'package:fast_gbk/fast_gbk.dart';
 
 /// TXT 书籍导入器 — 解析章节并返回章节列表
 class TxtImporter {
+  /// 输入文件大小上限，防止超大 TXT 在解码和分行时耗尽内存
+  static const int _maxInputBytes = 200 * 1024 * 1024;
+
   /// 识别编码并解析 TXT 内容
   /// 返回 (书名, 章节列表[(章节名, 内容)])
   static (String, List<(String, String)>) parseTxt(
     Uint8List bytes,
     String fileName,
   ) {
+    if (bytes.length > _maxInputBytes) return ('未命名书籍', []);
     final content = _decode(bytes);
     final title = _extractTitle(fileName, content);
     final chapters = _extractChapters(content);

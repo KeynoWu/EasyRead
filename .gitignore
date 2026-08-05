@@ -6,6 +6,9 @@ build/
 .idea/
 .vscode/
 *.lock
+keystore.properties
+*.jks
+*.keystore
 
 # Superpowers visual companion files
 .superpowers/

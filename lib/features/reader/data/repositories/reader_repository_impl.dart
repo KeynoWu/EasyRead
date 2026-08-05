@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:hive/hive.dart';
 import '../../../../core/database/hive_init.dart';
 import '../../../../core/network/dio_client.dart';
@@ -12,12 +13,24 @@ import '../../domain/repositories/reader_repository.dart';
 import '../models/chapter_model.dart';
 import '../models/reading_progress_model.dart';
 
+/// 章节加载失败时抛出的业务异常，由 UI 转成可重试的错误态。
+class ChapterLoadException implements Exception {
+  final String message;
+
+  const ChapterLoadException(this.message);
+
+  @override
+  String toString() => message;
+}
+
 class ReaderRepositoryImpl implements ReaderRepository {
   final DioClient _client;
   PurifyPipeline _pipeline;
   final BookSourceRepository _sourceRepo;
   Box<ChapterModel>? _cachedChapterBox;
   Box<ReadingProgressModel>? _cachedProgressBox;
+  ChapterCatalog? _cachedCatalog;
+  String? _cachedCatalogKey;
 
   Future<Box<ChapterModel>> _chapterBox() async =>
       _cachedChapterBox ??= await Hive.openBox<ChapterModel>(HiveBoxes.chapters);
@@ -53,8 +66,19 @@ class ReaderRepositoryImpl implements ReaderRepository {
       return ChapterCatalog(bookId: bookId, fetchedAt: DateTime.now());
     }
 
+    final cacheKey =
+        '${bookId}_${sourceId}_$detailUrl|${source.chapterListRule}|${source.chapterNameRule}|${source.chapterUrlRule}|${jsonEncode(source.requestHeaders)}';
+    if (_cachedCatalogKey == cacheKey && _cachedCatalog != null) {
+      return _cachedCatalog!;
+    }
+
     try {
-      final html = await _client.getString(detailUrl, sourceId: sourceId);
+      final headers = source.requestHeaders;
+      final html = await _client.getString(
+        detailUrl,
+        headers: headers.isEmpty ? null : headers,
+        sourceId: sourceId,
+      );
       final items = RuleEngine.extractElements(html, source.chapterListRule);
       final chapters = <ChapterItem>[];
 
@@ -71,7 +95,12 @@ class ReaderRepositoryImpl implements ReaderRepository {
         ));
       }
 
-      return ChapterCatalog(bookId: bookId, chapters: chapters, fetchedAt: DateTime.now());
+      final catalog = ChapterCatalog(bookId: bookId, chapters: chapters, fetchedAt: DateTime.now());
+      if (catalog.chapters.isNotEmpty) {
+        _cachedCatalog = catalog;
+        _cachedCatalogKey = cacheKey;
+      }
+      return catalog;
     } catch (_) {
       return ChapterCatalog(bookId: bookId, fetchedAt: DateTime.now());
     }
@@ -94,8 +123,7 @@ class ReaderRepositoryImpl implements ReaderRepository {
 
     final source = await _getSource(sourceId);
     if (source == null || source.contentUrl == null) {
-      // 无书源规则时返回占位内容（不写入缓存，避免污染）
-      return _placeholderChapter(bookId, chapterIndex, sourceId);
+      throw const ChapterLoadException('书源不可用或未配置内容规则');
     }
 
     try {
@@ -115,12 +143,17 @@ class ReaderRepositoryImpl implements ReaderRepository {
       }
 
       if (chapterUrl.isEmpty) {
-        return _placeholderChapter(bookId, chapterIndex, sourceId);
+        throw const ChapterLoadException('无法定位章节');
       }
 
       // 拉取章节内容
       final contentUrl = _buildContentUrl(source.contentUrl!, chapterUrl, chapterIndex);
-      final html = await _client.getString(contentUrl, sourceId: sourceId);
+      final headers = source.requestHeaders;
+      final html = await _client.getString(
+        contentUrl,
+        headers: headers.isEmpty ? null : headers,
+        sourceId: sourceId,
+      );
 
       // 提取正文
       var content = '';
@@ -133,8 +166,7 @@ class ReaderRepositoryImpl implements ReaderRepository {
       }
 
       if (content.trim().isEmpty) {
-        // 内容为空视为解析失败：不写入缓存，返回占位
-        return _placeholderChapter(bookId, chapterIndex, sourceId);
+        throw const ChapterLoadException('章节内容为空');
       }
 
       final title = chapterTitle.isEmpty ? '第${chapterIndex + 1}章' : chapterTitle;
@@ -152,7 +184,7 @@ class ReaderRepositoryImpl implements ReaderRepository {
       await _trimCache(cacheBox);
       return chapter;
     } catch (_) {
-      return _placeholderChapter(bookId, chapterIndex, sourceId);
+      throw const ChapterLoadException('章节加载失败，请检查网络或书源规则');
     }
   }
 
@@ -164,19 +196,6 @@ class ReaderRepositoryImpl implements ReaderRepository {
     return template
         .replaceAll('{{id}}', chapterUrl)
         .replaceAll('{{index}}', '$index');
-  }
-
-  /// 占位章节（加载失败/无规则时的兜底）。不写入缓存，避免把"加载中"内容持久化。
-  Chapter _placeholderChapter(String bookId, int chapterIndex, String sourceId) {
-    return Chapter(
-      id: '${bookId}_${sourceId}_$chapterIndex',
-      bookId: bookId,
-      title: '第${chapterIndex + 1}章',
-      content: '章节内容加载中...',
-      index: chapterIndex,
-      sourceId: sourceId,
-      cachedAt: DateTime.now(),
-    );
   }
 
   @override
@@ -209,12 +228,16 @@ class ReaderRepositoryImpl implements ReaderRepository {
   }) async {
     for (int i = 0; i < count; i++) {
       final index = startIndex + i;
-      await getChapter(
-        bookId: bookId,
-        chapterIndex: index,
-        sourceId: sourceId,
-        detailUrl: detailUrl,
-      );
+      try {
+        await getChapter(
+          bookId: bookId,
+          chapterIndex: index,
+          sourceId: sourceId,
+          detailUrl: detailUrl,
+        );
+      } catch (_) {
+        // 预加载失败不阻塞当前阅读
+      }
     }
   }
 

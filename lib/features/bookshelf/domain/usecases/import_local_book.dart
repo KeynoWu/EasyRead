@@ -44,6 +44,7 @@ class ImportLocalBook {
 
     if (fileName.toLowerCase().endsWith('.txt')) {
       final (title, chapters) = TxtImporter.parseTxt(bytes, fileName);
+      if (chapters.isEmpty) return null;
       await _saveChapters(id, chapters);
       final book = Book(
         id: id,
@@ -58,6 +59,7 @@ class ImportLocalBook {
 
     if (fileName.toLowerCase().endsWith('.epub')) {
       final (title, chapters) = EpubImporter.parseEpub(bytes);
+      if (chapters.isEmpty) return null;
       await _saveChapters(id, chapters);
       final book = Book(
         id: id,

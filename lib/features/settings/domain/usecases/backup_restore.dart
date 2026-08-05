@@ -53,12 +53,13 @@ class BackupRestore {
         'enabled': s.enabled,
         'rules': s.rules,
       }).toList(),
-      'reading_progress': _readProgressMap(),
-      'bookmarks': _readStringBoxMap('bookmarks'),
-      'reading_notes': _readStringBoxMap('reading_notes'),
-      'purification_rules': _readStringBoxMap('purification_rules'),
-      'reading_stats': _readStringBoxMap('reading_stats'),
-      'source_subscriptions': _readSubscriptionsMap(),
+      'reading_progress': await _readProgressMap(),
+      'bookmarks': await _readStringBoxMap('bookmarks'),
+      'reading_notes': await _readStringBoxMap('reading_notes'),
+      'purification_rules': await _readStringBoxMap('purification_rules'),
+      'reading_stats': await _readStringBoxMap('reading_stats'),
+      'book_details': await _readStringBoxMap('book_details'),
+      'source_subscriptions': await _readSubscriptionsMap(),
     };
     return jsonEncode(backup);
   }
@@ -123,6 +124,7 @@ class BackupRestore {
       await _restoreStringBox('reading_notes', data['reading_notes']);
       await _restoreStringBox('purification_rules', data['purification_rules']);
       await _restoreStringBox('reading_stats', data['reading_stats']);
+      await _restoreStringBox('book_details', data['book_details']);
 
       // 订阅
       final subs = data['source_subscriptions'] as Map? ?? {};
@@ -173,7 +175,7 @@ class BackupRestore {
       final bytes = result.files.first.bytes;
       if (bytes == null) return '读取文件失败';
 
-      final content = String.fromCharCodes(bytes);
+      final content = utf8.decode(bytes, allowMalformed: true);
       return await restoreFromJson(content);
     } catch (e) {
       return '恢复失败: $e';
@@ -190,16 +192,14 @@ class BackupRestore {
   }
 
   /// 读取 JSON 字符串盒为 {key: 原始JSON字符串}（用于备份）
-  Map<String, dynamic> _readStringBoxMap(String boxName) {
-    if (!Hive.isBoxOpen(boxName)) return {};
-    final box = Hive.box<String>(boxName);
+  Future<Map<String, dynamic>> _readStringBoxMap(String boxName) async {
+    final box = await Hive.openBox<String>(boxName);
     return {for (final key in box.keys) key.toString(): box.get(key)};
   }
 
   /// 读取阅读进度盒（ReadingProgressModel 类型）
-  Map<String, dynamic> _readProgressMap() {
-    if (!Hive.isBoxOpen(HiveBoxes.readingProgress)) return {};
-    final box = Hive.box<ReadingProgressModel>(HiveBoxes.readingProgress);
+  Future<Map<String, dynamic>> _readProgressMap() async {
+    final box = await Hive.openBox<ReadingProgressModel>(HiveBoxes.readingProgress);
     final result = <String, dynamic>{};
     for (final entry in box.toMap().entries) {
       final e = entry.value.toEntity();
@@ -216,9 +216,8 @@ class BackupRestore {
   }
 
   /// 读取书源订阅盒（SourceSubscriptionModel 类型）
-  Map<String, dynamic> _readSubscriptionsMap() {
-    if (!Hive.isBoxOpen(HiveBoxes.sourceSubscriptions)) return {};
-    final box = Hive.box<SourceSubscriptionModel>(HiveBoxes.sourceSubscriptions);
+  Future<Map<String, dynamic>> _readSubscriptionsMap() async {
+    final box = await Hive.openBox<SourceSubscriptionModel>(HiveBoxes.sourceSubscriptions);
     final result = <String, dynamic>{};
     for (final entry in box.toMap().entries) {
       final e = entry.value.toEntity();

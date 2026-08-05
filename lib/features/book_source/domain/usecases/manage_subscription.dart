@@ -121,11 +121,13 @@ class ManageSubscription {
           rules.remove('bookSourceName');
           rules.remove('bookSourceGroup');
           rules.remove('bookSourceUrl');
+          rules.remove('enabled');
           sources.add(BookSource(
             id: map['bookSourceUrl']?.toString() ?? ParseBookSourceRule.uniqueFallbackId(),
             name: map['bookSourceName']?.toString() ?? '未命名书源',
             bookSourceUrl: map['bookSourceUrl']?.toString(),
             bookSourceGroup: map['bookSourceGroup']?.toString(),
+            enabled: BookSource.parseBool(map['enabled']) ?? true,
             rules: rules,
           ));
         }
@@ -135,11 +137,13 @@ class ManageSubscription {
         rules.remove('bookSourceName');
         rules.remove('bookSourceGroup');
         rules.remove('bookSourceUrl');
+        rules.remove('enabled');
         sources.add(BookSource(
           id: map['bookSourceUrl']?.toString() ?? ParseBookSourceRule.uniqueFallbackId(),
           name: map['bookSourceName']?.toString() ?? '未命名书源',
           bookSourceUrl: map['bookSourceUrl']?.toString(),
           bookSourceGroup: map['bookSourceGroup']?.toString(),
+          enabled: BookSource.parseBool(map['enabled']) ?? true,
           rules: rules,
         ));
       }

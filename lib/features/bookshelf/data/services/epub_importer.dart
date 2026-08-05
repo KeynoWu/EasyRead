@@ -21,10 +21,11 @@ class EpubImporter {
       final archive = ZipDecoder().decodeBytes(bytes);
       if (archive.isEmpty) return ('未命名书籍', []);
 
-      // zip bomb 防护：解压后总大小超限直接拒绝
+      // zip bomb 防护：先按 zip 头声明的解压后大小拒绝，避免触发逐文件解压
       var totalBytes = 0;
       for (final f in archive.files) {
-        totalBytes += f.content.length;
+        if (!f.isFile) continue;
+        totalBytes += f.size;
         if (totalBytes > _maxTotalBytes) return ('未命名书籍', []);
       }
 

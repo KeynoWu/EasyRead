@@ -97,4 +97,59 @@ void main() {
     final results = await emptyUseCase.executeMultiSource('测试');
     expect(results, isEmpty);
   });
+
+  test('executeMultiSource should skip sources marked non-searchable', () async {
+    final hidden = testSource.copyWith(
+      id: 'src2',
+      rules: {'searchUrl': 'http://example.com/search?q={{key}}', 'searchable': false},
+    );
+    final repo = MockBookSourceRepository([testSource, hidden]);
+    final useCase = SearchBooks(searchRepo: mockSearchRepo, sourceRepo: repo);
+
+    final results = await useCase.executeMultiSource('测试');
+    expect(results.length, 1);
+    expect(results.first.sourceId, 'src1');
+  });
+
+  test('executeMultiSource should prefer higher weight source', () async {
+    final low = testSource.copyWith(
+      id: 'src1',
+      rules: {'searchUrl': 'http://example.com/search?q={{key}}', 'weight': 1},
+    );
+    final high = testSource.copyWith(
+      id: 'src2',
+      rules: {'searchUrl': 'http://example.com/search?q={{key}}', 'weight': 10},
+    );
+    final repo = MockBookSourceRepository([low, high]);
+    final useCase = SearchBooks(searchRepo: mockSearchRepo, sourceRepo: repo);
+
+    final results = await useCase.executeMultiSource('测试');
+    expect(results.first.sourceId, 'src2');
+  });
+
+  test('executeMultiSource should tolerate string weight values', () async {
+    final source = testSource.copyWith(
+      id: 'src1',
+      rules: {'searchUrl': 'http://example.com/search?q={{key}}', 'weight': '10'},
+    );
+    final repo = MockBookSourceRepository([source]);
+    final useCase = SearchBooks(searchRepo: mockSearchRepo, sourceRepo: repo);
+
+    final results = await useCase.executeMultiSource('测试');
+    expect(results, isNotEmpty);
+    expect(results.first.sourceId, 'src1');
+  });
+
+  test('executeMultiSource should skip string boolean non-searchable source', () async {
+    final hidden = testSource.copyWith(
+      id: 'src2',
+      rules: {'searchUrl': 'http://example.com/search?q={{key}}', 'searchable': 'false'},
+    );
+    final repo = MockBookSourceRepository([testSource, hidden]);
+    final useCase = SearchBooks(searchRepo: mockSearchRepo, sourceRepo: repo);
+
+    final results = await useCase.executeMultiSource('测试');
+    expect(results.length, 1);
+    expect(results.first.sourceId, 'src1');
+  });
 }

@@ -16,7 +16,7 @@ class RetryInterceptor extends Interceptor {
   @override
   Future<void> onError(DioException err, ErrorInterceptorHandler handler) async {
     final retryCount = (err.requestOptions.extra['retry_count'] as int?) ?? 0;
-    if (retryCount >= _maxRetries) {
+    if (retryCount >= _maxRetries || !_isRetryable(err)) {
       return handler.next(err);
     }
     await Future.delayed(_baseDelay * (retryCount + 1));
@@ -29,5 +29,17 @@ class RetryInterceptor extends Interceptor {
     } catch (e) {
       handler.next(err);
     }
+  }
+
+  static bool _isRetryable(DioException err) {
+    if (err.type == DioExceptionType.cancel) return false;
+    if (err.type == DioExceptionType.badResponse) {
+      final statusCode = err.response?.statusCode ?? 0;
+      return statusCode == 408 || statusCode == 429 || statusCode >= 500;
+    }
+    return err.type == DioExceptionType.connectionError ||
+        err.type == DioExceptionType.connectionTimeout ||
+        err.type == DioExceptionType.receiveTimeout ||
+        err.type == DioExceptionType.sendTimeout;
   }
 }

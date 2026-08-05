@@ -75,7 +75,7 @@ class _NoteSheetState extends State<NoteSheet> {
                         trailing: IconButton(
                           icon: const Icon(Icons.delete_outline, size: 20),
                           onPressed: () async {
-                            await _service.remove(note.id);
+                            await _service.remove(widget.bookId, note.id);
                             _reload();
                           },
                         ),

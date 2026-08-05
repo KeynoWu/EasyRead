@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
@@ -87,6 +88,26 @@ void main() {
       final book = await repo.getById('b1');
       expect(book, isNotNull);
       expect(book!.progress, 0.5);
+    });
+
+    test('backup should include string boxes even when not currently open', () async {
+      final bookmarkBox = await Hive.openBox<String>('bookmarks');
+      await bookmarkBox.put('bookmark-1', jsonEncode({
+        'id': 'bookmark-1',
+        'book_id': 'b1',
+        'chapter_index': 1,
+        'page_index': 2,
+        'created_at': '2026-01-01T00:00:00.000',
+      }));
+      await bookmarkBox.close();
+
+      final backupRestore = BackupRestore(
+        bookshelfRepo: BookshelfRepositoryImpl(),
+        sourceRepo: BookSourceRepositoryImpl(),
+      );
+      final json = await backupRestore.buildBackupJson();
+      final data = jsonDecode(json) as Map<String, dynamic>;
+      expect(data['bookmarks'], containsPair('bookmark-1', isA<String>()));
     });
   });
 }

@@ -3,6 +3,8 @@ import 'package:html/dom.dart' as dom;
 import 'node_tree.dart';
 
 class HtmlContentParser {
+  static const _blockTags = {'p', 'div', 'section', 'article', 'li', 'blockquote'};
+
   List<TextNode> parse(String html) {
     final doc = parser.parse(html);
     final body = doc.body;
@@ -13,21 +15,42 @@ class HtmlContentParser {
   }
 
   void _parseNode(dom.Element element, List<TextNode> nodes) {
+    final buffer = StringBuffer();
+
+    void flush() {
+      final text = buffer.toString().trim();
+      if (text.isNotEmpty) {
+        nodes.add(TextNode(type: NodeType.paragraph, text: text));
+      }
+      buffer.clear();
+    }
+
     for (final child in element.nodes) {
       if (child is dom.Element) {
-        _parseElement(child, nodes);
-      } else if (child is dom.Text) {
-        final text = child.text.trim();
-        if (text.isNotEmpty) {
-          nodes.add(TextNode(type: NodeType.text, text: text));
+        if (_blockTags.contains(child.localName) ||
+            child.localName?.startsWith('h') == true) {
+          flush();
+          _parseElement(child, nodes);
+        } else if (child.localName == 'br') {
+          buffer.writeln();
+        } else {
+          buffer.write(_collectInlineText(child));
         }
+      } else if (child is dom.Text) {
+        buffer.write(child.text);
       }
     }
+    flush();
   }
 
   void _parseElement(dom.Element element, List<TextNode> nodes) {
     switch (element.localName) {
       case 'p':
+      case 'div':
+      case 'section':
+      case 'article':
+      case 'li':
+      case 'blockquote':
         _parseNode(element, nodes);
         break;
       case 'br':
@@ -43,31 +66,41 @@ class HtmlContentParser {
           headingLevel: level,
         ));
         break;
-      case 'strong':
-      case 'b':
-        nodes.add(TextNode(type: NodeType.text, text: element.text.trim()));
-        break;
-      case 'em':
-      case 'i':
-        nodes.add(TextNode(type: NodeType.text, text: element.text.trim()));
-        break;
       case 'img':
         final src = element.attributes['src'] ?? '';
         if (src.isNotEmpty) {
           nodes.add(TextNode(type: NodeType.image, imageUrl: src));
         }
         break;
-      case 'div':
-      case 'section':
-      case 'article':
-        _parseNode(element, nodes);
-        break;
       default:
         final text = element.text.trim();
         if (text.isNotEmpty) {
-          nodes.add(TextNode(type: NodeType.text, text: text));
+          nodes.add(TextNode(type: NodeType.paragraph, text: text));
         }
         break;
     }
+  }
+
+  String _collectInlineText(dom.Element element) {
+    final buffer = StringBuffer();
+
+    void walk(dom.Node node) {
+      if (node is dom.Text) {
+        buffer.write(node.text);
+      } else if (node is dom.Element) {
+        if (node.localName == 'br') {
+          buffer.writeln();
+        } else {
+          for (final child in node.nodes) {
+            walk(child);
+          }
+        }
+      }
+    }
+
+    for (final child in element.nodes) {
+      walk(child);
+    }
+    return buffer.toString();
   }
 }

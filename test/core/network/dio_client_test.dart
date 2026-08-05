@@ -1,0 +1,110 @@
+import 'dart:async';
+import 'dart:typed_data';
+import 'package:dio/dio.dart';
+import 'package:easy_read/core/network/dio_client.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+class _RedirectAdapter implements HttpClientAdapter {
+  int calls = 0;
+  Map<String, dynamic>? lastHeaders;
+  final String redirectLocation;
+
+  _RedirectAdapter({
+    this.redirectLocation = 'https://attacker.example/x',
+  });
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    calls++;
+    if (calls == 1) {
+      return ResponseBody.fromString(
+        '',
+        302,
+        headers: {
+          'location': [redirectLocation],
+        },
+      );
+    }
+    lastHeaders = options.headers;
+    return ResponseBody.fromString('ok', 200);
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+void main() {
+  test('DioClient should reject file/data schemes', () async {
+    final client = DioClient();
+    await expectLater(
+      client.getString('file:///etc/passwd'),
+      throwsArgumentError,
+    );
+    await expectLater(
+      client.getString('data:text/plain,hello'),
+      throwsArgumentError,
+    );
+  });
+
+  test('DioClient should reject localhost and private network URLs', () async {
+    final client = DioClient();
+    for (final url in [
+      'http://localhost:8080/book',
+      'http://127.0.0.1/book',
+      'http://10.0.0.1/book',
+      'http://172.16.0.1/book',
+      'http://192.168.1.1/book',
+      'http://169.254.169.254/book',
+    ]) {
+      await expectLater(client.getString(url), throwsArgumentError, reason: url);
+    }
+    await expectLater(
+      client.getString('http://[::ffff:127.0.0.1]/book'),
+      throwsArgumentError,
+    );
+    await expectLater(
+      client.getString('http://[::1]/book'),
+      throwsArgumentError,
+    );
+  });
+
+  test('DioClient should strip sensitive headers on cross-origin redirect', () async {
+    final adapter = _RedirectAdapter();
+    final dio = Dio()..httpClientAdapter = adapter;
+    final client = DioClient.forTesting(dio);
+
+    final result = await client.getStringWithProgress(
+      'https://example.com/book',
+      headers: {
+        'Cookie': 'session=secret',
+        'Referer': 'https://example.com',
+        'X-Custom': '1',
+        'Accept': 'text/html',
+      },
+    );
+
+    expect(result, 'ok');
+    expect(adapter.lastHeaders, isNotNull);
+    expect(adapter.lastHeaders!['Cookie'], isNull);
+    expect(adapter.lastHeaders!['Referer'], isNull);
+    expect(adapter.lastHeaders!['X-Custom'], isNull);
+    expect(adapter.lastHeaders!['Accept'], 'text/html');
+  });
+
+  test('DioClient should reject HTTPS to HTTP downgrade redirect', () async {
+    final adapter = _RedirectAdapter(
+      redirectLocation: 'http://example.com/book',
+    );
+    final dio = Dio()..httpClientAdapter = adapter;
+    final client = DioClient.forTesting(dio);
+
+    await expectLater(
+      client.getStringWithProgress('https://example.com/book'),
+      throwsArgumentError,
+    );
+  });
+}

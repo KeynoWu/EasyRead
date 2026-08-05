@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/pagination/page_layout.dart';
@@ -10,6 +11,9 @@ import '../../domain/entities/chapter.dart';
 import '../../domain/entities/chapter_catalog.dart';
 import '../../domain/entities/reading_progress.dart';
 import '../../../book_source/presentation/providers/book_source_provider.dart';
+import '../../../bookshelf/domain/entities/book.dart';
+import '../../../bookshelf/domain/repositories/bookshelf_repository.dart';
+import '../../../bookshelf/presentation/providers/bookshelf_provider.dart';
 import '../../../settings/presentation/providers/purify_pipeline_provider.dart';
 
 final readerRepositoryProvider = Provider<ReaderRepositoryImpl>((ref) {
@@ -35,6 +39,7 @@ class ReaderState {
   final ReaderThemeConfig theme;
   final bool isLoading;
   final bool showSettings;
+  final String? errorMessage;
   final ReadingMode readingMode;
   final Size viewportSize;
 
@@ -49,32 +54,41 @@ class ReaderState {
     this.theme = ReaderThemes.defaultTheme,
     this.isLoading = false,
     this.showSettings = false,
+    this.errorMessage,
     this.viewportSize = const Size(400, 600),
   });
 
+  static const Object _unset = Object();
+
   ReaderState copyWith({
-    Chapter? currentChapter,
+    Object? currentChapter = _unset,
     List<PageContent>? pages,
     int? currentPage,
-    ReadingProgress? progress,
-    ChapterCatalog? catalog,
+    Object? progress = _unset,
+    Object? catalog = _unset,
     LayoutConfig? layoutConfig,
     ReaderThemeConfig? theme,
     bool? isLoading,
     bool? showSettings,
+    Object? errorMessage = _unset,
     ReadingMode? readingMode,
     Size? viewportSize,
   }) {
     return ReaderState(
-      currentChapter: currentChapter ?? this.currentChapter,
+      currentChapter: currentChapter == _unset
+          ? this.currentChapter
+          : currentChapter as Chapter?,
       pages: pages ?? this.pages,
       currentPage: currentPage ?? this.currentPage,
-      progress: progress ?? this.progress,
-      catalog: catalog ?? this.catalog,
+      progress: progress == _unset ? this.progress : progress as ReadingProgress?,
+      catalog: catalog == _unset ? this.catalog : catalog as ChapterCatalog?,
       layoutConfig: layoutConfig ?? this.layoutConfig,
       theme: theme ?? this.theme,
       isLoading: isLoading ?? this.isLoading,
       showSettings: showSettings ?? this.showSettings,
+      errorMessage: errorMessage == _unset
+          ? this.errorMessage
+          : errorMessage as String?,
       readingMode: readingMode ?? this.readingMode,
       viewportSize: viewportSize ?? this.viewportSize,
     );
@@ -83,8 +97,14 @@ class ReaderState {
 
 class ReaderNotifier extends Notifier<ReaderState> {
   late final ReaderRepositoryImpl _repository;
+  late final BookshelfRepository _bookshelfRepo;
   final HtmlContentParser _parser = HtmlContentParser();
   String? widgetDetailUrl;
+  String? _activeBookId;
+  String? _lastBookId;
+  int _lastChapterIndex = 0;
+  String? _lastSourceId;
+  String? _lastDetailUrl;
 
   /// 请求序号：防止快速切章时旧请求覆盖新章节
   int _loadSeq = 0;
@@ -92,7 +112,28 @@ class ReaderNotifier extends Notifier<ReaderState> {
   @override
   ReaderState build() {
     _repository = ref.watch(readerRepositoryProvider);
+    _bookshelfRepo = ref.watch(bookshelfRepositoryProvider);
     return const ReaderState();
+  }
+
+  /// 打开新书时清空上一本书残留的内容、目录和请求状态。
+  void resetForBook(String bookId, {String? detailUrl}) {
+    _loadSeq++;
+    _activeBookId = bookId;
+    widgetDetailUrl = detailUrl;
+    _lastBookId = bookId;
+    _lastChapterIndex = 0;
+    _lastSourceId = null;
+    _lastDetailUrl = detailUrl;
+    state = state.copyWith(
+      currentChapter: null,
+      pages: const [],
+      currentPage: 0,
+      progress: null,
+      catalog: null,
+      isLoading: false,
+      errorMessage: null,
+    );
   }
 
   /// 加载章节
@@ -103,8 +144,14 @@ class ReaderNotifier extends Notifier<ReaderState> {
     String? detailUrl,
   }) async {
     final seq = ++_loadSeq;
-    widgetDetailUrl = detailUrl ?? widgetDetailUrl;
-    state = state.copyWith(isLoading: true);
+    final isNewBook = _activeBookId != bookId;
+    _activeBookId = bookId;
+    widgetDetailUrl = isNewBook ? detailUrl : (detailUrl ?? widgetDetailUrl);
+    _lastBookId = bookId;
+    _lastChapterIndex = chapterIndex;
+    _lastSourceId = sourceId;
+    _lastDetailUrl = widgetDetailUrl;
+    state = state.copyWith(isLoading: true, errorMessage: null);
     try {
       final chapter = await _repository.getChapter(
         bookId: bookId,
@@ -126,10 +173,16 @@ class ReaderNotifier extends Notifier<ReaderState> {
         currentPage: progress?.pageIndex ?? 0,
         progress: progress,
         isLoading: false,
+        errorMessage: null,
       );
 
       // 异步加载目录
-      _loadCatalog(bookId: bookId, sourceId: sourceId, detailUrl: detailUrl);
+      _loadCatalog(
+        bookId: bookId,
+        sourceId: sourceId,
+        detailUrl: detailUrl,
+        seq: seq,
+      );
 
       // 预加载后续 2 章（后台执行，不阻塞后续章节切换）
       // ignore: discarded_futures
@@ -140,9 +193,20 @@ class ReaderNotifier extends Notifier<ReaderState> {
         sourceId: sourceId,
         detailUrl: detailUrl,
       );
+      if (progress != null) {
+        unawaited(_syncBookToShelf(progress));
+      }
     } catch (e) {
       if (seq == _loadSeq) {
-        state = state.copyWith(isLoading: false);
+        state = state.copyWith(
+          currentChapter: null,
+          pages: const [],
+          currentPage: 0,
+          progress: null,
+          catalog: null,
+          isLoading: false,
+          errorMessage: e is ChapterLoadException ? e.message : '章节加载失败，请重试',
+        );
       }
     }
   }
@@ -271,6 +335,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
     required String bookId,
     required String sourceId,
     String? detailUrl,
+    required int seq,
   }) async {
     if (detailUrl == null || detailUrl.isEmpty) return;
     try {
@@ -279,8 +344,13 @@ class ReaderNotifier extends Notifier<ReaderState> {
         sourceId: sourceId,
         detailUrl: detailUrl,
       );
+      if (_activeBookId != bookId || seq != _loadSeq) return;
       if (catalog.chapters.isNotEmpty) {
         state = state.copyWith(catalog: catalog);
+        final progress = state.progress;
+        if (progress != null) {
+          unawaited(_syncBookToShelf(progress));
+        }
       }
     } catch (_) {
       // 目录加载失败不影响正文阅读
@@ -342,10 +412,67 @@ class ReaderNotifier extends Notifier<ReaderState> {
       updatedAt: DateTime.now(),
     );
     try {
-      _repository.saveProgress(progress);
+      unawaited(_repository.saveProgress(progress).catchError((_) {}));
+      unawaited(_syncBookToShelf(progress));
     } catch (_) {
       // 进度保存失败不影响阅读
     }
+  }
+
+  /// 阅读进度同步到书架模型，保持书架进度条与排序字段最新。
+  Future<void> _syncBookToShelf(ReadingProgress progress) async {
+    final catalogLength = state.catalog?.chapters.length;
+    final pageFraction = state.pages.isEmpty
+        ? 0.0
+        : state.currentPage / state.pages.length;
+    final lastChapter = state.currentChapter?.title;
+    try {
+      final book = await _bookshelfRepo.getById(progress.bookId);
+      if (book == null) return;
+      final normalizedProgress = (catalogLength != null && catalogLength > 0)
+          ? (((progress.chapterIndex + pageFraction) / catalogLength).clamp(0.0, 1.0)).toDouble()
+          : book.progress;
+      await _bookshelfRepo.save(Book(
+        id: book.id,
+        name: book.name,
+        author: book.author,
+        coverUrl: book.coverUrl,
+        sourceId: book.sourceId,
+        lastChapter: lastChapter ?? book.lastChapter,
+        progress: normalizedProgress,
+        group: book.group,
+        lastReadAt: progress.updatedAt,
+      ));
+    } catch (_) {
+      // 书架同步失败不影响阅读
+    }
+  }
+
+  /// 页面退出时兜底同步一次书架进度。
+  void syncShelfNow() {
+    final chapter = state.currentChapter;
+    if (chapter == null) return;
+    final progress = ReadingProgress(
+      bookId: chapter.bookId,
+      chapterIndex: chapter.index,
+      paragraphOffset: state.progress?.paragraphOffset ?? 0,
+      scrollOffset: state.progress?.scrollOffset ?? 0,
+      pageIndex: state.currentPage,
+      updatedAt: DateTime.now(),
+    );
+    unawaited(_syncBookToShelf(progress));
+  }
+
+  /// 从错误态重试最近一次章节加载。
+  void retryLoad() {
+    final bookId = _lastBookId;
+    if (bookId == null) return;
+    unawaited(loadChapter(
+      bookId: bookId,
+      chapterIndex: _lastChapterIndex,
+      sourceId: _lastSourceId ?? 'default',
+      detailUrl: _lastDetailUrl,
+    ));
   }
 }
 

@@ -13,6 +13,7 @@ class HiveBoxes {
   static const String chapters = 'chapters';
   static const String readingProgress = 'reading_progress';
   static const String sourceSubscriptions = 'source_subscriptions';
+  static const String bookDetails = 'book_details';
 }
 
 /// 初始化 Hive 存储

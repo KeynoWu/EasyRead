@@ -19,7 +19,31 @@ class SearchRepositoryImpl implements SearchRepository {
 
     try {
       final url = source.searchUrl!.replaceAll('{{key}}', Uri.encodeComponent(keyword));
-      final html = await _client.getString(url, sourceId: source.id);
+      final headers = <String, String>{...source.requestHeaders};
+      if (source.loginUrl != null &&
+          source.loginUrl!.isNotEmpty &&
+          !headers.containsKey('Cookie')) {
+        try {
+          final loginHeaders = await _client.getResponseHeaders(
+            source.loginUrl!,
+            headers: headers.isEmpty ? null : headers,
+            sourceId: source.id,
+          );
+          final setCookies = loginHeaders['set-cookie'] ?? const [];
+          if (setCookies.isNotEmpty) {
+            headers['Cookie'] = setCookies
+                .map((value) => value.split(';').first)
+                .join('; ');
+          }
+        } catch (_) {
+          // 登录失败时仍尝试直接搜索，避免单个书源拖垮聚合搜索
+        }
+      }
+      final html = await _client.getString(
+        url,
+        headers: headers.isEmpty ? null : headers,
+        sourceId: source.id,
+      );
 
       final items = RuleEngine.extractElements(html, source.bookListRule);
       final results = <SearchResult>[];

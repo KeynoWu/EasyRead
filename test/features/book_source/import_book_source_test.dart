@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:easy_read/core/network/dio_client.dart';
 import 'package:easy_read/features/book_source/domain/entities/book_source.dart';
@@ -40,6 +41,15 @@ class _SlowDownloadClient implements DioClient {
   }
 
   @override
+  Future<Map<String, List<String>>> getResponseHeaders(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+  }) async {
+    return {};
+  }
+
+  @override
   Future<String> getStringWithProgress(
     String url, {
     Map<String, String>? headers,
@@ -74,6 +84,15 @@ class _StalledClient implements DioClient {
   }
 
   @override
+  Future<Map<String, List<String>>> getResponseHeaders(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+  }) async {
+    return {};
+  }
+
+  @override
   Future<String> getStringWithProgress(
     String url, {
     Map<String, String>? headers,
@@ -86,6 +105,37 @@ class _StalledClient implements DioClient {
     sawCancelled = cancelToken?.isCancelled ?? false;
     onProgress?.call(200, 1000);
     return '[]';
+  }
+}
+
+class _TooLargeClient implements DioClient {
+  @override
+  Dio get dio => Dio();
+
+  @override
+  Future<String> getString(String url, {Map<String, String>? headers, String? sourceId}) async {
+    return '';
+  }
+
+  @override
+  Future<Map<String, List<String>>> getResponseHeaders(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+  }) async {
+    return {};
+  }
+
+  @override
+  Future<String> getStringWithProgress(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    void Function(int received, int total)? onProgress,
+    CancelToken? cancelToken,
+  }) async {
+    onProgress?.call(ImportBookSource.maxSourceBytes + 1, -1);
+    return '';
   }
 }
 
@@ -147,6 +197,47 @@ void main() {
       );
       final result = await useCase.fromUrl('   ');
       expect(result.isLeft, isTrue);
+    });
+
+    test('should reject oversized source file', () async {
+      final useCase = ImportBookSource(
+        repository: _MockSourceRepo(),
+        parser: ParseBookSourceRule(),
+        client: _TooLargeClient(),
+      );
+      final result = await useCase.fromUrl('https://example.com/sources.json');
+      expect(result.isLeft, isTrue);
+      result.fold((l) => expect(l, contains('超过大小限制')), (r) => fail('不应成功'));
+    });
+  });
+
+  group('ImportBookSource.fromClipboard', () {
+    test('should save parsed clipboard sources', () async {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.getData') {
+          return {
+            'text': '[{"bookSourceName":"剪贴板源","bookSourceUrl":"https://example.com"}]',
+          };
+        }
+        return null;
+      });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+      });
+
+      final repo = _MockSourceRepo();
+      final useCase = ImportBookSource(
+        repository: repo,
+        parser: ParseBookSourceRule(),
+        client: _SlowDownloadClient(),
+      );
+      final result = await useCase.fromClipboard();
+      expect(result.isRight, isTrue);
+      expect(repo.saved.length, 1);
+      expect(repo.saved.first.name, '剪贴板源');
     });
   });
 }
