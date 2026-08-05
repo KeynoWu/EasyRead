@@ -79,6 +79,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     if (trimmed.isEmpty) return;
     // 同步输入框文本，避免输入框与结果关键词不一致
     _searchController.text = trimmed;
+    FocusScope.of(context).unfocus(); // 收起键盘，避免遮挡结果
     _startSearch(trimmed);
   }
 
@@ -116,17 +117,73 @@ class _SearchPageState extends ConsumerState<SearchPage> {
             child: _keyword.isEmpty
                 ? _buildEmptyState()
                 : ref.watch(searchResultsProvider(_keyword)).when(
-                    data: (results) => ListView.builder(
-                      itemCount: results.length,
-                      itemBuilder: (context, index) => SearchResultItem(result: results[index]),
-                    ),
+                    data: (results) {
+                      if (results.isEmpty) {
+                        return _buildNoResultState();
+                      }
+                      return ListView.builder(
+                        itemCount: results.length,
+                        itemBuilder: (context, index) =>
+                            SearchResultItem(result: results[index]),
+                      );
+                    },
                     loading: () => const Center(child: CircularProgressIndicator()),
-                    error: (e, _) => Center(child: Text('搜索失败: $e')),
+                    error: (_, _) => _buildErrorState(),
                   ),
           ),
         ],
       ),
     );
+  }
+
+  Widget _buildNoResultState() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.search_off, size: 56, color: AppColors.textSecondary.withValues(alpha: 0.5)),
+          const SizedBox(height: 12),
+          const Text('未找到相关书籍', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 32),
+            child: Text(
+              '可尝试更换关键词；若所有书源均被禁用，请到书源管理中开启',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorState() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.cloud_off, size: 56, color: AppColors.textSecondary),
+          const SizedBox(height: 12),
+          const Text('搜索失败，请检查网络后重试', style: TextStyle(fontSize: 15, color: AppColors.textSecondary)),
+          const SizedBox(height: 12),
+          FilledButton.tonal(
+            onPressed: () => _startSearch(_keyword),
+            child: const Text('重试'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 删除单条历史
+  Future<void> _removeHistory(String keyword) async {
+    await _historyService.remove(keyword);
+    if (mounted) {
+      setState(() {
+        _historyFuture = _historyService.getRecent();
+      });
+    }
   }
 
   Widget _buildEmptyState() {
@@ -161,12 +218,14 @@ class _SearchPageState extends ConsumerState<SearchPage> {
               spacing: 8,
               runSpacing: 8,
               children: history
-                  .map((keyword) => ActionChip(
+                  .map((keyword) => InputChip(
                         avatar: const Icon(Icons.history, size: 16, color: AppColors.tint),
                         label: Text(keyword, style: const TextStyle(fontSize: 13)),
                         backgroundColor: isDark ? AppColors.darkSurface : Colors.white,
                         side: const BorderSide(color: AppColors.separator),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                        deleteIcon: Icon(Icons.close, size: 14, color: AppColors.textSecondary.withValues(alpha: 0.6)),
+                        onDeleted: () => _removeHistory(keyword),
                         onPressed: () {
                           _searchController.text = keyword;
                           _search(keyword);

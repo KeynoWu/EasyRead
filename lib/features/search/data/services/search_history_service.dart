@@ -48,6 +48,21 @@ class SearchHistoryService {
     await box.put('keywords', jsonEncode(recent));
   }
 
+  /// 删除单条搜索历史
+  Future<void> remove(String keyword) {
+    final task = _queue.then((_) => _removeNow(keyword));
+    _queue = task.then((_) {}, onError: (_) {});
+    return task;
+  }
+
+  Future<void> _removeNow(String keyword) async {
+    final box = await _box();
+    final recent = await getRecent();
+    if (recent.remove(keyword)) {
+      await box.put('keywords', jsonEncode(recent));
+    }
+  }
+
   /// 清空历史
   Future<void> clear() async {
     final box = await _box();
