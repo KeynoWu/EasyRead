@@ -17,7 +17,11 @@ class _FakeTester extends TestBookSource {
       : usableBySource = usableBySource ?? {};
 
   @override
-  Future<BookSourceTestResult> testSearch(BookSource source, String keyword) async {
+  Future<BookSourceTestResult> testSearch(
+    BookSource source,
+    String keyword, {
+    dio.CancelToken? cancelToken,
+  }) async {
     await Future<void>.delayed(delay);
     final usable = usableBySource[source.name] ?? true;
     return BookSourceTestResult(
@@ -154,7 +158,11 @@ class CancelTokenStub {
 /// 恒抛超时的测试器
 class _AlwaysTimeoutTester extends TestBookSource {
   @override
-  Future<BookSourceTestResult> testSearch(BookSource source, String keyword) async {
+  Future<BookSourceTestResult> testSearch(
+    BookSource source,
+    String keyword, {
+    dio.CancelToken? cancelToken,
+  }) async {
     throw TimeoutException('模拟超时');
   }
 }

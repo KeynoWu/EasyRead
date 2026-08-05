@@ -33,7 +33,7 @@ class BookSourceCard extends StatelessWidget {
     return Card(
       color: selected ? AppColors.tint.withValues(alpha: 0.08) : null,
       child: InkWell(
-        onTap: selectionMode ? onTap : onTap,
+        onTap: onTap,
         onLongPress: onLongPress,
         borderRadius: BorderRadius.circular(14),
         child: Padding(

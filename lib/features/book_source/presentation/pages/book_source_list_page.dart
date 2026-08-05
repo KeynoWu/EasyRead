@@ -39,6 +39,9 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
   final Set<String> _selectedIds = {};
   bool _bulkBusy = false;
 
+  /// 当前筛选下的可见书源 id（build 时更新，供全选使用）
+  List<String> _visibleIds = const [];
+
   Future<void> _openEditor({String? sourceId}) async {
     final repo = ref.read(bookSourceRepositoryProvider);
     final source = sourceId != null ? await repo.getById(sourceId) : null;
@@ -50,6 +53,11 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
       ),
     );
     if (changed == true) {
+      // 书源规则可能已修改，旧检测结果失效，清除待重测
+      if (sourceId != null) {
+        await ref.read(bookSourceTestStoreProvider).remove(sourceId);
+        ref.invalidate(bookSourceTestRecordsProvider);
+      }
       ref.invalidate(bookSourceListProvider);
     }
   }
@@ -242,20 +250,17 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
             ? [
                 TextButton(
                   onPressed: () {
-                    // 全选/取消全选
-                    final records = recordsAsync.value ?? {};
-                    ref.read(bookSourceListProvider).whenData((sources) {
-                      final visible =
-                          _applyView(sources, records).map((s) => s.id);
-                      setState(() {
-                        if (_selectedIds.length == visible.length && visible.isNotEmpty) {
-                          _selectedIds.clear();
-                        } else {
-                          _selectedIds
-                            ..clear()
-                            ..addAll(visible);
-                        }
-                      });
+                    // 全选/取消全选（基于当前筛选下的可见列表）
+                    final visible = _visibleIds;
+                    setState(() {
+                      if (visible.isNotEmpty &&
+                          _selectedIds.containsAll(visible)) {
+                        _selectedIds.clear();
+                      } else {
+                        _selectedIds
+                          ..clear()
+                          ..addAll(visible);
+                      }
                     });
                   },
                   child: const Text('全选'),
@@ -288,6 +293,7 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
         data: (sources) => recordsAsync.when(
           data: (records) {
             final view = _applyView(sources, records);
+            _visibleIds = [for (final s in view) s.id];
             return Column(
               children: [
                 if (!_selectionMode) _buildFilterBar(isDark, records),
@@ -350,7 +356,12 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
                       child: ChoiceChip(
                         label: Text(filter.label),
                         selected: _filter == filter,
-                        onSelected: (_) => setState(() => _filter = filter),
+                        onSelected: (_) => setState(() {
+                          // 切换筛选退出多选：避免已选 ID 作用于不可见的源
+                          _filter = filter;
+                          _selectionMode = false;
+                          _selectedIds.clear();
+                        }),
                         labelStyle: TextStyle(
                           fontSize: 12,
                           color: _filter == filter

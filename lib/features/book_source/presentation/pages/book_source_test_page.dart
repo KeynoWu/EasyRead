@@ -148,9 +148,23 @@ class _BookSourceTestPageState extends ConsumerState<BookSourceTestPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Icon(Icons.task_alt, size: 56, color: summary != null && summary.unusable == 0 ? Colors.green : AppColors.tint),
+          Icon(
+            _cancelled ? Icons.stop_circle_outlined : Icons.task_alt,
+            size: 56,
+            color: _cancelled
+                ? AppColors.textSecondary
+                : (summary != null && summary.unusable == 0
+                    ? Colors.green
+                    : AppColors.tint),
+          ),
           const SizedBox(height: 12),
-          Text('检测完成', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: titleColor)),
+          Text(
+            _cancelled ? '检测已停止' : '检测完成',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: titleColor),
+          ),
+          if (_cancelled)
+            Text('已检测 $_done / $_total，结果已保存，可随时再次检测',
+                style: TextStyle(color: subColor, fontSize: 13)),
           const SizedBox(height: 24),
           _SummaryRow(label: '检测书源', value: '${summary?.total ?? _done}'),
           _SummaryRow(label: '可用', value: '${summary?.usable ?? _usable}', color: Colors.green),

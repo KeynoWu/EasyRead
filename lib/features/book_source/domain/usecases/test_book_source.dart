@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import '../../../search/data/repositories/search_repository_impl.dart';
 import '../../../search/domain/repositories/search_repository.dart';
 import '../entities/book_source.dart';
@@ -23,7 +24,11 @@ class TestBookSource {
       : _searchRepo = searchRepo ?? SearchRepositoryImpl();
 
   /// 用关键词测试书源搜索是否正常
-  Future<BookSourceTestResult> testSearch(BookSource source, String keyword) async {
+  Future<BookSourceTestResult> testSearch(
+    BookSource source,
+    String keyword, {
+    CancelToken? cancelToken,
+  }) async {
     if (source.searchUrl == null || source.bookListRule == null) {
       return const BookSourceTestResult(
         success: false,
@@ -31,7 +36,11 @@ class TestBookSource {
       );
     }
     try {
-      final results = await _searchRepo.searchWithSource(keyword, source);
+      final results = await _searchRepo.searchWithSource(
+        keyword,
+        source,
+        cancelToken: cancelToken,
+      );
       if (results.isEmpty) {
         return const BookSourceTestResult(
           success: false,

@@ -18,8 +18,6 @@ class BatchTestProgress {
     required this.current,
     required this.result,
   });
-
-  int get usableCount => result.usable ? 1 : 0;
 }
 
 /// 批量检测汇总
@@ -89,6 +87,8 @@ class BatchTestBookSources {
         final source = testable[index];
 
         final record = await _testOne(source, cancelToken);
+        // 取消后在途请求的结果不落库，避免已取消的源被标记为不可用
+        if (cancelToken?.isCancelled ?? false) return;
         await store.save(source.id, record);
         done++;
         if (record.usable) {
@@ -126,7 +126,7 @@ class BatchTestBookSources {
     final stopwatch = Stopwatch()..start();
     try {
       final result = await tester
-          .testSearch(source, testKeyword)
+          .testSearch(source, testKeyword, cancelToken: cancelToken)
           .timeout(perSourceTimeout);
       stopwatch.stop();
       return BookSourceTestRecord(
