@@ -39,7 +39,18 @@ class _HeaderCapturingClient implements DioClient {
     return {};
   }
 
-  @override
+    @override
+  Future<Map<String, List<String>>> postFormHeaders(
+    String url, {
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    CancelToken? cancelToken,
+  }) async {
+    return {};
+  }
+
+@override
   Future<String> postForm(
     String url, {
     Map<String, String>? headers,

@@ -120,6 +120,29 @@ class DioClient {
     return _decodeBody(response.data, charset);
   }
 
+  /// POST 表单请求并返回响应头（书源登录等场景，部分接口需 POST 才能 Set-Cookie）
+  Future<Map<String, List<String>>> postFormHeaders(
+    String url, {
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    CancelToken? cancelToken,
+  }) async {
+    final response = await _send(
+      'POST',
+      url,
+      headers: {
+        ...?headers,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      data: body,
+      sourceId: sourceId,
+      responseType: ResponseType.bytes,
+      cancelToken: cancelToken,
+    );
+    return response.headers.map;
+  }
+
   /// 按 charset 解码响应字节
   static String _decodeBody(dynamic data, String? charset) {
     // 仅接受字节列表；异常类型不产出噪音文本

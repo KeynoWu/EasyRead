@@ -41,12 +41,29 @@ class SearchRepositoryImpl implements SearchRepository {
           headers['Cookie'] = cached.cookie;
         } else {
           try {
-            final loginHeaders = await _client.getResponseHeaders(
-              source.loginUrl!,
-              headers: headers.isEmpty ? null : headers,
-              sourceId: source.id,
-              cancelToken: cancelToken,
-            );
+            // loginUrl 支持 GET 或 Legado POST 格式（URL,{json}）
+            final loginSpec = _parseSearchUrl(source.loginUrl!);
+            final loginPath = loginSpec?.url ?? source.loginUrl!;
+            final loginUrl = _resolveUrl(source.bookSourceUrl, loginPath);
+            final Map<String, List<String>> loginHeaders;
+            if (loginSpec != null &&
+                loginSpec.method == 'POST' &&
+                loginSpec.body != null) {
+              loginHeaders = await _client.postFormHeaders(
+                loginUrl,
+                headers: headers.isEmpty ? null : headers,
+                body: loginSpec.body,
+                sourceId: source.id,
+                cancelToken: cancelToken,
+              );
+            } else {
+              loginHeaders = await _client.getResponseHeaders(
+                loginUrl,
+                headers: headers.isEmpty ? null : headers,
+                sourceId: source.id,
+                cancelToken: cancelToken,
+              );
+            }
             final setCookies = loginHeaders['set-cookie'] ?? const [];
             if (setCookies.isNotEmpty) {
               final cookie = setCookies
