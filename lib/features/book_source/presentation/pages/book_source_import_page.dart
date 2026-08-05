@@ -72,7 +72,7 @@ class BookSourceImportPage extends ConsumerWidget {
     final controller = TextEditingController();
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('输入书源地址'),
         content: TextField(
           controller: controller,
@@ -81,7 +81,7 @@ class BookSourceImportPage extends ConsumerWidget {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('取消'),
           ),
           FilledButton(
@@ -89,23 +89,27 @@ class BookSourceImportPage extends ConsumerWidget {
               final url = controller.text.trim();
               if (url.isEmpty) return;
               if (!_isValidHttpUrl(url)) {
-                ScaffoldMessenger.of(context).showSnackBar(
+                ScaffoldMessenger.of(dialogContext).showSnackBar(
                   const SnackBar(content: Text('请输入有效的 http/https 地址')),
                 );
                 return;
               }
-              Navigator.pop(context); // 关闭输入对话框
+              Navigator.pop(dialogContext); // 关闭输入对话框
               debugPrint('[ImportPage] 显示加载指示, url=$url');
               // 网络请求期间显示加载指示与进度，避免"无响应"假象
               final cancelToken = CancelToken();
               var progressText = '连接中...';
               var dialogOpen = true;
               void Function(void Function())? updateDialog;
+              BuildContext? loadingContextRef;
               showDialog(
+                // 用页面级 context（_showUrlDialog 的参数）打开加载指示，
+                // 不能用输入对话框的 dialogContext（已 pop，await 后不可用）
                 context: context,
                 barrierDismissible: false,
-                builder: (dialogContext) => StatefulBuilder(
-                  builder: (dialogContext, setState) {
+                builder: (loadingContext) => StatefulBuilder(
+                  builder: (loadingContext, setState) {
+                    loadingContextRef = loadingContext;
                     updateDialog = setState;
                     return AlertDialog(
                       content: Column(
@@ -121,7 +125,7 @@ class BookSourceImportPage extends ConsumerWidget {
                           onPressed: () {
                             dialogOpen = false;
                             cancelToken.cancel();
-                            Navigator.pop(dialogContext);
+                            Navigator.pop(loadingContext);
                           },
                           child: const Text('取消'),
                         ),
@@ -145,8 +149,13 @@ class BookSourceImportPage extends ConsumerWidget {
                 },
               );
               debugPrint('[ImportPage] fromUrl 返回: $result');
+              // 用页面级 context 判断存活（输入对话框的 context 已失效）
               if (!context.mounted) return;
-              if (dialogOpen) Navigator.pop(context); // 关闭加载指示
+              if (dialogOpen &&
+                  loadingContextRef != null &&
+                  loadingContextRef!.mounted) {
+                Navigator.pop(loadingContextRef!); // 关闭加载指示
+              }
               debugPrint('[ImportPage] 加载指示已关闭');
               if (!context.mounted) return;
               _handleResult(context, result);
