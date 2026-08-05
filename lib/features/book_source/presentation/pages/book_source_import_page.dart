@@ -30,7 +30,7 @@ class BookSourceImportPage extends ConsumerWidget {
             onTap: () async {
               final result = await useCase.fromFile();
               if (!context.mounted) return;
-              _handleResult(context, result);
+              _handleResult(context, ref, result);
             },
           ),
           const SizedBox(height: 12),
@@ -40,7 +40,7 @@ class BookSourceImportPage extends ConsumerWidget {
             iconBg: AppColors.tintSoft,
             title: '从网络链接导入',
             subtitle: '输入书源订阅地址',
-            onTap: () => _showUrlDialog(context, useCase),
+            onTap: () => _showUrlDialog(context, ref, useCase),
           ),
           const SizedBox(height: 12),
           _ImportButton(
@@ -52,7 +52,7 @@ class BookSourceImportPage extends ConsumerWidget {
             onTap: () async {
               final result = await useCase.fromClipboard();
               if (!context.mounted) return;
-              _handleResult(context, result);
+              _handleResult(context, ref, result);
             },
           ),
         ],
@@ -68,7 +68,7 @@ class BookSourceImportPage extends ConsumerWidget {
         uri.host.isNotEmpty;
   }
 
-  void _showUrlDialog(BuildContext context, ImportBookSource useCase) {
+  void _showUrlDialog(BuildContext context, WidgetRef ref, ImportBookSource useCase) {
     final controller = TextEditingController();
     showDialog(
       context: context,
@@ -100,6 +100,8 @@ class BookSourceImportPage extends ConsumerWidget {
               final cancelToken = CancelToken();
               var progressText = '连接中...';
               var dialogOpen = true;
+              var lockedTotal = 0; // 进度分母（锁定后固定，仅 gzip 超头时单调跟随）
+              var hasTotal = false;
               void Function(void Function())? updateDialog;
               BuildContext? loadingContextRef;
               showDialog(
@@ -139,11 +141,18 @@ class BookSourceImportPage extends ConsumerWidget {
                 cancelToken: cancelToken,
                 onProgress: (received, total) {
                   if (!dialogOpen) return;
-                  // gzip 响应里 total 可能是压缩大小，received 是解压大小，
-                  // 展示总量时用两者较大值，避免出现已下载超过总量。
-                  final displayTotal = total > received ? total : received;
-                  final text = total > 0
-                      ? '已下载 ${(received / 1024 / 1024).toStringAsFixed(1)}MB / ${(displayTotal / 1024 / 1024).toStringAsFixed(1)}MB'
+                  // 分母固定：首次收到有效 total 后锁定，后续不再变化。
+                  // gzip 响应时 received（解压后）可能超过 total（压缩大小），
+                  // 此时分母单调递增跟随，避免出现分子超过 100% 的错乱。
+                  if (total > 0) {
+                    if (!hasTotal) {
+                      hasTotal = true;
+                      lockedTotal = total;
+                    }
+                    if (received > lockedTotal) lockedTotal = received;
+                  }
+                  final text = hasTotal
+                      ? '已下载 ${(received / 1024 / 1024).toStringAsFixed(1)}MB / ${(lockedTotal / 1024 / 1024).toStringAsFixed(1)}MB'
                       : '已下载 ${(received / 1024 / 1024).toStringAsFixed(1)}MB...';
                   updateDialog?.call(() => progressText = text);
                 },
@@ -158,7 +167,7 @@ class BookSourceImportPage extends ConsumerWidget {
               }
               debugPrint('[ImportPage] 加载指示已关闭');
               if (!context.mounted) return;
-              _handleResult(context, result);
+              _handleResult(context, ref, result);
             },
             child: const Text('导入'),
           ),
@@ -167,7 +176,7 @@ class BookSourceImportPage extends ConsumerWidget {
     );
   }
 
-  void _handleResult(BuildContext context, dynamic result) {
+  void _handleResult(BuildContext context, WidgetRef ref, dynamic result) {
     if (!context.mounted) return;
     result.fold(
       (error) => ScaffoldMessenger.of(context).showSnackBar(
@@ -178,6 +187,8 @@ class BookSourceImportPage extends ConsumerWidget {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('成功导入 $count 个书源')),
         );
+        // 刷新书源列表：导入前 provider 可能已有缓存，不失效则列表停留在旧数据
+        ref.invalidate(bookSourceListProvider);
         if (context.mounted) Navigator.pop(context);
       },
     );
