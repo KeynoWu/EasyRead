@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:html/parser.dart' as parser;
 import 'package:html/dom.dart' as dom;
+import 'js_template.dart';
 import 'json_path.dart';
 
 /// 规则执行引擎 — 支持多种规则样式从 HTML 提取数据。
@@ -14,6 +15,7 @@ import 'json_path.dart';
 class RuleEngine {
   static String? extractText(String html, String? rule) {
     if (rule == null || rule.isEmpty) return null;
+    if (_isJsRule(rule)) return JsTemplateEngine.extract(html, rule);
     if (_isJsonPath(rule)) {
       final values = JsonPathEngine.queryString(html, rule);
       if (values.isEmpty) return null;
@@ -32,6 +34,10 @@ class RuleEngine {
 
   static List<String> extractTextList(String html, String? rule) {
     if (rule == null || rule.isEmpty) return [];
+    if (_isJsRule(rule)) {
+      final value = JsTemplateEngine.extract(html, rule);
+      return value == null ? [] : [value];
+    }
     if (_isJsonPath(rule)) {
       return JsonPathEngine.queryString(html, rule)
           .map((v) => _jsonToString(v))
@@ -57,6 +63,8 @@ class RuleEngine {
 
   static List<dynamic> extractElements(String html, String? rule) {
     if (rule == null || rule.isEmpty) return [];
+    // JS 模板不子集化列表定位（bookList 级 JS 规则复杂，字段级走 getElementText）
+    if (_isJsRule(rule)) return [];
     if (_isJsonPath(rule)) {
       return JsonPathEngine.queryString(html, rule);
     }
@@ -67,6 +75,13 @@ class RuleEngine {
 
   static String? getElementText(dynamic element, String? rule) {
     if (element == null || rule == null || rule.isEmpty) return null;
+    if (_isJsRule(rule)) {
+      // 字段级 JS 规则：在元素 HTML 上下文中执行
+      if (element is dom.Element) {
+        return JsTemplateEngine.extract(element.outerHtml, rule);
+      }
+      return null;
+    }
     if (_isJsonPath(rule)) {
       final values = JsonPathEngine.instance.query(element, rule);
       if (values.isEmpty) return null;
@@ -80,6 +95,22 @@ class RuleEngine {
 
   /// 规则是否 JSONPath 模式（以 $ 开头）
   static bool _isJsonPath(String rule) => rule.trim().startsWith(r'$');
+
+  /// 规则是否 JS 模板模式（js 标签包裹或 at-js 前缀）
+  static bool _isJsRule(String rule) {
+    final t = rule.trim();
+    return t.startsWith('<js') || t.startsWith('@js:');
+  }
+
+  /// 在文档/元素内按规则查询元素（供 JS 模板引擎复用级联/前缀语法）
+  static List<dom.Element> queryIn(dom.Node root, String rule) {
+    return _queryAll(root, _parseRule(rule));
+  }
+
+  /// 提取元素值（伪属性 text/ownText 或 HTML 属性）
+  static String? valueOf(dom.Element element, String? attr) {
+    return _extractValue(element, attr);
+  }
 
   /// JSON 值转展示文本：标量直出，对象/数组序列化
   static String? _jsonToString(dynamic value) {
@@ -196,10 +227,9 @@ class _RuleParts {
 
   List<_CascadeStep>? get cascadeSteps {
     if (_cascade != null) return _cascade;
-    if (selector.contains('@')) {
-      return _parseCascade(selector);
-    }
-    return null;
+    // 单段也解析：class./tag./id. 前缀与 .N 索引在单选择器中同样需要转换
+    final steps = _parseCascade(selector);
+    return steps.isEmpty ? null : steps;
   }
 }
 
