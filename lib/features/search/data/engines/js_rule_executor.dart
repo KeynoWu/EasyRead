@@ -25,11 +25,16 @@ class JsRuleExecutor {
   static JsEngineManager? _manager;
   static int _engineSeq = 0;
 
-  static Future<JsEngineManager> _getManager() async {
+  static Future<JsEngineManager?> _getManager() async {
     if (_manager != null) return _manager!;
-    final m = await JsEngineManager.create();
-    _manager = m;
-    return m;
+    try {
+      final m = await JsEngineManager.create();
+      _manager = m;
+      return m;
+    } catch (_) {
+      // 平台无 quickjs 原生库（如 iOS native assets 不可用）→ 降级
+      return null;
+    }
   }
 
   /// 回收（强制销毁）：死循环/异常后引擎 isolate 不可复用
@@ -55,6 +60,7 @@ class JsRuleExecutor {
     final cache = _extractLiterals(html, body);
 
     final manager = await _getManager();
+    if (manager == null) return null;
     final engine = await manager.createEngine('jsrule${_engineSeq++}');
     try {
       await engine.eval(_prelude(html, baseUrl, cache));
