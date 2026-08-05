@@ -17,6 +17,7 @@ import '../widgets/bookmark_sheet.dart';
 import '../widgets/chapter_search_sheet.dart';
 import '../widgets/note_sheet.dart';
 import '../../../../features/search/domain/entities/search_result.dart';
+import '../../../book_source/presentation/providers/book_source_provider.dart';
 import '../widgets/chapter_catalog_sheet.dart';
 import '../widgets/reader_settings_panel.dart';
 import '../widgets/source_switcher_sheet.dart';
@@ -174,12 +175,24 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     final chapter = state.currentChapter;
     if (chapter == null) return;
 
+    // 过滤已禁用的书源：搜索时的替代源列表是静态快照，
+    // 源可能在搜索后被禁用，换源时不应再展示/使用
+    final repo = ref.read(bookSourceRepositoryProvider);
+    final enabledAlternatives = <SourceOption>[];
+    for (final alt in _alternatives) {
+      final source = await repo.getById(alt.sourceId);
+      if (source != null && source.enabled) {
+        enabledAlternatives.add(alt);
+      }
+    }
+    if (!mounted) return;
+
     final selected = await showModalBottomSheet<SourceOption>(
       context: context,
       builder: (_) => SourceSwitcherSheet(
         currentSourceId: chapter.sourceId ?? widget.sourceId ?? '',
         currentSourceName: widget.sourceId != null ? '当前书源' : '当前书源',
-        alternatives: _alternatives,
+        alternatives: enabledAlternatives,
       ),
     );
     if (selected != null && mounted && selected.bookId.isNotEmpty) {
