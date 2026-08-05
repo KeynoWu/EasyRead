@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../data/services/search_history_service.dart';
+import '../../domain/usecases/search_books.dart';
 import '../providers/search_provider.dart';
 import '../widgets/search_result_item.dart';
 
@@ -117,19 +118,80 @@ class _SearchPageState extends ConsumerState<SearchPage> {
             child: _keyword.isEmpty
                 ? _buildEmptyState()
                 : ref.watch(searchResultsProvider(_keyword)).when(
-                    data: (results) {
-                      if (results.isEmpty) {
-                        return _buildNoResultState();
-                      }
-                      return ListView.builder(
-                        itemCount: results.length,
-                        itemBuilder: (context, index) =>
-                            SearchResultItem(result: results[index]),
-                      );
-                    },
-                    loading: () => const Center(child: CircularProgressIndicator()),
+                    data: (progress) => _buildResults(progress),
+                    loading: () => _buildSearchingState(),
                     error: (_, _) => _buildErrorState(),
                   ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildResults(SearchProgress progress) {
+    final results = progress.results;
+    return Column(
+      children: [
+        Expanded(
+          child: results.isEmpty
+              ? (progress.finished
+                  ? _buildNoResultState()
+                  : const Center(child: CircularProgressIndicator()))
+              : ListView.builder(
+                  itemCount: results.length,
+                  itemBuilder: (context, index) =>
+                      SearchResultItem(result: results[index]),
+                ),
+        ),
+        // 搜索进度条：流式显示已完成的源数
+        if (!progress.finished)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: LinearProgressIndicator(
+                    value: progress.total == 0
+                        ? 0
+                        : progress.completed / progress.total,
+                    minHeight: 4,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '${progress.completed}/${progress.total} 源',
+                  style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildSearchingState() {
+    // loading 态：显示可搜索的书源数量，避免"正在转圈但不知道在等什么"
+    final count = ref.watch(enabledSearchableCountProvider).value;
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const CircularProgressIndicator(),
+          const SizedBox(height: 16),
+          Text(
+            count == null
+                ? '正在搜索…'
+                : (count == 0
+                    ? '没有可用的书源，请到书源管理中开启'
+                    : '正在从 $count 个书源搜索…'),
+            style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
           ),
         ],
       ),

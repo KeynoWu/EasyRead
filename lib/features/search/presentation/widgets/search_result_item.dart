@@ -19,37 +19,42 @@ class SearchResultItem extends ConsumerStatefulWidget {
 class _SearchResultItemState extends ConsumerState<SearchResultItem> {
   bool _busy = false;
 
-  Future<void> _openReader() async {
+  /// 以指定源打开阅读器（[source] 为空用主源；否则用替代源）
+  Future<void> _openReader({SourceOption? source}) async {
     if (_busy) return;
     _busy = true;
     final result = widget.result;
+    final bookId = source?.bookId ?? result.bookId;
+    final detailUrl = source?.detailUrl ?? result.detailUrl;
+    final sourceId = source?.sourceId ?? result.sourceId;
     try {
-      final alts = jsonEncode(result.alternatives.map((a) => {
+      // 替代书源列表 = 全部替代源（含当前选中源，用于阅读器内继续换源）
+      final alts = result.alternatives.map((a) => {
         'bookId': a.bookId,
         'sourceId': a.sourceId,
         'sourceName': a.sourceName,
         'detailUrl': a.detailUrl,
-      }).toList());
+      }).toList();
       await ref.read(bookshelfRepositoryProvider).save(Book(
-        id: result.bookId,
+        id: bookId,
         name: result.name,
         author: result.author,
         coverUrl: result.coverUrl,
-        sourceId: result.sourceId,
+        sourceId: sourceId,
         lastReadAt: DateTime.now(),
       ));
       await ref.read(bookDetailServiceProvider).save(
-        result.bookId,
-        detailUrl: result.detailUrl,
-        alternativesJson: alts,
+        bookId,
+        detailUrl: detailUrl,
+        alternativesJson: jsonEncode(alts),
       );
       ref.invalidate(bookshelfListProvider);
       if (!mounted) return;
       context.push(
-        '/reader/${Uri.encodeComponent(result.bookId)}'
-        '?sourceId=${Uri.encodeComponent(result.sourceId)}'
-        '&detailUrl=${Uri.encodeComponent(result.detailUrl ?? '')}'
-        '&alternatives=${Uri.encodeComponent(alts)}',
+        '/reader/${Uri.encodeComponent(bookId)}'
+        '?sourceId=${Uri.encodeComponent(sourceId)}'
+        '&detailUrl=${Uri.encodeComponent(detailUrl ?? '')}'
+        '&alternatives=${Uri.encodeComponent(jsonEncode(alts))}',
       );
     } catch (_) {
       if (mounted) {
@@ -59,6 +64,52 @@ class _SearchResultItemState extends ConsumerState<SearchResultItem> {
       }
     } finally {
       _busy = false;
+    }
+  }
+
+  /// 弹出替代书源列表，选中后以该源直接打开
+  Future<void> _showSourcePicker() async {
+    final result = widget.result;
+    final selected = await showModalBottomSheet<SourceOption>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(
+                '选择书源 — ${result.name}',
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+              ),
+            ),
+            const Divider(height: 1),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.check, color: AppColors.tint, size: 20),
+                    title: Text(result.sourceName, style: const TextStyle(fontSize: 14)),
+                    subtitle: const Text('当前书源', style: TextStyle(fontSize: 12)),
+                    onTap: () => Navigator.pop(context),
+                  ),
+                  for (final alt in result.alternatives)
+                    ListTile(
+                      leading: const Icon(Icons.swap_horiz, color: AppColors.tint, size: 20),
+                      title: Text(alt.sourceName, style: const TextStyle(fontSize: 14)),
+                      subtitle: const Text('点击以此书源打开', style: TextStyle(fontSize: 12)),
+                      onTap: () => Navigator.pop(context, alt),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (selected != null && mounted) {
+      await _openReader(source: selected);
     }
   }
 
@@ -125,18 +176,29 @@ class _SearchResultItemState extends ConsumerState<SearchResultItem> {
                             style: const TextStyle(fontSize: 11, color: AppColors.tint),
                           ),
                         ),
-                        // 多源指示
+                        // 多源指示：点击弹出换源列表
                         if (result.alternatives.isNotEmpty) ...[
                           const SizedBox(width: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: isDark ? AppColors.darkSeparator : AppColors.separator.withValues(alpha: 0.4),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              '+${result.alternatives.length} 源',
-                              style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                          InkWell(
+                            onTap: _showSourcePicker,
+                            borderRadius: BorderRadius.circular(6),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: isDark ? AppColors.darkSeparator : AppColors.separator.withValues(alpha: 0.4),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    '+${result.alternatives.length} 源',
+                                    style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                                  ),
+                                  const SizedBox(width: 2),
+                                  const Icon(Icons.arrow_drop_down, size: 14, color: AppColors.textSecondary),
+                                ],
+                              ),
                             ),
                           ),
                         ],

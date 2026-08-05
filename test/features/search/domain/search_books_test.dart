@@ -153,4 +153,76 @@ void main() {
     expect(results.length, 1);
     expect(results.first.sourceId, 'src1');
   });
+
+
+
+  group('searchWithProgress 流式搜索', () {
+    const secondSource = BookSource(
+      id: 'src2',
+      name: '测试源2',
+      bookSourceUrl: 'http://example2.com',
+      rules: {'searchUrl': 'http://example2.com/search?q={{key}}'},
+    );
+
+    test('每源完成产出累积结果，最终去重并追加替代源', () async {
+      mockSourceRepo = MockBookSourceRepository([testSource, secondSource]);
+      useCase = SearchBooks(searchRepo: mockSearchRepo, sourceRepo: mockSourceRepo);
+
+      final progress = <SearchProgress>[];
+      await for (final p in useCase.searchWithProgress('测试')) {
+        progress.add(p);
+      }
+
+      expect(progress, isNotEmpty);
+      final last = progress.last;
+      expect(last.finished, isTrue);
+      expect(last.total, 2);
+      expect(last.completed, 2);
+      // 两个源返回同名书 → 去重为 1 条，后到的成为替代源
+      expect(last.results.length, 1);
+      expect(last.results.first.alternatives.length, 1);
+      expect(last.results.first.alternatives.first.sourceId, anyOf('src1', 'src2'));
+    });
+
+    test('completed 单调递增，结果不倒退', () async {
+      mockSourceRepo = MockBookSourceRepository([testSource, secondSource]);
+      useCase = SearchBooks(searchRepo: mockSearchRepo, sourceRepo: mockSourceRepo);
+
+      final progress = <SearchProgress>[];
+      await for (final p in useCase.searchWithProgress('测试')) {
+        progress.add(p);
+      }
+
+      final completedSeq = progress.map((p) => p.completed).toList();
+      for (var i = 1; i < completedSeq.length; i++) {
+        expect(completedSeq[i] >= completedSeq[i - 1], isTrue,
+            reason: 'completed 必须单调不减: $completedSeq');
+      }
+      expect(completedSeq.last, 2);
+    });
+
+    test('无可用书源立即完成（total=0）', () async {
+      mockSourceRepo = MockBookSourceRepository([]);
+      useCase = SearchBooks(searchRepo: mockSearchRepo, sourceRepo: mockSourceRepo);
+
+      final progress = <SearchProgress>[];
+      await for (final p in useCase.searchWithProgress('测试')) {
+        progress.add(p);
+      }
+
+      expect(progress.length, 1);
+      expect(progress.single.finished, isTrue);
+      expect(progress.single.total, 0);
+      expect(progress.single.results, isEmpty);
+    });
+
+    test('空关键词立即完成', () async {
+      final progress = <SearchProgress>[];
+      await for (final p in useCase.searchWithProgress('  ')) {
+        progress.add(p);
+      }
+      expect(progress.single.finished, isTrue);
+    });
+  });
+
 }

@@ -1,6 +1,5 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../domain/entities/search_result.dart';
 import '../../domain/usecases/search_books.dart';
 import '../../../book_source/presentation/providers/book_source_provider.dart';
 import '../../data/repositories/search_repository_impl.dart';
@@ -29,14 +28,20 @@ final searchCancelTokenProvider =
   SearchCancelTokenNotifier.new,
 );
 
-/// autoDispose：旧关键词不再被监听即销毁，避免被取消的旧批次（结果为 []）
-/// 留在缓存中，用户重新搜索同一关键词时拿到的是新批次而非旧空结果。
-final searchResultsProvider = FutureProvider.autoDispose
-    .family<List<SearchResult>, String>((ref, keyword) async {
-  if (keyword.trim().isEmpty) return [];
+/// 可参与搜索的书源数量（loading 态展示"正在从 N 个书源搜索"）
+final enabledSearchableCountProvider = FutureProvider<int>((ref) async {
+  final sources = await ref.watch(bookSourceRepositoryProvider).getEnabled();
+  return sources.where((s) => s.searchable).length;
+});
+
+/// 流式搜索结果：每个书源完成即产出累积结果，慢源不阻塞首屏。
+/// autoDispose：旧关键词不再被监听即销毁；取消令牌在新批次启动时读取。
+final searchResultsProvider = StreamProvider.autoDispose
+    .family<SearchProgress, String>((ref, keyword) {
+  if (keyword.trim().isEmpty) return Stream.value(SearchProgress.empty);
   final searchBooks = ref.watch(searchBooksProvider);
   // 仅在新批次启动时读取当前令牌；用 ref.read 而非 ref.watch，
   // 避免令牌更新触发旧关键词批次意外重启
   final cancelToken = ref.read(searchCancelTokenProvider);
-  return searchBooks.executeMultiSource(keyword, cancelToken: cancelToken);
+  return searchBooks.searchWithProgress(keyword, cancelToken: cancelToken);
 });
