@@ -82,15 +82,30 @@ class RuleEngine {
       }
       return null;
     }
+    if (element is! dom.Element) {
+      // JSON 值条目：字段规则按 JSONPath 处理
+      // （支持 $.name 绝对、.name / name 相对路径）
+      final normalized = _normalizeJsonPath(rule);
+      final values = JsonPathEngine.instance.query(element, normalized);
+      if (values.isEmpty) return null;
+      return _jsonToString(values.first);
+    }
     if (_isJsonPath(rule)) {
       final values = JsonPathEngine.instance.query(element, rule);
       if (values.isEmpty) return null;
       return _jsonToString(values.first);
     }
     final parts = _parseRule(rule);
-    final targets = _queryAll(element as dom.Element, parts);
+    final targets = _queryAll(element, parts);
     if (targets.isEmpty) return null;
     return _extractValue(targets.first, parts.attr);
+  }
+
+  /// 相对路径规范化：`name` → `.name`（JsonPathEngine 需 . 或 [ 开头）
+  static String _normalizeJsonPath(String rule) {
+    final t = rule.trim();
+    if (t.startsWith(r'$') || t.startsWith('.') || t.startsWith('[')) return t;
+    return '.$t';
   }
 
   /// 规则是否 JSONPath 模式（以 $ 开头）
@@ -227,11 +242,17 @@ class _RuleParts {
 
   List<_CascadeStep>? get cascadeSteps {
     if (_cascade != null) return _cascade;
-    // 单段也解析：class./tag./id. 前缀与 .N 索引在单选择器中同样需要转换
+    // 缓存解析结果：搜索结果循环中同一字段规则被每条目重复访问
+    final cached = _cascadeCache[selector];
+    if (cached != null) return cached.isEmpty ? null : cached;
     final steps = _parseCascade(selector);
+    _cascadeCache[selector] = steps;
     return steps.isEmpty ? null : steps;
   }
 }
+
+/// 级联解析缓存（规则字符串有限，防每次查询重复解析）
+final Map<String, List<_CascadeStep>> _cascadeCache = {};
 
 class _CascadeStep {
   final String css;
@@ -255,11 +276,17 @@ _CascadeStep? _parseStep(String segment) {
   var css = segment;
   int? index;
 
-  // 索引后缀：选择器.N
-  final indexMatch = RegExp(r'\.(\d+)$').firstMatch(css);
-  if (indexMatch != null) {
-    index = int.parse(indexMatch.group(1)!);
-    css = css.substring(0, indexMatch.start);
+  // 索引后缀仅对 Legado 前缀形式生效（class./id./tag.）：
+  // 避免误伤纯 CSS 类名（如 .item2 是类名而非索引）
+  final isPrefixed = css.startsWith('class.') ||
+      css.startsWith('id.') ||
+      css.startsWith('tag.');
+  if (isPrefixed) {
+    final indexMatch = RegExp(r'\.(\d+)$').firstMatch(css);
+    if (indexMatch != null) {
+      index = int.parse(indexMatch.group(1)!);
+      css = css.substring(0, indexMatch.start);
+    }
   }
   if (css.isEmpty) return null;
 

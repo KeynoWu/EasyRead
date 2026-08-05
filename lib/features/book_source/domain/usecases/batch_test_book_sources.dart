@@ -114,6 +114,9 @@ class BatchTestBookSources {
             timeoutCount++;
           } else if (error.startsWith('请求失败')) {
             networkErrorCount++;
+          } else if (error.contains('未解析到结果')) {
+            // 请求成功但规则匹配不到内容（规则与站点不匹配）
+            noResultCount++;
           } else if (error.contains('规则')) {
             configErrorCount++;
           } else {

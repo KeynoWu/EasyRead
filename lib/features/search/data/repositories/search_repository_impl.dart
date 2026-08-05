@@ -75,10 +75,9 @@ class SearchRepositoryImpl implements SearchRepository {
           cancelToken: cancelToken,
         );
       } else {
-        // GET 模板
-        final url = spec?.body != null
-            ? searchUrl
-            : searchUrl.replaceAll('{{key}}', Uri.encodeComponent(keyword));
+        // GET 模板：无论是否解析出 JSON 参数，{{key}} 都要替换
+        final url =
+            searchUrl.replaceAll('{{key}}', Uri.encodeComponent(keyword));
         html = await _client.getString(
           url,
           headers: headers.isEmpty ? null : headers,
@@ -134,19 +133,28 @@ class SearchRepositoryImpl implements SearchRepository {
     if (comma <= 0 || comma >= raw.length - 2) return null;
     final url = raw.substring(0, comma).trim();
     if (url.isEmpty) return null;
+    final params = _decodeParams(raw.substring(comma + 1));
+    if (params == null) return null;
+    return _SearchSpec(
+      url: url,
+      method: (params['method']?.toString() ?? 'GET').toUpperCase(),
+      body: params['body']?.toString(),
+      charset: params['charset']?.toString(),
+    );
+  }
+
+  /// 解析参数 JSON：先按标准双引号解析；失败再尝试 Legado 单引号格式
+  /// （盲替换单引号为双引号，body 值内含单引号时按失败处理退化 GET）
+  static Map<String, dynamic>? _decodeParams(String jsonStr) {
     try {
-      // Legado 参数用单引号 JSON，Dart jsonDecode 需双引号（值内部无引号场景安全替换）
-      final params =
-          jsonDecode(raw.substring(comma + 1).replaceAll("'", '"')) as Map<String, dynamic>;
-      return _SearchSpec(
-        url: url,
-        method: (params['method']?.toString() ?? 'GET').toUpperCase(),
-        body: params['body']?.toString(),
-        charset: params['charset']?.toString(),
-      );
+      return jsonDecode(jsonStr) as Map<String, dynamic>;
     } catch (_) {
-      // 参数解析失败按普通 GET URL 处理
-      return null;
+      // 单引号 JSON（Legado 惯例）转双引号后重试
+      try {
+        return jsonDecode(jsonStr.replaceAll("'", '"')) as Map<String, dynamic>;
+      } catch (_) {
+        return null;
+      }
     }
   }
 

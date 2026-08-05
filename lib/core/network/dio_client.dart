@@ -122,7 +122,8 @@ class DioClient {
 
   /// 按 charset 解码响应字节
   static String _decodeBody(dynamic data, String? charset) {
-    if (data is! List<int>) return data?.toString() ?? '';
+    // 仅接受字节列表；异常类型不产出噪音文本
+    if (data is! List<int>) return '';
     final lower = charset?.toLowerCase();
     if (lower == 'gbk' || lower == 'gb2312' || lower == 'gb18030') {
       try {
@@ -209,6 +210,12 @@ class DioClient {
             nextUri.host.toLowerCase() != currentUri.host.toLowerCase() ||
             nextUri.port != currentUri.port) {
           activeHeaders = _sanitizeRedirectHeaders(activeHeaders);
+        }
+        // HTTP 语义：301/302/303 重定向后 POST 应转为 GET 并丢弃 body；
+        // 仅 307/308 保持原方法与 body
+        if (statusCode == 301 || statusCode == 302 || statusCode == 303) {
+          method = 'GET';
+          data = null;
         }
         current = nextUri.toString();
         currentUri = nextUri;
@@ -317,7 +324,8 @@ class DioClient {
 
   static Map<String, String>? _sanitizeRedirectHeaders(Map<String, String>? headers) {
     if (headers == null) return null;
-    const allowed = {'accept', 'accept-language', 'user-agent', 'accept-encoding', 'connection'};
+    // content-type 为非敏感请求头：跨域重定向后仍可能以 POST 重发 body（307/308）
+    const allowed = {'accept', 'accept-language', 'user-agent', 'accept-encoding', 'connection', 'content-type'};
     final sanitized = <String, String>{};
     for (final entry in headers.entries) {
       if (allowed.contains(entry.key.toLowerCase())) {

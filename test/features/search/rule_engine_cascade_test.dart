@@ -58,4 +58,26 @@ void main() {
       expect(RuleEngine.extractText(html, 'id.main@tag.h3@text'), '标题');
     });
   });
+
+
+  group('审查修复回归', () {
+    test('JSON 值条目 + 相对路径字段规则（.name）', () {
+      const json = '[{"name": "书A", "detail": {"url": "http://x/1"}}]';
+      final items = RuleEngine.extractElements(json, r'$[*]');
+      expect(items.length, 1);
+      expect(RuleEngine.getElementText(items[0], '.name'), '书A');
+      expect(RuleEngine.getElementText(items[0], 'detail.url'), 'http://x/1');
+      expect(RuleEngine.getElementText(items[0], r'$.name'), '书A');
+    });
+
+    test('纯 CSS 类名以数字结尾不被误当索引', () {
+      const html = '<div class="item2"><h3>标题</h3></div>';
+      expect(RuleEngine.extractText(html, 'div.item2'), '标题');
+      // 前缀形式索引仍生效
+      expect(RuleEngine.extractText(html, 'class.item2'), '标题');
+      const listHtml = '<div class="box"><span>a</span><span>b</span></div>';
+      expect(RuleEngine.extractText(listHtml, 'tag.span.1@text'), 'b');
+    });
+  });
+
 }

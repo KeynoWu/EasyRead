@@ -70,4 +70,20 @@ void main() {
       expect(RuleEngine.extractText('[{"n": 1}]', r'$[0].n'), '1');
     });
   });
+
+
+  group('审查修复回归', () {
+    const html = '<div class="item"><img src="http://c/1.jpg"><h3>书名</h3></div>';
+
+    test('双引号字符串参数', () {
+      expect(JsTemplateEngine.extract(html, '@js:java.get("tag.h3@text")'), '书名');
+      expect(JsTemplateEngine.extract(html, '@js:java.get("tag.img", "src")'), 'http://c/1.jpg');
+    });
+
+    test('CSS 类名数字结尾不误判（JS 模板内）', () {
+      const h = '<div class="item2"><h3>X</h3></div>';
+      expect(JsTemplateEngine.extract(h, '@js:java.get("tag.h3@text")'), 'X');
+    });
+  });
+
 }

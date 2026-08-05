@@ -43,18 +43,18 @@ class JsTemplateEngine {
         vars[m.group(1)!] = (m.group(3) ?? m.group(4) ?? '').toString();
       }
 
-      // 按出现顺序提取 java.* 调用
+      // 按出现顺序提取 java.* 调用（参数支持单/双引号字面量与变量）
       final callRe = RegExp(
-          r"java\.(get|getElement|setContent)\(\s*('([^']*)'|([A-Za-z_]\w*))(?:,\s*'([^']*)')?\s*\)");
+          "java\\.(get|getElement|setContent)\\(\\s*('([^']*)'|\"([^\"]*)\"|([A-Za-z_]\\w*))(?:,\\s*('([^']*)'|\"([^\"]*)\"))?\\s*\\)");
       var searchFrom = 0;
       while (true) {
         final match = callRe.firstMatch(body.substring(searchFrom));
         if (match == null) break;
         final call = _Call(
           method: match.group(1)!,
-          arg: match.group(3) ?? match.group(4) ?? '',
-          isLiteral: match.group(3) != null,
-          attr: match.group(5),
+          arg: match.group(3) ?? match.group(4) ?? match.group(5) ?? '',
+          isLiteral: match.group(3) != null || match.group(4) != null,
+          attr: match.group(7) ?? match.group(8),
         );
         // 处理该调用前的赋值语句：x = java.get(...) 或 x = '...'
         final prefix = body.substring(0, searchFrom + match.start);
