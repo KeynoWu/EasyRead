@@ -50,6 +50,8 @@ dependencies:
   screen_brightness: ^2.1.11
   fast_gbk: ^1.0.0
   flutter_secure_storage: ^10.3.1
+  easy_quickjs:
+    path: third_party/quickjs
 dev_dependencies:
   flutter_test:
     sdk: flutter

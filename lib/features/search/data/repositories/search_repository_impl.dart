@@ -4,6 +4,9 @@ import '../../../../core/network/dio_client.dart';
 import '../../../../features/book_source/domain/entities/book_source.dart';
 import '../../domain/entities/search_result.dart';
 import '../../domain/repositories/search_repository.dart';
+import 'package:html/dom.dart' as dom;
+import '../engines/js_rule_executor.dart';
+import '../engines/js_template.dart';
 import '../engines/rule_engine.dart';
 
 class SearchRepositoryImpl implements SearchRepository {
@@ -110,15 +113,15 @@ class SearchRepositoryImpl implements SearchRepository {
         final item = items[i];
         if (item == null) continue;
 
-        final name = RuleEngine.getElementText(item, source.bookNameRule);
+        final name = await _extractField(item, source.bookNameRule, html);
         if (name == null || name.isEmpty) continue;
 
-        final detailUrl = RuleEngine.getElementText(item, source.bookDetailUrlRule);
+        final detailUrl = await _extractField(item, source.bookDetailUrlRule, html);
         results.add(SearchResult(
           bookId: _stableBookId(source.id, detailUrl, i),
           name: name,
-          author: RuleEngine.getElementText(item, source.bookAuthorRule),
-          coverUrl: RuleEngine.getElementText(item, source.coverUrlRule),
+          author: await _extractField(item, source.bookAuthorRule, html),
+          coverUrl: await _extractField(item, source.coverUrlRule, html),
           detailUrl: detailUrl,
           sourceId: source.id,
           sourceName: source.name,
@@ -132,6 +135,22 @@ class SearchRepositoryImpl implements SearchRepository {
       if (e is DioException && e.type == DioExceptionType.cancel) return [];
       return [];
     }
+  }
+
+  /// 提取条目字段：模板 JS 同步走 RuleEngine；完整 JS（含 ajax/正则等）
+  /// 走 quickjs 异步执行器；CSS/JSONPath 走原路径。
+  Future<String?> _extractField(dynamic item, String? rule, String pageHtml) async {
+    if (rule == null || rule.isEmpty) return null;
+    if (RuleEngine.isJsRule(rule)) {
+      if (JsTemplateEngine.canHandle(rule)) {
+        return RuleEngine.getElementText(item, rule);
+      }
+      if (item is dom.Element) {
+        return JsRuleExecutor.execute(item.outerHtml, rule);
+      }
+      return null;
+    }
+    return RuleEngine.getElementText(item, rule);
   }
 
   /// 基于详情 URL 生成稳定书 ID：同一本书在不同搜索中保持同一 ID，

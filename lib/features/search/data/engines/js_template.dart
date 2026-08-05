@@ -25,6 +25,13 @@ class JsTemplateEngine {
     'while (',
   ];
 
+  /// 该规则是否属于模板子集可处理范围（无 ajax/浏览器/正则 match 等）
+  static bool canHandle(String rawRule) {
+    final body = _scriptBody(rawRule);
+    if (body == null) return false;
+    return !unsupportedMarkers.any(body.contains);
+  }
+
   /// 执行 JS 模板规则，返回提取值；不支持/解析失败返回 null
   static String? extract(String html, String rawRule) {
     final body = _scriptBody(rawRule);

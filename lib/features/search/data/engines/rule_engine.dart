@@ -111,6 +111,9 @@ class RuleEngine {
   /// 规则是否 JSONPath 模式（以 $ 开头）
   static bool _isJsonPath(String rule) => rule.trim().startsWith(r'$');
 
+  /// 规则是否 JS 模式（js 标签包裹或 at-js 前缀）
+  static bool isJsRule(String rule) => _isJsRule(rule);
+
   /// 规则是否 JS 模板模式（js 标签包裹或 at-js 前缀）
   static bool _isJsRule(String rule) {
     final t = rule.trim();
