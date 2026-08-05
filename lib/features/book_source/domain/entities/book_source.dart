@@ -9,20 +9,50 @@ class BookSource {
   final bool enabled;
   final Map<String, dynamic> rules;
 
-  String? get searchUrl => rules['searchUrl'] as String?;
-  String? get bookListRule => rules['bookList'] as String?;
-  String? get bookNameRule => rules['bookName'] as String?;
-  String? get bookAuthorRule => rules['bookAuthor'] as String?;
-  String? get coverUrlRule => rules['coverUrl'] as String?;
-  String? get bookDetailUrlRule => rules['bookDetailUrl'] as String?;
-  String? get contentUrl => rules['contentUrl'] as String?;
-  String? get chapterContentRule => rules['chapterContent'] as String?;
-  String? get chapterListRule => rules['chapterList'] as String?;
-  String? get chapterNameRule => rules['chapterName'] as String?;
-  String? get chapterUrlRule => rules['chapterUrl'] as String?;
+  String? get searchUrl => _rule('searchUrl');
+  String? get bookListRule => _rule('bookList');
+  String? get bookNameRule => _rule('bookName');
+  String? get bookAuthorRule => _rule('bookAuthor');
+  String? get coverUrlRule => _rule('coverUrl');
+  String? get bookDetailUrlRule => _rule('bookDetailUrl');
+  String? get contentUrl => _rule('contentUrl');
+  String? get chapterContentRule => _rule('chapterContent');
+  String? get chapterListRule => _rule('chapterList');
+  String? get chapterNameRule => _rule('chapterName');
+  String? get chapterUrlRule => _rule('chapterUrl');
   String? get loginUrl => rules['loginUrl'] as String?;
   int? get searchWeight => parseWeight(rules['weight']);
   bool get searchable => parseBool(rules['searchable']) ?? true;
+
+  /// Legado/阅读 3.0 规则容器名 → 内部字段名。
+  /// 兼容嵌套结构：搜索规则在 ruleSearch、目录在 ruleToc、正文在 ruleContent。
+  static const Map<String, (String, String)> _nestedAliases = {
+    'searchUrl': ('ruleSearch', 'url'),
+    'bookList': ('ruleSearch', 'bookList'),
+    'bookName': ('ruleSearch', 'name'),
+    'bookAuthor': ('ruleSearch', 'author'),
+    'coverUrl': ('ruleSearch', 'coverUrl'),
+    'bookDetailUrl': ('ruleSearch', 'bookUrl'),
+    'chapterList': ('ruleToc', 'chapterList'),
+    'chapterName': ('ruleToc', 'chapterName'),
+    'chapterUrl': ('ruleToc', 'chapterUrl'),
+    'chapterContent': ('ruleContent', 'content'),
+  };
+
+  /// 读取规则字段：优先顶层直接字段，其次 Legado 嵌套容器内字段
+  String? _rule(String key) {
+    final direct = rules[key];
+    if (direct is String && direct.trim().isNotEmpty) return direct;
+    final alias = _nestedAliases[key];
+    if (alias != null) {
+      final container = rules[alias.$1];
+      if (container is Map) {
+        final nested = container[alias.$2];
+        if (nested is String && nested.trim().isNotEmpty) return nested;
+      }
+    }
+    return null;
+  }
 
   static int? parseWeight(dynamic value) {
     if (value is num) return value.toInt();

@@ -141,15 +141,12 @@ class BookSourceImportPage extends ConsumerWidget {
                 cancelToken: cancelToken,
                 onProgress: (received, total) {
                   if (!dialogOpen) return;
-                  // 分母固定：首次收到有效 total 后锁定，后续不再变化。
-                  // gzip 响应时 received（解压后）可能超过 total（压缩大小），
-                  // 此时分母单调递增跟随，避免出现分子超过 100% 的错乱。
-                  if (total > 0) {
-                    if (!hasTotal) {
-                      hasTotal = true;
-                      lockedTotal = total;
-                    }
-                    if (received > lockedTotal) lockedTotal = received;
+                  // 分母固定：首次收到有效 total 后锁定，不再变化。
+                  // （gzip 响应时 received 为解压后大小，可能超过压缩的
+                  // total，此时分子超分母是正常现象，分母保持服务器总量）
+                  if (total > 0 && !hasTotal) {
+                    hasTotal = true;
+                    lockedTotal = total;
                   }
                   final text = hasTotal
                       ? '已下载 ${(received / 1024 / 1024).toStringAsFixed(1)}MB / ${(lockedTotal / 1024 / 1024).toStringAsFixed(1)}MB'

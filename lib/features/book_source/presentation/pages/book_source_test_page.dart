@@ -170,6 +170,14 @@ class _BookSourceTestPageState extends ConsumerState<BookSourceTestPage> {
           _SummaryRow(label: '可用', value: '${summary?.usable ?? _usable}', color: Colors.green),
           _SummaryRow(label: '不可用', value: '${summary?.unusable ?? _unusable}', color: Colors.redAccent),
           if ((summary?.skipped ?? 0) > 0) _SummaryRow(label: '跳过（无搜索能力/已禁用）', value: '${summary?.skipped}'),
+          if ((summary?.timeoutCount ?? 0) > 0)
+            _SummaryRow(label: '不可用 · 超时', value: '${summary?.timeoutCount}', color: Colors.orange),
+          if ((summary?.networkErrorCount ?? 0) > 0)
+            _SummaryRow(label: '不可用 · 网络失败', value: '${summary?.networkErrorCount}', color: Colors.orange),
+          if ((summary?.configErrorCount ?? 0) > 0)
+            _SummaryRow(label: '不可用 · 规则缺失', value: '${summary?.configErrorCount}', color: Colors.orange),
+          if ((summary?.noResultCount ?? 0) > 0)
+            _SummaryRow(label: '不可用 · 规则不匹配/无结果', value: '${summary?.noResultCount}', color: Colors.orange),
           const Spacer(),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),

@@ -27,11 +27,21 @@ class BatchTestSummary {
   final int unusable;
   final int skipped;
 
+  /// 失败原因分类（不可用源的 error 归类计数）
+  final int timeoutCount;
+  final int networkErrorCount;
+  final int noResultCount;
+  final int configErrorCount;
+
   const BatchTestSummary({
     required this.total,
     required this.usable,
     required this.unusable,
     required this.skipped,
+    this.timeoutCount = 0,
+    this.networkErrorCount = 0,
+    this.noResultCount = 0,
+    this.configErrorCount = 0,
   });
 }
 
@@ -77,6 +87,10 @@ class BatchTestBookSources {
     var done = 0;
     var usable = 0;
     var unusable = 0;
+    var timeoutCount = 0;
+    var networkErrorCount = 0;
+    var noResultCount = 0;
+    var configErrorCount = 0;
     var nextIndex = 0;
 
     Future<void> worker() async {
@@ -95,6 +109,16 @@ class BatchTestBookSources {
           usable++;
         } else {
           unusable++;
+          final error = record.error ?? '';
+          if (error.contains('超时')) {
+            timeoutCount++;
+          } else if (error.startsWith('请求失败')) {
+            networkErrorCount++;
+          } else if (error.contains('规则')) {
+            configErrorCount++;
+          } else {
+            noResultCount++;
+          }
         }
         onProgress?.call(BatchTestProgress(
           done: done,
@@ -116,6 +140,10 @@ class BatchTestBookSources {
       usable: usable,
       unusable: unusable,
       skipped: skipped,
+      timeoutCount: timeoutCount,
+      networkErrorCount: networkErrorCount,
+      noResultCount: noResultCount,
+      configErrorCount: configErrorCount,
     );
   }
 
