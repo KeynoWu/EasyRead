@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'package:html/parser.dart' as parser;
 import 'package:html/dom.dart' as dom;
+import 'json_path.dart';
 
 /// 规则执行引擎 — 支持多种规则样式从 HTML 提取数据。
 ///
@@ -12,6 +14,11 @@ import 'package:html/dom.dart' as dom;
 class RuleEngine {
   static String? extractText(String html, String? rule) {
     if (rule == null || rule.isEmpty) return null;
+    if (_isJsonPath(rule)) {
+      final values = JsonPathEngine.queryString(html, rule);
+      if (values.isEmpty) return null;
+      return _jsonToString(values.first);
+    }
     final doc = parser.parse(html);
     return _extractTextFromDoc(doc, rule);
   }
@@ -25,6 +32,13 @@ class RuleEngine {
 
   static List<String> extractTextList(String html, String? rule) {
     if (rule == null || rule.isEmpty) return [];
+    if (_isJsonPath(rule)) {
+      return JsonPathEngine.queryString(html, rule)
+          .map((v) => _jsonToString(v))
+          .where((t) => t != null && t.isNotEmpty)
+          .cast<String>()
+          .toList();
+    }
     final doc = parser.parse(html);
     final parts = _parseRule(rule);
     final elements = _queryAll(doc, parts);
@@ -41,19 +55,38 @@ class RuleEngine {
     return _extractTextFromDoc(doc, rule);
   }
 
-  static List<dom.Element?> extractElements(String html, String? rule) {
+  static List<dynamic> extractElements(String html, String? rule) {
     if (rule == null || rule.isEmpty) return [];
+    if (_isJsonPath(rule)) {
+      return JsonPathEngine.queryString(html, rule);
+    }
     final doc = parser.parse(html);
     final parts = _parseRule(rule);
     return _queryAll(doc, parts);
   }
 
-  static String? getElementText(dom.Element? element, String? rule) {
+  static String? getElementText(dynamic element, String? rule) {
     if (element == null || rule == null || rule.isEmpty) return null;
+    if (_isJsonPath(rule)) {
+      final values = JsonPathEngine.instance.query(element, rule);
+      if (values.isEmpty) return null;
+      return _jsonToString(values.first);
+    }
     final parts = _parseRule(rule);
-    final targets = _queryAll(element, parts);
+    final targets = _queryAll(element as dom.Element, parts);
     if (targets.isEmpty) return null;
     return _extractValue(targets.first, parts.attr);
+  }
+
+  /// 规则是否 JSONPath 模式（以 $ 开头）
+  static bool _isJsonPath(String rule) => rule.trim().startsWith(r'$');
+
+  /// JSON 值转展示文本：标量直出，对象/数组序列化
+  static String? _jsonToString(dynamic value) {
+    if (value == null) return null;
+    if (value is String) return value.trim();
+    if (value is num || value is bool) return value.toString();
+    return jsonEncode(value);
   }
 
   // ---- 解析 ----
