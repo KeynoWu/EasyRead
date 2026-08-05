@@ -3,7 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/parser/node_tree.dart';
 import '../providers/reader_provider.dart';
 
-/// 上下滚动阅读组件 — 整章连续滚动，滚动位置按 0~1 归一化持久化
+/// 上下滚动阅读组件 — 整章连续滚动，滚动位置按 0~1 归一化持久化。
+/// 直接渲染原始 TextNode（含标题样式），不经过翻页分段；列表懒加载。
 class ReaderScrollView extends ConsumerStatefulWidget {
   const ReaderScrollView({super.key});
 
@@ -14,6 +15,7 @@ class ReaderScrollView extends ConsumerStatefulWidget {
 class _ReaderScrollViewState extends ConsumerState<ReaderScrollView> {
   ScrollController? _controller;
   double _lastReportedOffset = -1;
+  DateTime? _lastReportTime;
   bool _restoredOffset = false;
 
   @override
@@ -36,8 +38,15 @@ class _ReaderScrollViewState extends ConsumerState<ReaderScrollView> {
     final max = controller.position.maxScrollExtent;
     if (max <= 0) return;
     final offset = (controller.position.pixels / max).clamp(0.0, 1.0);
-    // 节流：偏移变化超过 0.5% 才上报，避免每像素写 Hive
+    final now = DateTime.now();
+    // 节流：偏移变化超过 0.5% 且距上次上报至少 1 秒才上报，
+    // 避免滚动时每像素触发 ReaderState 重建与 Hive 写入
     if ((offset - _lastReportedOffset).abs() < 0.005) return;
+    if (_lastReportTime != null &&
+        now.difference(_lastReportTime!) < const Duration(seconds: 1)) {
+      return;
+    }
+    _lastReportTime = now;
     _lastReportedOffset = offset;
     ref.read(readerProvider.notifier).updateScrollOffset(offset);
   }
@@ -51,7 +60,7 @@ class _ReaderScrollViewState extends ConsumerState<ReaderScrollView> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (state.pages.isEmpty || state.currentChapter == null) {
+    if (state.nodes.isEmpty || state.currentChapter == null) {
       return const Center(child: Text('暂无内容'));
     }
 
@@ -72,9 +81,6 @@ class _ReaderScrollViewState extends ConsumerState<ReaderScrollView> {
       });
     }
 
-    // 滚动模式：直接渲染整章节点（不按页拆分）
-    final nodes = state.pages.expand((p) => p.nodes).toList();
-
     return Container(
       color: state.theme.backgroundColor,
       child: Column(
@@ -82,16 +88,15 @@ class _ReaderScrollViewState extends ConsumerState<ReaderScrollView> {
           Expanded(
             child: GestureDetector(
               onTap: notifier.toggleSettings,
-              child: SingleChildScrollView(
+              child: ListView.builder(
                 controller: _controller,
                 padding: EdgeInsets.symmetric(
                   horizontal: state.layoutConfig.horizontalPadding,
                   vertical: 16,
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: _buildNodes(nodes, state),
-                ),
+                itemCount: state.nodes.length,
+                itemBuilder: (context, index) =>
+                    _buildNode(state.nodes[index], state),
               ),
             ),
           ),
@@ -126,41 +131,12 @@ class _ReaderScrollViewState extends ConsumerState<ReaderScrollView> {
     );
   }
 
-  List<Widget> _buildNodes(List<TextNode> nodes, ReaderState state) {
-    return nodes.map((node) {
-      switch (node.type) {
-        case NodeType.paragraph:
-          return Padding(
-            padding: EdgeInsets.only(bottom: state.layoutConfig.paragraphSpacing),
-            child: Text(
-              node.text,
-              style: TextStyle(
-                fontSize: state.layoutConfig.fontSize,
-                height: state.layoutConfig.lineHeight,
-                color: state.theme.textColor,
-                fontFamily: state.layoutConfig.fontFamily,
-                fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
-              ),
-            ),
-          );
-        case NodeType.heading:
-          return Padding(
-            padding: EdgeInsets.only(bottom: state.layoutConfig.paragraphSpacing),
-            child: Text(
-              node.text,
-              style: TextStyle(
-                fontSize: state.layoutConfig.fontSize + 4,
-                fontWeight: FontWeight.w700,
-                color: state.theme.textColor,
-                fontFamily: state.layoutConfig.fontFamily,
-                fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
-              ),
-            ),
-          );
-        case NodeType.lineBreak:
-          return const SizedBox(height: 8);
-        case NodeType.text:
-          return Text(
+  Widget _buildNode(TextNode node, ReaderState state) {
+    switch (node.type) {
+      case NodeType.paragraph:
+        return Padding(
+          padding: EdgeInsets.only(bottom: state.layoutConfig.paragraphSpacing),
+          child: Text(
             node.text,
             style: TextStyle(
               fontSize: state.layoutConfig.fontSize,
@@ -169,14 +145,41 @@ class _ReaderScrollViewState extends ConsumerState<ReaderScrollView> {
               fontFamily: state.layoutConfig.fontFamily,
               fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
             ),
-          );
-        case NodeType.image:
-          return Container(
-            height: 200,
-            color: state.theme.textColor.withValues(alpha: 0.1),
-            child: const Center(child: Icon(Icons.image, size: 48)),
-          );
-      }
-    }).toList();
+          ),
+        );
+      case NodeType.heading:
+        return Padding(
+          padding: EdgeInsets.only(bottom: state.layoutConfig.paragraphSpacing),
+          child: Text(
+            node.text,
+            style: TextStyle(
+              fontSize: state.layoutConfig.fontSize + 4,
+              fontWeight: FontWeight.w700,
+              color: state.theme.textColor,
+              fontFamily: state.layoutConfig.fontFamily,
+              fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
+            ),
+          ),
+        );
+      case NodeType.lineBreak:
+        return const SizedBox(height: 8);
+      case NodeType.text:
+        return Text(
+          node.text,
+          style: TextStyle(
+            fontSize: state.layoutConfig.fontSize,
+            height: state.layoutConfig.lineHeight,
+            color: state.theme.textColor,
+            fontFamily: state.layoutConfig.fontFamily,
+            fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
+          ),
+        );
+      case NodeType.image:
+        return Container(
+          height: 200,
+          color: state.theme.textColor.withValues(alpha: 0.1),
+          child: const Center(child: Icon(Icons.image, size: 48)),
+        );
+    }
   }
 }

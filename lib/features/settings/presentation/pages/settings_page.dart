@@ -47,6 +47,19 @@ class SettingsPage extends ConsumerWidget {
               subtitle: const Text('从 JSON 备份文件恢复数据'),
               trailing: const Icon(Icons.chevron_right, size: 18),
               onTap: () async {
+                final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('确认恢复备份'),
+                    content: const Text('恢复将覆盖当前全部数据（书架、书源、进度、规则等），'
+                        '且备份文件中包含 Cookie 等敏感信息，请确认来源可信后继续。'),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+                      FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('继续恢复')),
+                    ],
+                  ),
+                );
+                if (confirmed != true || !context.mounted) return;
                 final result = await backupRestore.restoreBackup();
                 if (!context.mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(

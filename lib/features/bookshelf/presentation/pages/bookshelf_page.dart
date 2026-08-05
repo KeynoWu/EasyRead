@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:hive/hive.dart';
+import '../../../../core/database/hive_init.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../reader/data/models/reading_progress_model.dart';
+import '../../../reader/presentation/providers/reader_provider.dart';
 import '../../domain/entities/book.dart';
 import '../../domain/usecases/import_local_book.dart';
 import '../../domain/usecases/manage_book_group.dart';
@@ -21,22 +25,35 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   String _sortMode = 'time'; // time | name | added
   String? _selectedGroup; // null = 全部
   bool _editMode = false;
+  bool _importing = false;
   final Set<String> _selectedIds = {};
 
+  /// 排序/分组结果缓存：key 为 (books 集合, sortMode, 分组)，
+  /// 数据或筛选条件未变时复用，避免编辑模式每次勾选触发全量重排
+  List<Book>? _cachedSorted;
+  List<Book>? _cachedFiltered;
+  String? _cachedViewKey;
+
   Future<void> _importLocalBook() async {
-    final repo = ref.read(bookshelfRepositoryProvider);
-    final useCase = ImportLocalBook(repository: repo);
-    final books = await useCase.fromFile();
-    if (!mounted) return;
-    if (books.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已导入 ${books.length} 本书')),
-      );
-      ref.invalidate(bookshelfListProvider);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('导入失败或已取消')),
-      );
+    if (_importing) return;
+    setState(() => _importing = true);
+    try {
+      final repo = ref.read(bookshelfRepositoryProvider);
+      final useCase = ImportLocalBook(repository: repo);
+      final books = await useCase.fromFile();
+      if (!mounted) return;
+      if (books.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已导入 ${books.length} 本书')),
+        );
+        ref.invalidate(bookshelfListProvider);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('导入失败或已取消')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _importing = false);
     }
   }
 
@@ -94,9 +111,15 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     final repo = ref.read(bookshelfRepositoryProvider);
     await repo.deleteAll(_selectedIds.toList());
     final detailService = ref.read(bookDetailServiceProvider);
+    // 删除书籍时同步清理章节缓存与阅读进度，避免残留数据占用磁盘或错位续读
+    final readerRepo = ref.read(readerRepositoryProvider);
+    final progressBox = await Hive.openBox<ReadingProgressModel>(HiveBoxes.readingProgress);
     for (final id in _selectedIds) {
       await detailService.remove(id);
+      await readerRepo.clearBookCache(id);
+      await progressBox.delete(id);
     }
+    if (!mounted) return;
     setState(() {
       _editMode = false;
       _selectedIds.clear();
@@ -138,6 +161,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     for (final id in _selectedIds) {
       await groupManager.setGroup(id, group);
     }
+    if (!mounted) return;
     setState(() {
       _editMode = false;
       _selectedIds.clear();
@@ -193,55 +217,73 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
           ],
         ],
       ),
-      body: booksAsync.when(
-        data: (books) {
-          final sorted = _sortBooks(books);
-          final filtered = _selectedGroup == null
-              ? sorted
-              : ManageBookGroup(repository: ref.read(bookshelfRepositoryProvider))
-                  .filterByGroup(sorted, _selectedGroup);
-          return Column(
-            children: [
-              if (!_editMode) _buildGroupFilter(books),
-              Expanded(
-                child: filtered.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.auto_stories, size: 64, color: AppColors.tint.withValues(alpha: 0.5)),
-                            const SizedBox(height: 16),
-                            const Text('书架空空', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-                            const SizedBox(height: 8),
-                            const Text('去搜索添加书籍，或导入本地 TXT/EPUB', style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
-                            const SizedBox(height: 24),
-                            FilledButton.icon(
-                              onPressed: _importLocalBook,
-                              icon: const Icon(Icons.file_upload_outlined),
-                              label: const Text('导入本地书籍'),
-                            ),
-                          ],
-                        ),
-                      )
-                    : _isGrid
-                        ? BookshelfGrid(
-                            books: filtered,
-                            editMode: _editMode,
-                            selectedIds: _selectedIds,
-                            onBookTap: _editMode ? (b) => _toggleSelect(b.id) : _openReader,
-                          )
-                        : BookshelfList(
-                            books: filtered,
-                            editMode: _editMode,
-                            selectedIds: _selectedIds,
-                            onBookTap: _editMode ? (b) => _toggleSelect(b.id) : _openReader,
-                          ),
-              ),
-            ],
-          );
-        },
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('加载失败: $e')),
+      body: Column(
+        children: [
+          if (_importing) const LinearProgressIndicator(),
+          Expanded(
+            child: booksAsync.when(
+              data: (books) {
+                final viewKey = '${identityHashCode(books)}|$_sortMode|$_selectedGroup';
+                List<Book> sorted;
+                List<Book> filtered;
+                if (_cachedViewKey == viewKey) {
+                  sorted = _cachedSorted!;
+                  filtered = _cachedFiltered!;
+                } else {
+                  sorted = _sortBooks(books);
+                  filtered = _selectedGroup == null
+                      ? sorted
+                      : ManageBookGroup(repository: ref.read(bookshelfRepositoryProvider))
+                          .filterByGroup(sorted, _selectedGroup);
+                  _cachedSorted = sorted;
+                  _cachedFiltered = filtered;
+                  _cachedViewKey = viewKey;
+                }
+                return Column(
+                  children: [
+                    if (!_editMode) _buildGroupFilter(books),
+                    Expanded(
+                      child: filtered.isEmpty
+                          ? Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.auto_stories, size: 64, color: AppColors.tint.withValues(alpha: 0.5)),
+                                  const SizedBox(height: 16),
+                                  const Text('书架空空', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+                                  const SizedBox(height: 8),
+                                  const Text('去搜索添加书籍，或导入本地 TXT/EPUB', style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+                                  const SizedBox(height: 24),
+                                  FilledButton.icon(
+                                    onPressed: _importLocalBook,
+                                    icon: const Icon(Icons.file_upload_outlined),
+                                    label: const Text('导入本地书籍'),
+                                  ),
+                                ],
+                              ),
+                            )
+                          : _isGrid
+                              ? BookshelfGrid(
+                                  books: filtered,
+                                  editMode: _editMode,
+                                  selectedIds: _selectedIds,
+                                  onBookTap: _editMode ? (b) => _toggleSelect(b.id) : _openReader,
+                                )
+                              : BookshelfList(
+                                  books: filtered,
+                                  editMode: _editMode,
+                                  selectedIds: _selectedIds,
+                                  onBookTap: _editMode ? (b) => _toggleSelect(b.id) : _openReader,
+                                ),
+                    ),
+                  ],
+                );
+              },
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => Center(child: Text('加载失败: $e')),
+            ),
+          ),
+        ],
       ),
     );
   }

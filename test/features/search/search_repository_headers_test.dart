@@ -15,6 +15,7 @@ class _HeaderCapturingClient implements DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    CancelToken? cancelToken,
   }) async {
     lastHeaders = headers;
     return '''
@@ -30,6 +31,7 @@ class _HeaderCapturingClient implements DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    CancelToken? cancelToken,
   }) async {
     return {};
   }
@@ -39,6 +41,7 @@ class _HeaderCapturingClient implements DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    Map<String, dynamic>? extra,
     void Function(int received, int total)? onProgress,
     CancelToken? cancelToken,
   }) async {

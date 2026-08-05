@@ -15,22 +15,20 @@ class BookmarkService {
   Future<List<Bookmark>> getBookmarks(String bookId) async {
     final box = await _box();
     final bookmarks = <Bookmark>[];
-    for (final entry in box.toMap().entries) {
-      final key = entry.key.toString();
-      if (key.contains('|') && !key.startsWith('$bookId|')) {
-        continue;
-      }
+    // key 前缀过滤，不再全表 toMap 遍历 + 逐条解码
+    for (final key in box.keys) {
+      if (!key.toString().startsWith('$bookId|')) continue;
+      final raw = box.get(key);
+      if (raw == null) continue;
       try {
-        final map = jsonDecode(entry.value) as Map<String, dynamic>;
-        if (map['book_id'] == bookId) {
-          bookmarks.add(Bookmark(
-            id: map['id']?.toString() ?? '',
-            bookId: map['book_id']?.toString() ?? bookId,
-            chapterIndex: (map['chapter_index'] as num?)?.toInt() ?? 0,
-            pageIndex: (map['page_index'] as num?)?.toInt() ?? 0,
-            createdAt: DateTime.tryParse(map['created_at']?.toString() ?? '') ?? DateTime.now(),
-          ));
-        }
+        final map = jsonDecode(raw) as Map<String, dynamic>;
+        bookmarks.add(Bookmark(
+          id: map['id']?.toString() ?? '',
+          bookId: map['book_id']?.toString() ?? bookId,
+          chapterIndex: (map['chapter_index'] as num?)?.toInt() ?? 0,
+          pageIndex: (map['page_index'] as num?)?.toInt() ?? 0,
+          createdAt: DateTime.tryParse(map['created_at']?.toString() ?? '') ?? DateTime.now(),
+        ));
       } catch (_) {
         // 跳过损坏数据
       }
@@ -78,9 +76,23 @@ class BookmarkService {
     await box.delete(key);
   }
 
-  /// 检查某位置是否已有书签
+  /// 检查某位置是否已有书签（仅按该书 key 前缀过滤，避免全表遍历）
   Future<bool> exists(String bookId, int chapterIndex, int pageIndex) async {
-    final bookmarks = await getBookmarks(bookId);
-    return bookmarks.any((b) => b.chapterIndex == chapterIndex && b.pageIndex == pageIndex);
+    final box = await _box();
+    for (final key in box.keys) {
+      if (!key.toString().startsWith('$bookId|')) continue;
+      final raw = box.get(key);
+      if (raw == null) continue;
+      try {
+        final map = jsonDecode(raw) as Map<String, dynamic>;
+        if ((map['chapter_index'] as num?)?.toInt() == chapterIndex &&
+            (map['page_index'] as num?)?.toInt() == pageIndex) {
+          return true;
+        }
+      } catch (_) {
+        // 跳过损坏数据
+      }
+    }
+    return false;
   }
 }

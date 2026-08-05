@@ -62,13 +62,20 @@ class WebDavSync {
 
   Dio _dio(WebDavConfig config) {
     return Dio(BaseOptions(
-      baseUrl: config.url,
+      // 无尾斜杠的 baseUrl 拼接相对路径会丢失最后一段（https://host/dav + file → https://host/file）
+      baseUrl: _normalizeBaseUrl(config.url),
       connectTimeout: const Duration(seconds: 15),
       receiveTimeout: const Duration(seconds: 30),
       headers: {
         'Authorization': 'Basic ${base64Encode(utf8.encode('${config.username}:${config.password}'))}',
       },
     ));
+  }
+
+  /// 规范化 baseUrl：确保以 / 结尾，避免相对路径拼接丢失路径段
+  static String _normalizeBaseUrl(String url) {
+    final trimmed = url.trim();
+    return trimmed.endsWith('/') ? trimmed : '$trimmed/';
   }
 
   /// 上传备份到 WebDAV
@@ -104,9 +111,13 @@ class WebDavSync {
     }
   }
 
-  /// 测试连接
+  /// 测试连接（使用已保存配置）
   Future<String?> testConnection() async {
-    final config = await loadConfig();
+    return testConnectionWith(await loadConfig());
+  }
+
+  /// 用指定配置测试连接（表单未保存时也能测试当前输入）
+  Future<String?> testConnectionWith(WebDavConfig config) async {
     final configError = _configError(config);
     if (configError != null) return configError;
     try {

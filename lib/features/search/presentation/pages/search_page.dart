@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
@@ -22,6 +23,9 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   String _keyword = '';
   Timer? _debounce;
 
+  /// 当前批次搜索的取消令牌：换词/清空/销毁时取消，中断旧批次网络请求
+  CancelToken? _searchCancel;
+
   @override
   void initState() {
     super.initState();
@@ -31,8 +35,24 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _searchCancel?.cancel();
     _searchController.dispose();
     super.dispose();
+  }
+
+  /// 触发新搜索：取消旧批次、换上新令牌后驱动 provider。
+  /// 关键词未变时直接复用现有批次（与旧行为一致，避免同词重启）。
+  void _startSearch(String trimmed) {
+    if (trimmed == _keyword) return;
+    _searchCancel?.cancel();
+    final token = CancelToken();
+    _searchCancel = token;
+    ref.read(searchCancelTokenProvider.notifier).set(token);
+    setState(() {
+      _keyword = trimmed;
+      _historyFuture = _historyService.getRecent();
+    });
+    _historyService.add(trimmed);
   }
 
   /// 输入防抖：停止输入 350ms 后自动搜索，避免每键触发全源网络请求
@@ -40,13 +60,16 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     _debounce?.cancel();
     final trimmed = value.trim();
     if (trimmed.isEmpty) {
+      // 清空关键词：取消在途请求并回到空状态
+      _searchCancel?.cancel();
+      _searchCancel = null;
+      ref.read(searchCancelTokenProvider.notifier).set(null);
       setState(() => _keyword = '');
       return;
     }
     _debounce = Timer(const Duration(milliseconds: 350), () {
       if (!mounted) return;
-      setState(() => _keyword = trimmed);
-      _historyService.add(trimmed);
+      _startSearch(trimmed);
     });
   }
 
@@ -56,11 +79,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     if (trimmed.isEmpty) return;
     // 同步输入框文本，避免输入框与结果关键词不一致
     _searchController.text = trimmed;
-    _historyService.add(trimmed);
-    setState(() {
-      _keyword = trimmed;
-      _historyFuture = _historyService.getRecent();
-    });
+    _startSearch(trimmed);
   }
 
   void _clearHistory() async {

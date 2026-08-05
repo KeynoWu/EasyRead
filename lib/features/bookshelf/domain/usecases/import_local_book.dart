@@ -1,5 +1,5 @@
-import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:hive/hive.dart';
 import '../../../../core/database/hive_init.dart';
 import '../../../reader/data/models/chapter_model.dart';
@@ -25,6 +25,8 @@ class ImportLocalBook {
       type: FileType.custom,
       allowedExtensions: ['txt', 'epub'],
       allowMultiple: true,
+      // 必需：IO 平台默认不读取文件内容，缺省时 file.bytes 恒为 null
+      withData: true,
     );
     if (result == null || result.files.isEmpty) return [];
 
@@ -43,7 +45,9 @@ class ImportLocalBook {
     final id = DateTime.now().microsecondsSinceEpoch.toString();
 
     if (fileName.toLowerCase().endsWith('.txt')) {
-      final (title, chapters) = TxtImporter.parseTxt(bytes, fileName);
+      // 解析移入后台 isolate：大文件解码/分行耗时可达数十秒，不能卡 UI 线程。
+      // compute 要求参数/返回值可跨 isolate 发送，record 与 Uint8List 均满足。
+      final (title, chapters) = await compute(TxtImporter.parseTxtForCompute, (bytes, fileName));
       if (chapters.isEmpty) return null;
       await _saveChapters(id, chapters);
       final book = Book(
@@ -58,7 +62,7 @@ class ImportLocalBook {
     }
 
     if (fileName.toLowerCase().endsWith('.epub')) {
-      final (title, chapters) = EpubImporter.parseEpub(bytes);
+      final (title, chapters) = await compute(EpubImporter.parseEpub, bytes);
       if (chapters.isEmpty) return null;
       await _saveChapters(id, chapters);
       final book = Book(
@@ -79,17 +83,20 @@ class ImportLocalBook {
   Future<void> _saveChapters(String bookId, List<(String, String)> chapters) async {
     if (chapters.isEmpty) return;
     final box = await Hive.openBox<ChapterModel>(HiveBoxes.chapters);
-    for (int i = 0; i < chapters.length; i++) {
-      final key = '${bookId}_${localSourceId}_$i';
-      await box.put(key, ChapterModel.fromEntity(Chapter(
-        id: key,
-        bookId: bookId,
-        title: chapters[i].$1,
-        content: chapters[i].$2,
-        index: i,
-        sourceId: localSourceId,
-        cachedAt: DateTime.now(),
-      )));
-    }
+    // 批量写入：逐条 await 会放大 Hive 同步写盘的停顿，putAll 一次性提交
+    final now = DateTime.now();
+    final entries = <String, ChapterModel>{
+      for (int i = 0; i < chapters.length; i++)
+        '${bookId}_${localSourceId}_$i': ChapterModel.fromEntity(Chapter(
+          id: '${bookId}_${localSourceId}_$i',
+          bookId: bookId,
+          title: chapters[i].$1,
+          content: chapters[i].$2,
+          index: i,
+          sourceId: localSourceId,
+          cachedAt: now,
+        )),
+    };
+    await box.putAll(entries);
   }
 }

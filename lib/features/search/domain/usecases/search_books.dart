@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:dio/dio.dart';
 import '../entities/search_result.dart';
 import '../repositories/search_repository.dart';
 import '../../../../features/book_source/domain/repositories/book_source_repository.dart';
@@ -17,8 +18,9 @@ class SearchBooks {
     return searchRepo.searchWithSource(keyword.trim(), source);
   }
 
-  /// 多源聚合搜索（并发分发 + 按 书名|作者 分组去重）
-  Future<List<SearchResult>> executeMultiSource(String keyword) async {
+  /// 多源聚合搜索（并发上限 4 + 按 书名|作者 分组去重）
+  /// [cancelToken] 透传给每个源的网络请求，供上层换词时取消旧批次。
+  Future<List<SearchResult>> executeMultiSource(String keyword, {CancelToken? cancelToken}) async {
     if (keyword.trim().isEmpty) return [];
 
     final sources = (await sourceRepo.getEnabled())
@@ -27,11 +29,28 @@ class SearchBooks {
       ..sort((a, b) => (b.searchWeight ?? 0).compareTo(a.searchWeight ?? 0));
     if (sources.isEmpty) return [];
 
-    // 每个源独立超时，慢源不阻塞整体结果
-    final futures = sources.map((source) => searchRepo
-        .searchWithSource(keyword, source)
-        .timeout(const Duration(seconds: 10), onTimeout: () => <SearchResult>[]));
-    final results = await Future.wait(futures);
+    // 全局并发信号量：最多 4 个源同时请求，其余排队；
+    // 每个源独立超时（10s），慢源不阻塞整体结果；取消时底层请求被真正中断。
+    const maxConcurrent = 4;
+    final results = <List<SearchResult>>[];
+    var nextIndex = 0;
+
+    Future<void> worker() async {
+      while (true) {
+        final index = nextIndex++;
+        if (index >= sources.length) return;
+        final source = sources[index];
+        final list = await searchRepo
+            .searchWithSource(keyword, source, cancelToken: cancelToken)
+            .timeout(const Duration(seconds: 10), onTimeout: () => <SearchResult>[]);
+        results.add(list);
+      }
+    }
+
+    final workers = <Future<void>>[
+      for (var i = 0; i < maxConcurrent && i < sources.length; i++) worker(),
+    ];
+    await Future.wait(workers);
 
     // 按 书名|作者 分组：同名同作者视为同一本书，其余作为替代书源
     final groups = <String, List<SearchResult>>{};

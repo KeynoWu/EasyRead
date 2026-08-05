@@ -4,8 +4,16 @@ import 'package:fast_gbk/fast_gbk.dart';
 
 /// TXT 书籍导入器 — 解析章节并返回章节列表
 class TxtImporter {
-  /// 输入文件大小上限，防止超大 TXT 在解码和分行时耗尽内存
-  static const int _maxInputBytes = 200 * 1024 * 1024;
+  /// 输入文件大小上限，防止超大 TXT 在解码和分行时耗尽内存。
+  /// 与网络导入保持一致（50MB）：解析虽已移入后台 isolate，
+  /// 但过大的文件仍会显著拉长导入耗时并抬高内存峰值。
+  static const int _maxInputBytes = 50 * 1024 * 1024;
+
+  /// compute() 入口：parseTxt 为双参数纯函数，compute 要求单参数回调，
+  /// 将输入打包为 (bytes, fileName) 记录（record 可跨 isolate 发送）。
+  static (String, List<(String, String)>) parseTxtForCompute((Uint8List, String) input) {
+    return parseTxt(input.$1, input.$2);
+  }
 
   /// 识别编码并解析 TXT 内容
   /// 返回 (书名, 章节列表[(章节名, 内容)])
@@ -26,7 +34,10 @@ class TxtImporter {
     // 尝试 UTF-8（严格模式，失败说明不是合法 UTF-8）
     try {
       final utf8Decoded = utf8.decode(bytes, allowMalformed: false);
-      if (utf8Decoded.isNotEmpty) return utf8Decoded;
+      if (utf8Decoded.isNotEmpty) {
+        // 剥离 UTF-8 BOM（EF BB BF），避免污染书名与首章标题
+        return utf8Decoded.startsWith('\uFEFF') ? utf8Decoded.substring(1) : utf8Decoded;
+      }
     } catch (_) {
       // fall through
     }

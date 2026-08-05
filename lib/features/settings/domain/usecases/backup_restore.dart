@@ -64,83 +64,122 @@ class BackupRestore {
     return jsonEncode(backup);
   }
 
-  /// 从 JSON 字符串恢复（先清空再写入，语义为"还原"）
+  /// 从 JSON 字符串恢复（先清空再写入，语义为"还原"）。
+  ///
+  /// 两阶段执行：先在内存中完整解析并做类型校验，全部通过后才清空现有数据并写入。
+  /// 解析失败不会触碰任何现有数据；个别坏条目（类型不符）逐条跳过而非整批失败。
   Future<String?> restoreFromJson(String content) async {
     try {
-      final data = jsonDecode(content) as Map<String, dynamic>;
+      final decoded = jsonDecode(content);
+      if (decoded is! Map) {
+        return '恢复失败: 备份文件格式无效（应为 JSON 对象）';
+      }
+      final data = Map<String, dynamic>.from(decoded);
 
-      // 书架
-      final books = (data['books'] as List? ?? []);
-      await _clearBox<BookModel>(HiveBoxes.bookshelf);
-      for (final item in books) {
-        final map = item as Map<String, dynamic>;
-        await bookshelfRepo.save(Book(
+      final version = data['version'];
+      if (version != null && version is! num) {
+        return '恢复失败: 备份文件版本字段无效';
+      }
+
+      // === 第一阶段：内存中完整解析与校验（不触碰现有数据） ===
+      final books = <Book>[];
+      for (final item in (data['books'] as List? ?? const [])) {
+        if (item is! Map) continue;
+        final map = Map<String, dynamic>.from(item);
+        books.add(Book(
           id: map['id']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString(),
           name: map['name']?.toString() ?? '未命名',
           author: map['author']?.toString(),
           coverUrl: map['cover_url']?.toString(),
           sourceId: map['source_id']?.toString(),
           lastChapter: map['last_chapter']?.toString(),
-          progress: (map['progress'] as num?)?.toDouble() ?? 0.0,
+          progress: _toDouble(map['progress']),
           group: map['group']?.toString(),
           lastReadAt: DateTime.tryParse(map['last_read_at']?.toString() ?? '') ?? DateTime.now(),
         ));
       }
 
-      // 书源
-      final sources = (data['book_sources'] as List? ?? []);
-      await _clearBox<BookSourceModel>(HiveBoxes.bookSources);
-      for (final item in sources) {
-        final map = item as Map<String, dynamic>;
-        await sourceRepo.save(BookSource(
+      final sources = <BookSource>[];
+      for (final item in (data['book_sources'] as List? ?? const [])) {
+        if (item is! Map) continue;
+        final map = Map<String, dynamic>.from(item);
+        final rules = map['rules'];
+        sources.add(BookSource(
           id: map['id']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString(),
           name: map['name']?.toString() ?? '未命名书源',
           bookSourceUrl: map['book_source_url']?.toString(),
           bookSourceGroup: map['book_source_group']?.toString(),
-          enabled: map['enabled'] as bool? ?? true,
-          rules: Map<String, dynamic>.from(map['rules'] as Map? ?? {}),
+          enabled: map['enabled'] is bool ? map['enabled'] as bool : true,
+          rules: rules is Map ? Map<String, dynamic>.from(rules) : <String, dynamic>{},
         ));
       }
 
-      // 阅读进度
-      final progressMap = data['reading_progress'] as Map? ?? {};
-      await _clearBox<ReadingProgressModel>(HiveBoxes.readingProgress);
-      for (final entry in progressMap.entries) {
-        final map = (entry.value as Map).cast<String, dynamic>();
-        final progress = ReadingProgress(
-          bookId: map['book_id']?.toString() ?? entry.key.toString(),
-          chapterIndex: (map['chapter_index'] as num?)?.toInt() ?? 0,
-          paragraphOffset: (map['paragraph_offset'] as num?)?.toInt() ?? 0,
-          scrollOffset: (map['scroll_offset'] as num?)?.toDouble() ?? 0,
-          pageIndex: (map['page_index'] as num?)?.toInt() ?? 0,
-          updatedAt: DateTime.tryParse(map['updated_at']?.toString() ?? '') ?? DateTime.now(),
-        );
-        final box = await Hive.openBox<ReadingProgressModel>(HiveBoxes.readingProgress);
-        await box.put(progress.bookId, ReadingProgressModel.fromEntity(progress));
+      final progressMap = <String, ReadingProgress>{};
+      final rawProgress = data['reading_progress'];
+      if (rawProgress is Map) {
+        for (final entry in rawProgress.entries) {
+          if (entry.value is! Map) continue;
+          final map = Map<String, dynamic>.from(entry.value as Map);
+          progressMap[map['book_id']?.toString() ?? entry.key.toString()] = ReadingProgress(
+            bookId: map['book_id']?.toString() ?? entry.key.toString(),
+            chapterIndex: _toInt(map['chapter_index']),
+            paragraphOffset: _toInt(map['paragraph_offset']),
+            scrollOffset: _toDouble(map['scroll_offset']),
+            pageIndex: _toInt(map['page_index']),
+            updatedAt: DateTime.tryParse(map['updated_at']?.toString() ?? '') ?? DateTime.now(),
+          );
+        }
       }
 
       // 书签 / 笔记 / 净化规则 / 统计（JSON 字符串盒）
-      await _restoreStringBox('bookmarks', data['bookmarks']);
-      await _restoreStringBox('reading_notes', data['reading_notes']);
-      await _restoreStringBox('purification_rules', data['purification_rules']);
-      await _restoreStringBox('reading_stats', data['reading_stats']);
-      await _restoreStringBox('book_details', data['book_details']);
+      const stringBoxNames = ['bookmarks', 'reading_notes', 'purification_rules', 'reading_stats', 'book_details'];
+      final stringBoxes = <String, Map<String, dynamic>>{};
+      for (final name in stringBoxNames) {
+        final raw = data[name];
+        stringBoxes[name] = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+      }
 
-      // 订阅
-      final subs = data['source_subscriptions'] as Map? ?? {};
-      await _clearBox<SourceSubscriptionModel>(HiveBoxes.sourceSubscriptions);
-      for (final entry in subs.entries) {
-        final map = (entry.value as Map).cast<String, dynamic>();
-        final box = await Hive.openBox<SourceSubscriptionModel>(HiveBoxes.sourceSubscriptions);
-        await box.put(entry.key.toString(), SourceSubscriptionModel.fromEntity(
-          SourceSubscription(
+      final subscriptions = <String, SourceSubscription>{};
+      final rawSubs = data['source_subscriptions'];
+      if (rawSubs is Map) {
+        for (final entry in rawSubs.entries) {
+          if (entry.value is! Map) continue;
+          final map = Map<String, dynamic>.from(entry.value as Map);
+          subscriptions[entry.key.toString()] = SourceSubscription(
             id: map['id']?.toString() ?? entry.key.toString(),
             name: map['name']?.toString() ?? '未命名订阅',
             url: map['url']?.toString() ?? '',
             lastUpdatedAt: DateTime.tryParse(map['last_updated_at']?.toString() ?? ''),
             lastUpdateResult: map['last_update_result']?.toString(),
-          ),
-        ));
+          );
+        }
+      }
+
+      // === 第二阶段：解析全部通过，执行清空 + 写入 ===
+      await _clearBox<BookModel>(HiveBoxes.bookshelf);
+      for (final book in books) {
+        await bookshelfRepo.save(book);
+      }
+
+      await _clearBox<BookSourceModel>(HiveBoxes.bookSources);
+      for (final source in sources) {
+        await sourceRepo.save(source);
+      }
+
+      await _clearBox<ReadingProgressModel>(HiveBoxes.readingProgress);
+      final progressBox = await Hive.openBox<ReadingProgressModel>(HiveBoxes.readingProgress);
+      for (final progress in progressMap.values) {
+        await progressBox.put(progress.bookId, ReadingProgressModel.fromEntity(progress));
+      }
+
+      for (final entry in stringBoxes.entries) {
+        await _restoreStringBox(entry.key, entry.value);
+      }
+
+      await _clearBox<SourceSubscriptionModel>(HiveBoxes.sourceSubscriptions);
+      final subBox = await Hive.openBox<SourceSubscriptionModel>(HiveBoxes.sourceSubscriptions);
+      for (final entry in subscriptions.entries) {
+        await subBox.put(entry.key, SourceSubscriptionModel.fromEntity(entry.value));
       }
 
       return '恢复成功：${books.length} 本书，${sources.length} 个书源';
@@ -148,6 +187,10 @@ class BackupRestore {
       return '恢复失败: $e';
     }
   }
+
+  static double _toDouble(Object? value) => value is num ? value.toDouble() : 0.0;
+
+  static int _toInt(Object? value) => value is num ? value.toInt() : 0;
 
   /// 导出备份到文件
   Future<String?> exportBackup() async {
@@ -169,6 +212,8 @@ class BackupRestore {
         type: FileType.custom,
         allowedExtensions: ['json'],
         allowMultiple: false,
+        // 必需：IO 平台默认不读取文件内容，缺省时 file.bytes 恒为 null
+        withData: true,
       );
       if (result == null || result.files.isEmpty) return '未选择文件';
 

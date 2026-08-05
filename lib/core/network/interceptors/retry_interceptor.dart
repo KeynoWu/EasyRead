@@ -7,16 +7,22 @@ class RetryInterceptor extends Interceptor {
   final int _maxRetries;
   final Duration _baseDelay;
 
-  RetryInterceptor({
-    required this._dio,
-    this._maxRetries = 3,
+  RetryInterceptor(
+    this._dio, {
+    int maxRetries = 3,
     Duration? baseDelay,
-  })  : _baseDelay = baseDelay ?? const Duration(seconds: 1);
+    // ignore: prefer_initializing_formals — 私有字段不能作为命名参数，必须经公开参数赋值
+  })  : _maxRetries = maxRetries,
+        _baseDelay = baseDelay ?? const Duration(seconds: 1);
 
   @override
   Future<void> onError(DioException err, ErrorInterceptorHandler handler) async {
     final retryCount = (err.requestOptions.extra['retry_count'] as int?) ?? 0;
-    if (retryCount >= _maxRetries || !_isRetryable(err)) {
+    // 显式标记 no_retry 的请求（如订阅批量更新）不参与自动重试，
+    // 避免长任务被重试放大数倍时长
+    if (err.requestOptions.extra['no_retry'] == true ||
+        retryCount >= _maxRetries ||
+        !_isRetryable(err)) {
       return handler.next(err);
     }
     await Future.delayed(_baseDelay * (retryCount + 1));

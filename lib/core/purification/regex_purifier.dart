@@ -17,13 +17,24 @@ class PurifyRule {
 class RegexPurifier {
   final List<PurifyRule> rules;
 
+  /// 编译结果缓存（key: 大小写标志 + pattern），避免每章净化时重复编译
+  static final Map<String, RegExp> _regexCache = {};
+
   const RegexPurifier({this.rules = const []});
 
   String purify(String input) {
     var result = input;
     for (final rule in rules) {
-      result = result.replaceAll(rule.regex, rule.replacement);
+      result = result.replaceAll(_compiled(rule), rule.replacement);
     }
     return result;
+  }
+
+  static RegExp _compiled(PurifyRule rule) {
+    final key = '${rule.caseSensitive ? 1 : 0}:${rule.pattern}';
+    return _regexCache.putIfAbsent(
+      key,
+      () => RegExp(rule.pattern, caseSensitive: rule.caseSensitive),
+    );
   }
 }

@@ -30,7 +30,7 @@ void main() {
     final adapter = _CountingAdapter(404);
     dio.httpClientAdapter = adapter;
     dio.interceptors.add(RetryInterceptor(
-      dio: dio,
+      dio,
       maxRetries: 2,
       baseDelay: const Duration(milliseconds: 1),
     ));
@@ -47,7 +47,7 @@ void main() {
     final adapter = _CountingAdapter(500);
     dio.httpClientAdapter = adapter;
     dio.interceptors.add(RetryInterceptor(
-      dio: dio,
+      dio,
       maxRetries: 2,
       baseDelay: const Duration(milliseconds: 1),
     ));

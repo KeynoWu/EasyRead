@@ -68,7 +68,13 @@ class _WebDavConfigPageState extends State<WebDavConfigPage> {
   }
 
   Future<void> _test() async {
-    final result = await _sync.testConnection();
+    // 使用表单当前值测试，未保存的修改也能立即验证
+    final config = WebDavConfig(
+      url: _urlController.text.trim(),
+      username: _usernameController.text.trim(),
+      password: _passwordController.text.trim(),
+    );
+    final result = await _sync.testConnectionWith(config);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(result ?? '连接成功')),

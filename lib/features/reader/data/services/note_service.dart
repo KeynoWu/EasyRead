@@ -15,22 +15,20 @@ class NoteService {
   Future<List<ReadingNote>> getNotes(String bookId) async {
     final box = await _box();
     final notes = <ReadingNote>[];
-    for (final entry in box.toMap().entries) {
-      final key = entry.key.toString();
-      if (key.contains('|') && !key.startsWith('$bookId|')) {
-        continue;
-      }
+    // key 前缀过滤，不再全表 toMap 遍历 + 逐条解码
+    for (final key in box.keys) {
+      if (!key.toString().startsWith('$bookId|')) continue;
+      final raw = box.get(key);
+      if (raw == null) continue;
       try {
-        final map = jsonDecode(entry.value) as Map<String, dynamic>;
-        if (map['book_id'] == bookId) {
-          notes.add(ReadingNote(
-            id: map['id']?.toString() ?? '',
-            bookId: map['book_id']?.toString() ?? bookId,
-            chapterIndex: (map['chapter_index'] as num?)?.toInt() ?? 0,
-            text: map['text']?.toString() ?? '',
-            createdAt: DateTime.tryParse(map['created_at']?.toString() ?? '') ?? DateTime.now(),
-          ));
-        }
+        final map = jsonDecode(raw) as Map<String, dynamic>;
+        notes.add(ReadingNote(
+          id: map['id']?.toString() ?? '',
+          bookId: map['book_id']?.toString() ?? bookId,
+          chapterIndex: (map['chapter_index'] as num?)?.toInt() ?? 0,
+          text: map['text']?.toString() ?? '',
+          createdAt: DateTime.tryParse(map['created_at']?.toString() ?? '') ?? DateTime.now(),
+        ));
       } catch (_) {
         // 跳过损坏数据
       }

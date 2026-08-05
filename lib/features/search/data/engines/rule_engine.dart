@@ -50,9 +50,13 @@ class RuleEngine {
   }
 
   static _RuleParts _parseRule(String rule) {
-    final parts = rule.split('@');
-    if (parts.length == 2) {
-      return _RuleParts(selector: parts[0].trim(), attr: parts[1].trim());
+    // 只按最后一个 @ 分割，避免选择器属性值内含 @（如 a[href*="@"]）被误切
+    final atIndex = rule.lastIndexOf('@');
+    if (atIndex > 0 && atIndex < rule.length - 1) {
+      return _RuleParts(
+        selector: rule.substring(0, atIndex).trim(),
+        attr: rule.substring(atIndex + 1).trim(),
+      );
     }
     return _RuleParts(selector: rule.trim());
   }

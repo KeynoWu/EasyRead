@@ -14,6 +14,22 @@ class ReaderSettingsPanel extends ConsumerStatefulWidget {
 
 class _ReaderSettingsPanelState extends ConsumerState<ReaderSettingsPanel> {
   double _brightness = 0.8;
+  /// 滑杆拖动中的预览值：onChanged 只更新本地预览，onChangeEnd 才提交重排
+  double? _previewFontSize;
+  double? _previewLineHeight;
+
+  @override
+  void initState() {
+    super.initState();
+    // 进入面板时读取当前应用亮度初始化滑杆
+    ScreenBrightness().application.then((value) {
+      if (mounted) {
+        setState(() => _brightness = value.clamp(0.1, 1.0).toDouble());
+      }
+    }).catchError((_) {
+      // 平台不支持时保持默认值
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -56,11 +72,16 @@ class _ReaderSettingsPanelState extends ConsumerState<ReaderSettingsPanel> {
                 const Icon(Icons.text_fields, size: 16),
                 Expanded(
                   child: Slider(
-                    value: state.layoutConfig.fontSize,
+                    value: _previewFontSize ?? state.layoutConfig.fontSize,
                     min: 12,
                     max: 32,
                     divisions: 20,
+                    // 拖动中只更新本地预览，抬手才触发分页重排，避免逐 tick 重排
                     onChanged: (value) {
+                      setState(() => _previewFontSize = value);
+                    },
+                    onChangeEnd: (value) {
+                      _previewFontSize = null;
                       notifier.updateLayout(LayoutConfig(
                         fontSize: value,
                         lineHeight: state.layoutConfig.lineHeight,
@@ -81,11 +102,16 @@ class _ReaderSettingsPanelState extends ConsumerState<ReaderSettingsPanel> {
                 const Text('紧凑', style: TextStyle(fontSize: 12)),
                 Expanded(
                   child: Slider(
-                    value: state.layoutConfig.lineHeight,
+                    value: _previewLineHeight ?? state.layoutConfig.lineHeight,
                     min: 1.0,
                     max: 2.0,
                     divisions: 10,
+                    // 拖动中只更新本地预览，抬手才触发分页重排，避免逐 tick 重排
                     onChanged: (value) {
+                      setState(() => _previewLineHeight = value);
+                    },
+                    onChangeEnd: (value) {
+                      _previewLineHeight = null;
                       notifier.updateLayout(LayoutConfig(
                         fontSize: state.layoutConfig.fontSize,
                         lineHeight: value,

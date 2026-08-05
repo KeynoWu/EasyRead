@@ -80,6 +80,13 @@ class _PurificationRulesPageState extends ConsumerState<PurificationRulesPage> {
                 );
                 return;
               }
+              // ReDoS 预检：拒绝嵌套量词等可能灾难性回溯的模式
+              if (PurifyPatternGuard.hasCatastrophicBacktracking(patternController.text)) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('正则存在灾难性回溯风险（如嵌套量词），请简化表达式')),
+                );
+                return;
+              }
               Navigator.pop(context, true);
             },
             child: const Text('保存'),
@@ -106,6 +113,18 @@ class _PurificationRulesPageState extends ConsumerState<PurificationRulesPage> {
   }
 
   Future<void> _deleteRule(String id) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除规则'),
+        content: const Text('确定删除该净化规则吗？'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('删除')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
     await _manager.delete(id);
     _refreshPipeline();
   }

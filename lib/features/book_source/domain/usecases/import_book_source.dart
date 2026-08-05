@@ -11,6 +11,16 @@ import '../entities/book_source.dart';
 import '../repositories/book_source_repository.dart';
 import 'parse_book_source_rule.dart';
 
+/// 导入受限制（文件超限/下载超时）时抛出的专用异常，消息即用户可见文案。
+/// 与普通网络失败区分：超限/超时给出明确提示，不再伪装成"网络请求失败: TimeoutException..."。
+class ImportLimitExceeded implements Exception {
+  final String message;
+  const ImportLimitExceeded(this.message);
+
+  @override
+  String toString() => message;
+}
+
 /// 导入书源（支持 JSON 文件/网络链接/剪贴板）
 class ImportBookSource {
   final BookSourceRepository repository;
@@ -38,6 +48,8 @@ class ImportBookSource {
       type: FileType.custom,
       allowedExtensions: ['json'],
       allowMultiple: true,
+      // 必需：IO 平台默认不读取文件内容，缺省时 file.bytes 恒为 null
+      withData: true,
     );
     if (result == null) return const Left('未选择文件');
 
@@ -80,6 +92,10 @@ class ImportBookSource {
           return Right(sources);
         },
       );
+    } on ImportLimitExceeded catch (e) {
+      // 大小超限/下载超时：直接给出明确文案，不伪装成网络请求失败
+      debugPrint('[ImportBookSource] 导入受限: ${e.message}');
+      return Left(e.message);
     } on DioException catch (e) {
       if (e.type == DioExceptionType.cancel) {
         return const Left('已取消下载');
@@ -128,7 +144,7 @@ class ImportBookSource {
       internalToken.cancel();
       finish();
       if (!completer.isCompleted) {
-        completer.completeError(TimeoutException('下载超时（${totalLimit.inMinutes} 分钟上限）'));
+        completer.completeError(ImportLimitExceeded('下载超时（${totalLimit.inMinutes} 分钟上限）'));
       }
     });
 
@@ -142,7 +158,7 @@ class ImportBookSource {
               internalToken.cancel();
               finish();
               if (!completer.isCompleted) {
-                completer.completeError(TimeoutException('文件超过大小限制'));
+                completer.completeError(const ImportLimitExceeded('文件超过大小限制'));
               }
               return;
             }
@@ -157,7 +173,7 @@ class ImportBookSource {
       finish();
       if (!completer.isCompleted) {
         if (sizeExceeded) {
-          completer.completeError(TimeoutException('文件超过大小限制'));
+          completer.completeError(const ImportLimitExceeded('文件超过大小限制'));
         } else {
           completer.completeError(e);
         }

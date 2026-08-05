@@ -30,7 +30,7 @@ class DioClient {
     dio.interceptors.addAll([
       UaInterceptor(),
       RateLimitInterceptor(),
-      RetryInterceptor(dio: dio),
+      RetryInterceptor(dio),
     ]);
     return dio;
   }
@@ -42,11 +42,12 @@ class DioClient {
 
   Dio get dio => _dio;
 
-  Future<String> getString(String url, {Map<String, String>? headers, String? sourceId}) async {
+  Future<String> getString(String url, {Map<String, String>? headers, String? sourceId, CancelToken? cancelToken}) async {
     final response = await _get(
       url,
       headers: headers,
       sourceId: sourceId,
+      cancelToken: cancelToken,
     );
     return response.data.toString();
   }
@@ -56,11 +57,13 @@ class DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    CancelToken? cancelToken,
   }) async {
     final response = await _get(
       url,
       headers: headers,
       sourceId: sourceId,
+      cancelToken: cancelToken,
     );
     return response.headers.map;
   }
@@ -70,6 +73,7 @@ class DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    Map<String, dynamic>? extra,
     void Function(int received, int total)? onProgress,
     CancelToken? cancelToken,
   }) async {
@@ -77,6 +81,7 @@ class DioClient {
       url,
       headers: headers,
       sourceId: sourceId,
+      extra: extra,
       responseType: ResponseType.plain,
       // 大文件下载的空闲判定由 ImportBookSource 控制，
       // 这里用 Duration.zero 禁用 Dio 固定 receiveTimeout，避免其先于上层超时生效。
@@ -91,6 +96,7 @@ class DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    Map<String, dynamic>? extra,
     ResponseType? responseType,
     Duration? receiveTimeout,
     void Function(int received, int total)? onReceiveProgress,
@@ -105,7 +111,7 @@ class DioClient {
         current,
         options: Options(
           headers: activeHeaders,
-          extra: {'source_id': sourceId},
+          extra: {'source_id': sourceId, ...?extra},
           responseType: responseType ?? ResponseType.json,
           receiveTimeout: receiveTimeout,
           followRedirects: false,
@@ -153,7 +159,16 @@ class DioClient {
     final ipv4 = _parseIpv4(host);
     if (ipv4 != null) return !_isUnsafeIpv4(ipv4);
     if (host.contains(':')) return !_isUnsafeIpv6(host);
+    // 非标准 IP 表示（简写/八进制/十六进制/十进制整数），系统解析器会还原为
+    // 私网/回环地址（如 127.1 → 127.0.0.1、2130706433 → 127.0.0.1），一律拒绝。
+    if (_looksLikeNumericHost(host)) return false;
     return true;
+  }
+
+  /// 形如纯数字/点分数字/十六进制整数的 host，视为可疑的非标准 IP 表示。
+  static bool _looksLikeNumericHost(String host) {
+    if (RegExp(r'^[0-9]+(\.[0-9]+)*$').hasMatch(host)) return true;
+    return RegExp(r'^0[xX][0-9a-fA-F]+$').hasMatch(host);
   }
 
   static bool _isUnsafeIpv4(List<int> ipv4) {
@@ -161,6 +176,9 @@ class DioClient {
     if (ipv4[0] == 172 && ipv4[1] >= 16 && ipv4[1] <= 31) return true;
     if (ipv4[0] == 192 && ipv4[1] == 168) return true;
     if (ipv4[0] == 169 && ipv4[1] == 254) return true;
+    // CGNAT 100.64.0.0/10 与 benchmark 198.18.0.0/15：非公网可达的保留段
+    if (ipv4[0] == 100 && ipv4[1] >= 64 && ipv4[1] <= 127) return true;
+    if (ipv4[0] == 198 && (ipv4[1] == 18 || ipv4[1] == 19)) return true;
     return ipv4[0] >= 224;
   }
 
@@ -168,8 +186,35 @@ class DioClient {
     final lower = host.replaceAll('[', '').replaceAll(']', '');
     if (lower == '::1') return true;
     if (lower.startsWith('::ffff:')) {
-      final ipv4 = _parseIpv4(lower.substring(7));
+      final tail = lower.substring(7);
+      // 点分十进制映射：::ffff:127.0.0.1
+      final ipv4 = _parseIpv4(tail);
       if (ipv4 != null) return _isUnsafeIpv4(ipv4);
+      // 十六进制对映射：::ffff:7f00:1（= 127.0.0.1）
+      final parts = tail.split(':');
+      if (parts.length == 2) {
+        final mapped = _ipv4FromHexPair(parts[0], parts[1]);
+        if (mapped != null) return _isUnsafeIpv4(mapped);
+      }
+    }
+    // 完整 8 组 IPv6（Dart Uri 不压缩，需显式处理）：
+    // IPv4 映射 0:0:0:0:0:ffff:<v4> 与回环 0:0:0:0:0:0:0:1
+    if (lower.contains(':') && !lower.contains('::')) {
+      final groups = lower.split(':');
+      if (groups.length >= 7 && groups.take(5).every((g) => g == '0') && groups[5] == 'ffff') {
+        List<int>? mapped;
+        if (groups.length == 8) {
+          mapped = _ipv4FromHexPair(groups[6], groups[7]);
+        } else if (groups.length == 7) {
+          mapped = _parseIpv4(groups[6]);
+        }
+        if (mapped != null) return _isUnsafeIpv4(mapped);
+      }
+      if (groups.length == 8 &&
+          groups.take(7).every((g) => g == '0') &&
+          groups[7] == '1') {
+        return true; // ::1 完整形式
+      }
     }
     if (lower.startsWith('::')) {
       final ipv4 = _parseIpv4(lower.substring(2));
@@ -183,6 +228,14 @@ class DioClient {
       return true;
     }
     return false;
+  }
+
+  /// 将两个十六进制组（各 0~FFFF）拼成 IPv4 地址
+  static List<int>? _ipv4FromHexPair(String hiHex, String loHex) {
+    final hi = int.tryParse(hiHex, radix: 16);
+    final lo = int.tryParse(loHex, radix: 16);
+    if (hi == null || lo == null || hi > 0xFFFF || lo > 0xFFFF) return null;
+    return [hi >> 8, hi & 0xFF, lo >> 8, lo & 0xFF];
   }
 
   static Map<String, String>? _sanitizeRedirectHeaders(Map<String, String>? headers) {
@@ -202,6 +255,9 @@ class DioClient {
     if (parts.length != 4) return null;
     final result = <int>[];
     for (final part in parts) {
+      // 前导零是八进制表示（如 0177 = 127.0.0.1），非标准点分十进制。
+      // 拒绝按 IP 解析，使其落入 _looksLikeNumericHost 被拦截。
+      if (part.length > 1 && part.startsWith('0')) return null;
       final value = int.tryParse(part);
       if (value == null || value < 0 || value > 255) return null;
       result.add(value);

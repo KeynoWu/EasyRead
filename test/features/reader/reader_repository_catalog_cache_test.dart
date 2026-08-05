@@ -16,6 +16,7 @@ class _CatalogClient implements DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    CancelToken? cancelToken,
   }) async {
     catalogCalls++;
     return '<ul><li><a href="https://example.com/ch/1">第一章</a></li></ul>';
@@ -26,6 +27,7 @@ class _CatalogClient implements DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    CancelToken? cancelToken,
   }) async {
     return {};
   }
@@ -35,6 +37,7 @@ class _CatalogClient implements DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    Map<String, dynamic>? extra,
     void Function(int received, int total)? onProgress,
     CancelToken? cancelToken,
   }) async {

@@ -48,8 +48,11 @@ class EpubImporter {
       for (final (chapterTitle, href) in chapterFiles) {
         try {
           final chapterFile = _findFile(archive, href);
+          // 解压前预检：zip 头声明的 size 即解压后大小，超限直接跳过，
+          // 避免对超大章节触发整章解压
+          if (chapterFile.size > _maxChapterBytes) continue;
           final content = chapterFile.content as List<int>;
-          if (content.length > _maxChapterBytes) continue; // 跳过超大章节
+          if (content.length > _maxChapterBytes) continue; // 兜底：zip 头可能虚报大小
           final htmlContent = utf8.decode(content);
           final text = _extractTextFromHtml(htmlContent);
           if (text.isNotEmpty) {

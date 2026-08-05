@@ -153,6 +153,18 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
       return;
     }
 
+    // 保存前校验 URL 字段（空值视为未填写，跳过校验）
+    const urlFields = {'书源地址': 'url', '搜索 URL': 'searchUrl', '登录 URL': 'loginUrl'};
+    for (final entry in urlFields.entries) {
+      final text = _controllers[entry.value]!.text.trim();
+      if (text.isNotEmpty && !_isValidHttpUrl(text)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${entry.key} 需为有效的 http/https 地址')),
+        );
+        return;
+      }
+    }
+
     final rules = _buildRules();
 
     final source = BookSource(
@@ -167,6 +179,14 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
     await widget.repository.save(source);
     if (!mounted) return;
     Navigator.pop(context, true);
+  }
+
+  /// 校验 http/https 且 host 非空
+  static bool _isValidHttpUrl(String input) {
+    final uri = Uri.tryParse(input);
+    return uri != null &&
+        (uri.scheme == 'http' || uri.scheme == 'https') &&
+        uri.host.isNotEmpty;
   }
 
   @override

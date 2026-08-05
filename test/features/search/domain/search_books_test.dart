@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:easy_read/features/search/domain/entities/search_result.dart';
 import 'package:easy_read/features/search/domain/repositories/search_repository.dart';
@@ -7,7 +8,7 @@ import 'package:easy_read/features/book_source/domain/repositories/book_source_r
 
 class MockSearchRepository implements SearchRepository {
   @override
-  Future<List<SearchResult>> searchWithSource(String keyword, BookSource source) async {
+  Future<List<SearchResult>> searchWithSource(String keyword, BookSource source, {CancelToken? cancelToken}) async {
     if (keyword.isEmpty) return [];
     return [
       SearchResult(

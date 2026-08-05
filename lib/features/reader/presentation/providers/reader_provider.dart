@@ -42,6 +42,8 @@ class ReaderState {
   final String? errorMessage;
   final ReadingMode readingMode;
   final Size viewportSize;
+  /// 当前章节解析后的原始节点（滚动模式直接渲染，不经过分页分段）
+  final List<TextNode> nodes;
 
   const ReaderState({
     this.readingMode = ReadingMode.page,
@@ -56,6 +58,7 @@ class ReaderState {
     this.showSettings = false,
     this.errorMessage,
     this.viewportSize = const Size(400, 600),
+    this.nodes = const [],
   });
 
   static const Object _unset = Object();
@@ -73,6 +76,7 @@ class ReaderState {
     Object? errorMessage = _unset,
     ReadingMode? readingMode,
     Size? viewportSize,
+    List<TextNode>? nodes,
   }) {
     return ReaderState(
       currentChapter: currentChapter == _unset
@@ -91,6 +95,7 @@ class ReaderState {
           : errorMessage as String?,
       readingMode: readingMode ?? this.readingMode,
       viewportSize: viewportSize ?? this.viewportSize,
+      nodes: nodes ?? this.nodes,
     );
   }
 }
@@ -109,6 +114,24 @@ class ReaderNotifier extends Notifier<ReaderState> {
   /// 请求序号：防止快速切章时旧请求覆盖新章节
   int _loadSeq = 0;
 
+  /// 分页结果缓存：key = 章节 + LayoutConfig 各字段 + 视口尺寸，
+  /// 命中时直接返回，避免滑杆拖动/重复进入章节时重复 TextPainter 重排。
+  final Map<String, List<PageContent>> _pageCache = {};
+  static const int _pageCacheMax = 10;
+
+  /// 当前章节解析后的原始节点（分页与滚动渲染共用，避免重复解析）
+  List<TextNode>? _currentNodes;
+
+  /// 真实视口是否已上报（首次打开时为默认 Size(400,600)，延迟分页）
+  bool _viewportReported = false;
+
+  /// 进度保存防抖：连续翻页/滚动时合并写入，500ms 内只写最近一次
+  Timer? _saveDebounce;
+  ReadingProgress? _pendingProgress;
+
+  /// 书架同步串行链：同一本书的读-改-写依次执行，避免旧进度覆盖新进度
+  Future<void> _syncChain = Future.value();
+
   @override
   ReaderState build() {
     _repository = ref.watch(readerRepositoryProvider);
@@ -125,9 +148,14 @@ class ReaderNotifier extends Notifier<ReaderState> {
     _lastChapterIndex = 0;
     _lastSourceId = null;
     _lastDetailUrl = detailUrl;
+    _currentNodes = null;
+    // 重置视口上报标志：换书后等新页面 LayoutBuilder 上报真实尺寸再分页，
+    // 避免用上一本书遗留的视口尺寸分页
+    _viewportReported = false;
     state = state.copyWith(
       currentChapter: null,
       pages: const [],
+      nodes: const [],
       currentPage: 0,
       progress: null,
       catalog: null,
@@ -144,6 +172,8 @@ class ReaderNotifier extends Notifier<ReaderState> {
     String? detailUrl,
   }) async {
     final seq = ++_loadSeq;
+    // 切章前立即落盘上一章防抖合并的进度
+    unawaited(_flushProgress());
     final isNewBook = _activeBookId != bookId;
     _activeBookId = bookId;
     widgetDetailUrl = isNewBook ? detailUrl : (detailUrl ?? widgetDetailUrl);
@@ -162,15 +192,27 @@ class ReaderNotifier extends Notifier<ReaderState> {
       if (seq != _loadSeq) return; // 已被更新的请求取代
 
       final nodes = _parser.parse(chapter.content);
-      final pages = _paginate(nodes);
+      _currentNodes = nodes;
 
       final progress = await _repository.loadProgress(bookId);
       if (seq != _loadSeq) return;
 
+      // 视口未上报真实尺寸（首次打开）时延迟分页：等 setViewport 触发，避免双分页
+      final viewportReady = _viewportReported;
+      final pages = viewportReady
+          ? _paginate(nodes, chapter)
+          : const <PageContent>[];
+      final pageIndex = progress == null
+          ? 0
+          : progress.pageIndex
+              .clamp(0, pages.isEmpty ? 0 : pages.length - 1)
+              .toInt();
+
       state = state.copyWith(
         currentChapter: chapter,
+        nodes: nodes,
         pages: pages,
-        currentPage: progress?.pageIndex ?? 0,
+        currentPage: pageIndex,
         progress: progress,
         isLoading: false,
         errorMessage: null,
@@ -198,8 +240,10 @@ class ReaderNotifier extends Notifier<ReaderState> {
       }
     } catch (e) {
       if (seq == _loadSeq) {
+        _currentNodes = null;
         state = state.copyWith(
           currentChapter: null,
+          nodes: const [],
           pages: const [],
           currentPage: 0,
           progress: null,
@@ -211,27 +255,55 @@ class ReaderNotifier extends Notifier<ReaderState> {
     }
   }
 
-  /// 使用当前视口与排版配置分页
-  List<PageContent> _paginate(List<TextNode> nodes) {
+  /// 分页缓存 key：章节标识 + LayoutConfig 各字段 + 视口尺寸
+  String _pageCacheKey(Chapter chapter) {
+    final cfg = state.layoutConfig;
+    final vp = state.viewportSize;
+    return '${chapter.bookId}#${chapter.index}'
+        '|fs=${cfg.fontSize}|lh=${cfg.lineHeight}'
+        '|ps=${cfg.paragraphSpacing}|hp=${cfg.horizontalPadding}'
+        '|fw=${cfg.fontWeight.value}|ff=${cfg.fontFamily ?? ''}'
+        '|vp=${vp.width}x${vp.height}';
+  }
+
+  /// 使用当前视口与排版配置分页（命中缓存直接返回，避免重复 TextPainter 重排）
+  List<PageContent> _paginate(List<TextNode> nodes, Chapter chapter) {
+    final key = _pageCacheKey(chapter);
+    final cached = _pageCache[key];
+    if (cached != null) return cached;
+
     final vp = state.viewportSize;
     final layout = PageLayout(
       viewWidth: vp.width,
       viewHeight: vp.height,
       config: state.layoutConfig,
     );
-    return layout.paginate(nodes);
+    final pages = layout.paginate(nodes);
+    _pageCache[key] = pages;
+    // 简单 LRU：Map 保持插入序，超限时淘汰最早插入的一条
+    if (_pageCache.length > _pageCacheMax) {
+      _pageCache.remove(_pageCache.keys.first);
+    }
+    return pages;
   }
 
-  /// 视口尺寸变化时更新分页（旋转 / 窗口缩放）
+  /// 视口尺寸变化时更新分页（旋转 / 窗口缩放 / 首次打开延迟分页）
   void setViewport(double width, double height) {
     if (state.viewportSize.width == width && state.viewportSize.height == height) return;
+    _viewportReported = true;
+    final nodes = _currentNodes;
+    final chapter = state.currentChapter;
     state = state.copyWith(viewportSize: Size(width, height));
-    if (state.currentChapter != null) {
-      final nodes = _parser.parse(state.currentChapter!.content);
-      final pages = _paginate(nodes);
-      final clampedPage = state.currentPage.clamp(0, pages.isEmpty ? 0 : pages.length - 1);
-      state = state.copyWith(pages: pages, currentPage: clampedPage);
-    }
+    if (nodes == null || nodes.isEmpty || chapter == null) return;
+    final pages = _paginate(nodes, chapter);
+    // 首次打开（pages 尚未分页）时以保存的进度页码为基准恢复，旋转时保持当前页
+    final basePage = state.pages.isEmpty
+        ? (state.progress?.pageIndex ?? 0)
+        : state.currentPage;
+    final clampedPage = basePage
+        .clamp(0, pages.isEmpty ? 0 : pages.length - 1)
+        .toInt();
+    state = state.copyWith(pages: pages, currentPage: clampedPage);
   }
 
   /// 翻到下一页
@@ -280,13 +352,24 @@ class ReaderNotifier extends Notifier<ReaderState> {
     state = state.copyWith(showSettings: !state.showSettings);
   }
 
-  /// 更新排版配置
+  /// 更新排版配置（按旧页码/旧页数比例换算新页码，不再重置到 0）
   void updateLayout(LayoutConfig config) {
-    state = state.copyWith(layoutConfig: config, currentPage: 0);
-    if (state.currentChapter != null) {
-      final nodes = _parser.parse(state.currentChapter!.content);
-      state = state.copyWith(pages: _paginate(nodes));
+    final oldPage = state.currentPage;
+    final oldLength = state.pages.length;
+    state = state.copyWith(layoutConfig: config);
+    final nodes = _currentNodes;
+    final chapter = state.currentChapter;
+    if (nodes == null || nodes.isEmpty || chapter == null || !_viewportReported) {
+      return; // 视口未就绪时仅更新配置，分页由 setViewport 触发
     }
+    final pages = _paginate(nodes, chapter);
+    final newPage = oldLength <= 0 || pages.isEmpty
+        ? 0
+        : (oldPage * pages.length / oldLength)
+            .round()
+            .clamp(0, pages.length - 1)
+            .toInt();
+    state = state.copyWith(pages: pages, currentPage: newPage);
   }
 
   /// 切换主题
@@ -297,10 +380,11 @@ class ReaderNotifier extends Notifier<ReaderState> {
   /// 切换阅读模式（各模式使用自己的进度维度）
   void switchMode(ReadingMode mode) {
     if (mode == ReadingMode.page) {
-      state = state.copyWith(
-        readingMode: mode,
-        currentPage: state.progress?.pageIndex ?? 0,
-      );
+      final pages = state.pages;
+      final pageIndex = (state.progress?.pageIndex ?? 0)
+          .clamp(0, pages.isEmpty ? 0 : pages.length - 1)
+          .toInt();
+      state = state.copyWith(readingMode: mode, currentPage: pageIndex);
     } else {
       state = state.copyWith(readingMode: mode, currentPage: 0);
     }
@@ -400,10 +484,12 @@ class ReaderNotifier extends Notifier<ReaderState> {
     return chapter.index < catalog.chapters.length - 1;
   }
 
+  /// 进度保存防抖：连续翻页/滚动时合并写入（500ms 内只写最近一次），
+  /// 页面退出 / 切章 / syncShelfNow 时立即 flush。
   void _saveProgress() {
     final chapter = state.currentChapter;
     if (chapter == null) return;
-    final progress = ReadingProgress(
+    _pendingProgress = ReadingProgress(
       bookId: chapter.bookId,
       chapterIndex: chapter.index,
       paragraphOffset: state.progress?.paragraphOffset ?? 0,
@@ -411,21 +497,46 @@ class ReaderNotifier extends Notifier<ReaderState> {
       pageIndex: state.currentPage,
       updatedAt: DateTime.now(),
     );
+    _saveDebounce?.cancel();
+    _saveDebounce = Timer(const Duration(milliseconds: 500), () {
+      unawaited(_flushProgress());
+    });
+  }
+
+  /// 立即落盘最近一次挂起的进度，并串行同步书架。
+  Future<void> _flushProgress() async {
+    _saveDebounce?.cancel();
+    _saveDebounce = null;
+    final progress = _pendingProgress;
+    _pendingProgress = null;
+    if (progress == null) return;
     try {
-      unawaited(_repository.saveProgress(progress).catchError((_) {}));
-      unawaited(_syncBookToShelf(progress));
+      await _repository.saveProgress(progress);
     } catch (_) {
       // 进度保存失败不影响阅读
     }
+    unawaited(_syncBookToShelf(progress));
   }
 
   /// 阅读进度同步到书架模型，保持书架进度条与排序字段最新。
-  Future<void> _syncBookToShelf(ReadingProgress progress) async {
-    final catalogLength = state.catalog?.chapters.length;
+  /// 对同一本书串行化读-改-写，避免旧进度覆盖新进度。
+  Future<void> _syncBookToShelf(ReadingProgress progress) {
+    // 入队时捕获页面状态，避免串行链上执行时读到已变化的状态
     final pageFraction = state.pages.isEmpty
         ? 0.0
         : state.currentPage / state.pages.length;
     final lastChapter = state.currentChapter?.title;
+    _syncChain = _syncChain.then((_) =>
+        _doSyncBookToShelf(progress, pageFraction, lastChapter));
+    return _syncChain;
+  }
+
+  Future<void> _doSyncBookToShelf(
+    ReadingProgress progress,
+    double pageFraction,
+    String? lastChapter,
+  ) async {
+    final catalogLength = state.catalog?.chapters.length;
     try {
       final book = await _bookshelfRepo.getById(progress.bookId);
       if (book == null) return;
@@ -448,8 +559,9 @@ class ReaderNotifier extends Notifier<ReaderState> {
     }
   }
 
-  /// 页面退出时兜底同步一次书架进度。
+  /// 页面退出时兜底：先立即落盘挂起的进度，再同步一次书架进度。
   void syncShelfNow() {
+    unawaited(_flushProgress());
     final chapter = state.currentChapter;
     if (chapter == null) return;
     final progress = ReadingProgress(

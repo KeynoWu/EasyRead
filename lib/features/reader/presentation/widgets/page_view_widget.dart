@@ -17,6 +17,8 @@ class ReaderPageView extends ConsumerStatefulWidget {
 
 class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
   PageController? _controller;
+  /// 上次上报的视口尺寸：仅尺寸变化时才注册 postFrame，避免每次 build 都上报
+  Size? _lastReportedSize;
 
   @override
   void dispose() {
@@ -44,14 +46,19 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
     final notifier = ref.read(readerProvider.notifier);
 
     return LayoutBuilder(builder: (context, constraints) {
-      // 真实视口尺寸上报分页引擎（帧末执行，避免 build 中改状态）
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          ref
-              .read(readerProvider.notifier)
-              .setViewport(constraints.maxWidth, constraints.maxHeight);
-        }
-      });
+      // 真实视口尺寸上报分页引擎（帧末执行，避免 build 中改状态）；
+      // 仅尺寸与上次不同时才注册回调，避免每次 build 都触发上报
+      final size = Size(constraints.maxWidth, constraints.maxHeight);
+      if (_lastReportedSize != size) {
+        _lastReportedSize = size;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _lastReportedSize == size) {
+            ref
+                .read(readerProvider.notifier)
+                .setViewport(constraints.maxWidth, constraints.maxHeight);
+          }
+        });
+      }
 
       if (state.isLoading) {
         return const Center(child: CircularProgressIndicator());
@@ -83,13 +90,14 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
         );
       }
 
-      if (state.pages.isEmpty) {
-        return const Center(child: Text('暂无内容'));
-      }
-
-      // 滚动模式
+      // 滚动模式：由 ReaderScrollView 自行处理加载 / 空内容，
+      // 不依赖分页产物（延迟分页时 pages 可能为空但 nodes 已有内容）
       if (state.readingMode == ReadingMode.scroll) {
         return const ReaderScrollView();
+      }
+
+      if (state.pages.isEmpty) {
+        return const Center(child: Text('暂无内容'));
       }
 
       _ensureController(state);

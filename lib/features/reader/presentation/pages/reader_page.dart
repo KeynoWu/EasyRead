@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'package:screen_brightness/screen_brightness.dart';
 import '../../../../core/theme/app_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -64,11 +66,19 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   }
   bool _isTtsPlaying = false;
   DateTime? _pageOpenTime;
+  /// 进入阅读页时的应用亮度，退出时恢复（阅读页存活期间亮度才生效）
+  double? _entryBrightness;
 
   @override
   void initState() {
     super.initState();
     _pageOpenTime = DateTime.now();
+    // 记录进入时的亮度，页面退出时恢复
+    ScreenBrightness().application.then((value) {
+      if (mounted) _entryBrightness = value;
+    }).catchError((_) {
+      // 平台不支持时跳过
+    });
     ref.read(readerProvider.notifier).resetForBook(widget.bookId, detailUrl: widget.detailUrl);
     Future.microtask(() async {
       // 读取保存的进度，续读到正确章节
@@ -90,7 +100,19 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   @override
   void dispose() {
     ref.read(readerProvider.notifier).syncShelfNow();
-    _tts.stop();
+    // 释放 TTS：停止朗读、置空回调，防止离页后回调 UI
+    unawaited(_tts.dispose());
+    // 恢复进入阅读页前的亮度（仅阅读页存活期间亮度生效）
+    final entry = _entryBrightness;
+    if (entry != null) {
+      unawaited(ScreenBrightness()
+          .setApplicationScreenBrightness(entry)
+          .catchError((_) {}));
+    } else {
+      unawaited(ScreenBrightness()
+          .resetApplicationScreenBrightness()
+          .catchError((_) {}));
+    }
     // 记录本次阅读时长
     final openTime = _pageOpenTime;
     if (openTime != null) {
@@ -183,34 +205,39 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     if (chapter == null) return;
 
     final controller = TextEditingController();
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('添加笔记'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLines: 4,
-          decoration: const InputDecoration(hintText: '写下你的想法...'),
+    try {
+      final saved = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('添加笔记'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLines: 4,
+            decoration: const InputDecoration(hintText: '写下你的想法...'),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('保存')),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('保存')),
-        ],
-      ),
-    );
-    if (saved == true && controller.text.trim().isNotEmpty && mounted) {
-      await _noteService.add(ReadingNote(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        bookId: widget.bookId,
-        chapterIndex: chapter.index,
-        text: controller.text.trim(),
-        createdAt: DateTime.now(),
-      ));
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('笔记已保存')),
       );
+      if (saved == true && controller.text.trim().isNotEmpty && mounted) {
+        await _noteService.add(ReadingNote(
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          bookId: widget.bookId,
+          chapterIndex: chapter.index,
+          text: controller.text.trim(),
+          createdAt: DateTime.now(),
+        ));
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('笔记已保存')),
+        );
+      }
+    } finally {
+      // 对话框关闭后释放控制器，避免泄漏
+      controller.dispose();
     }
   }
 
@@ -248,14 +275,25 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       _tts.onComplete = () {
         if (mounted) setState(() => _isTtsPlaying = false);
       };
+      // 先置位播放状态再 await：防快速连点重复启动朗读；
+      // 播放中再次点击会走上面的停止分支，不会吞掉停止操作
+      setState(() => _isTtsPlaying = true);
       await _tts.speak(state.currentChapter!.content);
-      if (mounted) setState(() => _isTtsPlaying = true);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(readerProvider);
+
+    // 切章（loadChapter 成功/失败）时先停止朗读，避免旧章节内容继续播放
+    ref.listen<ReaderState>(readerProvider, (previous, next) {
+      if (_isTtsPlaying &&
+          previous?.currentChapter?.id != next.currentChapter?.id) {
+        _tts.stop();
+        if (mounted) setState(() => _isTtsPlaying = false);
+      }
+    });
 
     return Scaffold(
       backgroundColor: state.theme.backgroundColor,
