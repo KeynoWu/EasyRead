@@ -37,6 +37,7 @@ class BookSource {
     'chapterName': ('ruleToc', 'chapterName'),
     'chapterUrl': ('ruleToc', 'chapterUrl'),
     'chapterContent': ('ruleContent', 'content'),
+    'contentUrl': ('ruleContent', 'contentUrl'),
   };
 
   /// 读取规则字段：优先顶层直接字段，其次 Legado 嵌套容器内字段

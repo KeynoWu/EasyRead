@@ -41,6 +41,8 @@ class ReaderPage extends ConsumerStatefulWidget {
 }
 
 class _ReaderPageState extends ConsumerState<ReaderPage> {
+  /// 缓存 notifier：dispose 阶段 widget.ref 不可用，用此引用收尾同步
+  ReaderNotifier? _notifier;
   final TtsService _tts = TtsService();
   final ReadingStatsService _statsService = ReadingStatsService();
   final BookmarkService _bookmarkService = BookmarkService();
@@ -74,14 +76,20 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   void initState() {
     super.initState();
     _pageOpenTime = DateTime.now();
+    // 缓存 notifier 引用：dispose 阶段 widget 的 ref 已被 Riverpod 3
+    // 标记不可用（_assertNotDisposed），但 readerProvider 非 autoDispose
+    // 仍存活，缓存的引用可直接调用其方法
+    _notifier = ref.read(readerProvider.notifier);
     // 记录进入时的亮度，页面退出时恢复
     ScreenBrightness().application.then((value) {
       if (mounted) _entryBrightness = value;
     }).catchError((_) {
       // 平台不支持时跳过
     });
-    ref.read(readerProvider.notifier).resetForBook(widget.bookId, detailUrl: widget.detailUrl);
     Future.microtask(() async {
+      // initState 处于 widget 构建期，Riverpod 禁止在此修改 provider；
+      // 延迟到帧后执行（resetForBook 先清残留，再按进度续读）
+      ref.read(readerProvider.notifier).resetForBook(widget.bookId, detailUrl: widget.detailUrl);
       // 读取保存的进度，续读到正确章节
       final repo = ref.read(readerRepositoryProvider);
       final progress = await repo.loadProgress(widget.bookId);
@@ -100,7 +108,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
 
   @override
   void dispose() {
-    ref.read(readerProvider.notifier).syncShelfNow();
+    // 用缓存引用而非 widget.ref：dispose 阶段 ref 已不可用（Riverpod 3）
+    _notifier?.syncShelfNow();
     // 释放 TTS：停止朗读、置空回调，防止离页后回调 UI
     unawaited(_tts.dispose());
     // 恢复进入阅读页前的亮度（仅阅读页存活期间亮度生效）

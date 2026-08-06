@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:fast_gbk/fast_gbk.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'interceptors/rate_limit_interceptor.dart';
 import 'interceptors/retry_interceptor.dart';
 import 'interceptors/ua_interceptor.dart';
@@ -222,12 +222,14 @@ class DioClient {
               cancelToken: cancelToken,
             );
       final statusCode = response.statusCode ?? 0;
+      final location = response.headers.value('location');
       if (statusCode >= 300 && statusCode < 400) {
-        final location = response.headers.value('location');
         if (location == null || location.isEmpty) return response;
         final nextUri = currentUri.resolve(location);
         if (currentUri.scheme == 'https' && nextUri.scheme == 'http') {
-          throw ArgumentError('禁止 HTTPS 降级重定向: $current -> $nextUri');
+          // 部分站点（移动站）用 http 重定向：允许降级，但必须清除
+          // Cookie/Authorization 等敏感头，避免凭据明文泄露（MITM 面）
+          activeHeaders = _sanitizeRedirectHeaders(activeHeaders);
         }
         if (nextUri.scheme != currentUri.scheme ||
             nextUri.host.toLowerCase() != currentUri.host.toLowerCase() ||
@@ -236,10 +238,18 @@ class DioClient {
         }
         // HTTP 语义：301/302/303 重定向后 POST 应转为 GET 并丢弃 body；
         // 仅 307/308 保持原方法与 body
-        if (statusCode == 301 || statusCode == 302 || statusCode == 303) {
-          method = 'GET';
-          data = null;
-        }
+          if (statusCode == 301 || statusCode == 302 || statusCode == 303) {
+            method = 'GET';
+            data = null;
+            // 转 GET 后无 body：移除表单 Content-Type，避免无 body 仍声明
+            // application/x-www-form-urlencoded 引起严格代理/服务端告警
+            if (activeHeaders != null &&
+                activeHeaders.containsKey('Content-Type')) {
+              activeHeaders = Map<String, String>.from(activeHeaders)
+                ..remove('Content-Type');
+              if (activeHeaders.isEmpty) activeHeaders = null;
+            }
+          }
         current = nextUri.toString();
         currentUri = nextUri;
         continue;

@@ -95,16 +95,19 @@ void main() {
     expect(adapter.lastHeaders!['Accept'], 'text/html');
   });
 
-  test('DioClient should reject HTTPS to HTTP downgrade redirect', () async {
+  test('DioClient should allow HTTPS to HTTP downgrade but strip sensitive headers', () async {
     final adapter = _RedirectAdapter(
       redirectLocation: 'http://example.com/book',
     );
     final dio = Dio()..httpClientAdapter = adapter;
     final client = DioClient.forTesting(dio);
 
-    await expectLater(
-      client.getStringWithProgress('https://example.com/book'),
-      throwsArgumentError,
+    // 降级允许（移动站常见），但 Cookie/Authorization 等敏感头必须清除
+    final result = await client.getStringWithProgress(
+      'https://example.com/book',
     );
+    expect(result, isNotNull);
+    expect(adapter.lastHeaders!['Cookie'], isNull);
+    expect(adapter.lastHeaders!['Referer'], isNull);
   });
 }

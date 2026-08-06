@@ -19,10 +19,11 @@ import '../../../settings/presentation/providers/purify_pipeline_provider.dart';
 final readerRepositoryProvider = Provider<ReaderRepositoryImpl>((ref) {
   // 注入真实书源仓库：否则默认 _EmptySourceRepo 会让所有章节读取返回占位内容
   final sourceRepo = ref.watch(bookSourceRepositoryProvider);
-  final repo = ReaderRepositoryImpl(sourceRepo: sourceRepo);
-  // 净化规则异步加载完成后注入管线（默认空规则，不影响功能）
-  ref.watch(purifyPipelineProvider).whenData(repo.setPipeline);
-  return repo;
+  // 不在此 watch purifyPipelineProvider：规则 invalidate 时本 provider 会重建
+  // 产生新 ReaderRepositoryImpl（其 _pipeline 默认空管线），导致新加载章节跳过
+  // 用户正则/JS 规则的降级窗口。净化管线由 ReaderNotifier.build 的 ref.listen
+  // 在加载完成后 setPipeline 到稳定不重建的 repo 实例。
+  return ReaderRepositoryImpl(sourceRepo: sourceRepo);
 });
 
 /// 阅读模式
@@ -101,8 +102,13 @@ class ReaderState {
 }
 
 class ReaderNotifier extends Notifier<ReaderState> {
-  late final ReaderRepositoryImpl _repository;
-  late final BookshelfRepository _bookshelfRepo;
+  // 用 getter 而非 build 内赋值的 late final：build 可能因依赖 provider
+  // 重建（如 purifyPipeline invalidate → readerRepository 重建）重跑，
+  // late final 二次赋值会抛 LateInitializationError；getter 无副作用且
+  // 每次拿到最新实例。
+  ReaderRepositoryImpl get _repository => ref.read(readerRepositoryProvider);
+  BookshelfRepository get _bookshelfRepo =>
+      ref.read(bookshelfRepositoryProvider);
   final HtmlContentParser _parser = HtmlContentParser();
   String? widgetDetailUrl;
   String? _activeBookId;
@@ -134,8 +140,15 @@ class ReaderNotifier extends Notifier<ReaderState> {
 
   @override
   ReaderState build() {
-    _repository = ref.watch(readerRepositoryProvider);
-    _bookshelfRepo = ref.watch(bookshelfRepositoryProvider);
+    // 不 watch 会重建本 notifier 的 provider：阅读中的 state（章节/分页/视口）
+    // 会在 notifier 重建时整体丢失并重置为默认值，表现为"暂无内容"。净化管线
+    // 的加载/更新改用 ref.listen 监听：data 到达时实时 setPipeline 到稳定的
+    // readerRepositoryProvider 实例，既能热更新又避免阅读状态丢失。
+    ref.listen(purifyPipelineProvider, (_, next) {
+      if (next case AsyncData(:final value)) {
+        ref.read(readerRepositoryProvider).setPipeline(value);
+      }
+    });
     return const ReaderState();
   }
 
@@ -149,9 +162,11 @@ class ReaderNotifier extends Notifier<ReaderState> {
     _lastSourceId = null;
     _lastDetailUrl = detailUrl;
     _currentNodes = null;
-    // 重置视口上报标志：换书后等新页面 LayoutBuilder 上报真实尺寸再分页，
-    // 避免用上一本书遗留的视口尺寸分页
-    _viewportReported = false;
+    // 视口是设备属性（尺寸不随书变化）：不重置 _viewportReported 与
+    // viewportSize。resetForBook 在 initState 的 microtask 中执行，晚于
+    // ReaderPageView postFrame 的 setViewport，若在此重置会覆盖已上报的
+    // 视口（_viewportReported=false），导致延迟分页永不触发而显示"暂无内容"。
+    // 旋转/窗口变化由 setViewport 按尺寸变化自行处理。
     state = state.copyWith(
       currentChapter: null,
       pages: const [],
@@ -289,7 +304,13 @@ class ReaderNotifier extends Notifier<ReaderState> {
 
   /// 视口尺寸变化时更新分页（旋转 / 窗口缩放 / 首次打开延迟分页）
   void setViewport(double width, double height) {
-    if (state.viewportSize.width == width && state.viewportSize.height == height) return;
+    // 仅当已标记且尺寸不变时才跳过：resetForBook 会重置 _viewportReported，
+    // 再次打开同尺寸阅读器时（viewportSize 残留）必须重新标记并分页，
+    // 否则延迟分页永不触发、页面停留在"暂无内容"
+    if (_viewportReported && state.viewportSize.width == width &&
+        state.viewportSize.height == height) {
+      return;
+    }
     _viewportReported = true;
     final nodes = _currentNodes;
     final chapter = state.currentChapter;

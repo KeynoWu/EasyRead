@@ -88,6 +88,17 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
     });
   }
 
+  /// 进入多选模式并自动全选当前筛选分类下的所有源：
+  /// 一键批量关闭/删除某一类（如"不可用"）书源的入口
+  void _enterBulkForCurrentFilter() {
+    setState(() {
+      _selectionMode = true;
+      _selectedIds
+        ..clear()
+        ..addAll(_visibleIds);
+    });
+  }
+
   void _toggleSelected(String id) {
     setState(() {
       if (_selectedIds.contains(id)) {
@@ -398,6 +409,30 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
                     style: TextStyle(
                       fontSize: 12,
                       color: _sortBySpeed ? AppColors.tint : AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          InkWell(
+            onTap: _enterBulkForCurrentFilter,
+            borderRadius: BorderRadius.circular(8),
+            child: const Padding(
+              padding: EdgeInsets.all(6),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.checklist,
+                    size: 18,
+                    color: AppColors.tint,
+                  ),
+                  SizedBox(width: 2),
+                  Text(
+                    '批量',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.tint,
                     ),
                   ),
                 ],

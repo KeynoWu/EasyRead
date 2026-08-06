@@ -40,6 +40,7 @@ class TestBookSource {
         keyword,
         source,
         cancelToken: cancelToken,
+        throwOnError: true,
       );
       if (results.isEmpty) {
         return const BookSourceTestResult(
@@ -52,10 +53,15 @@ class TestBookSource {
         message: '搜索成功，找到 ${results.length} 个结果',
         resultCount: results.length,
       );
-    } catch (e) {
+    } on DioException catch (e) {
       return BookSourceTestResult(
         success: false,
-        message: '请求失败: $e',
+        message: '请求失败: ${_friendlyError(e)}',
+      );
+    } catch (e) {
+      return const BookSourceTestResult(
+        success: false,
+        message: '规则错误或解析失败',
       );
     }
   }
@@ -75,5 +81,23 @@ class TestBookSource {
       enabled: true,
       rules: rules,
     );
+  }
+
+  /// 将 Dio 异常转为不含服务器细节的友好分类文案，便于检测结果分类展示
+  static String _friendlyError(DioException e) {
+    switch (e.type) {
+      case DioExceptionType.connectionTimeout:
+      case DioExceptionType.receiveTimeout:
+      case DioExceptionType.sendTimeout:
+        return '连接超时';
+      case DioExceptionType.connectionError:
+        return '无法连接服务器';
+      case DioExceptionType.badResponse:
+        return '服务器响应异常（${e.response?.statusCode}）';
+      case DioExceptionType.cancel:
+        return '已取消';
+      default:
+        return '请求失败';
+    }
   }
 }
