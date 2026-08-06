@@ -223,6 +223,16 @@ void main() {
       }
       expect(progress.single.finished, isTrue);
     });
+
+    test('取消后不发出 finished:true 的残缺进度', () async {
+      final token = CancelToken()..cancel();
+      final progress = <SearchProgress>[];
+      await for (final p
+          in useCase.searchWithProgress('测试', cancelToken: token)) {
+        progress.add(p);
+      }
+      expect(progress, isEmpty);
+    });
   });
 
 }

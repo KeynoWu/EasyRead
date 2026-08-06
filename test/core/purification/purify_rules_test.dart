@@ -217,4 +217,25 @@ void main() {
 ''');
     expect(count, 1);
   });
+
+  test('importFromJson 支持外部 isEnabled=false', () async {
+    final manager = ManagePurificationRules();
+    await manager.ensureDefaults();
+    await manager.importFromJson('''
+[
+  {"id": "off", "name": "关闭规则", "pattern": "x", "replacement": "", "isEnabled": false}
+]
+''');
+    final rule = (await manager.getAll()).firstWhere((r) => r.id == 'off');
+    expect(rule.enabled, isFalse);
+  });
+
+  test('JsPurifier 超时后强制回收不挂起', () async {
+    const rule = JsPurifyRule(pattern: 'x', script: 'while (true) {}');
+    final out = await JsPurifier()
+        .apply('x', [rule])
+        .timeout(const Duration(seconds: 20));
+    // 引擎不可用时原样返回；引擎可用时死循环超时后也必须返回，不能卡在 dispose
+    expect(out, 'x');
+  });
 }

@@ -19,6 +19,14 @@ class _PurificationRulesPageState extends ConsumerState<PurificationRulesPage> {
   final _manager = ManagePurificationRules();
   late Future<List<PurificationRule>> _rulesFuture;
 
+  /// Dart RegExp 不支持的 JS/PCRE 语法（lookbehind、内联修饰符）由
+  /// quickjs 执行器处理，不应在编辑页被 Dart 校验拦截。
+  static bool _isJsOnlyPattern(String pattern) {
+    return pattern.contains('(?<=') ||
+        pattern.contains('(?<!') ||
+        RegExp(r'\(\?[ims]+\)').hasMatch(pattern);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -82,10 +90,12 @@ class _PurificationRulesPageState extends ConsumerState<PurificationRulesPage> {
               try {
                 RegExp(patternController.text);
               } catch (_) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('正则表达式无效，请检查')),
-                );
-                return;
+                if (!_isJsOnlyPattern(patternController.text)) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('正则表达式无效，请检查')),
+                  );
+                  return;
+                }
               }
               // ReDoS 预检：拒绝嵌套量词等可能灾难性回溯的模式
               if (PurifyPatternGuard.hasCatastrophicBacktracking(patternController.text)) {

@@ -40,18 +40,23 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   }
 
   /// 触发新搜索：取消旧批次、换上新令牌后驱动 provider。
-  /// 关键词未变时直接复用现有批次（与旧行为一致，避免同词重启）。
-  void _startSearch(String trimmed) {
-    if (trimmed == _keyword) return;
+  /// 关键词未变时直接复用现有批次；[forceRestart] 用于失败/错误后的同词重试。
+  void _startSearch(String trimmed, {bool forceRestart = false}) {
+    final target = trimmed.trim();
+    if (target.isEmpty) return;
+    if (!forceRestart && target == _keyword) return;
     _searchCancel?.cancel();
     final token = CancelToken();
     _searchCancel = token;
     ref.read(searchCancelTokenProvider.notifier).set(token);
+    // 同关键词重试时也必须 invalidate：_keyword 未变化，但旧 provider
+    // 已经完成/失败，不能复用其已结束的 stream。
+    ref.invalidate(searchResultsProvider(target));
     setState(() {
-      _keyword = trimmed;
+      _keyword = target;
       _historyFuture = _historyService.getRecent();
     });
-    _historyService.add(trimmed);
+    _historyService.add(target);
   }
 
   /// 输入变化：仅处理清空（取消在途请求回到空状态）；
@@ -199,7 +204,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     // 有源请求失败时区分"全部失败/部分失败"与"真无结果"：
     // 失败源数在最终态也展示，并给出重试入口
     final failed = progress.failed;
-    final allFailed = failed > 0 && failed >= progress.completed;
+    final allFailed = progress.total > 0 && failed >= progress.total;
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -224,7 +229,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           if (failed > 0) ...[
             const SizedBox(height: 12),
             FilledButton.tonal(
-              onPressed: () => _startSearch(_keyword),
+              onPressed: () => _startSearch(_keyword, forceRestart: true),
               child: const Text('重试'),
             ),
           ],
@@ -243,7 +248,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           const Text('搜索失败，请检查网络后重试', style: TextStyle(fontSize: 15, color: AppColors.textSecondary)),
           const SizedBox(height: 12),
           FilledButton.tonal(
-            onPressed: () => _startSearch(_keyword),
+            onPressed: () => _startSearch(_keyword, forceRestart: true),
             child: const Text('重试'),
           ),
         ],

@@ -49,6 +49,7 @@ class DioClient {
       url,
       headers: headers,
       sourceId: sourceId,
+      responseType: ResponseType.plain,
       cancelToken: cancelToken,
     );
     return response.data.toString();

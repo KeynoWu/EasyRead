@@ -14,6 +14,7 @@ import 'regex_purifier.dart';
 /// 引擎管理复用 quickjs isolate：进程级单例 manager，初始化失败
 /// （如 iOS native assets 不可用）返回 null 由调用方跳过 JS 规则。
 class JsPurifier {
+  static JsEngineManager? _manager;
   static Future<JsEngineManager?>? _managerInit;
   static int _engineSeq = 0;
 
@@ -43,7 +44,9 @@ class JsPurifier {
 
   Future<JsEngineManager?> _initManager() async {
     try {
-      return await JsEngineManager.create().timeout(_initTimeout);
+      final manager = await JsEngineManager.create().timeout(_initTimeout);
+      _manager = manager;
+      return manager;
     } catch (_) {
       // 平台无 quickjs 原生库 / 初始化超时 → 降级：JS 规则跳过，
       // 短时缓存失败状态避免反复触发超时
@@ -53,24 +56,42 @@ class JsPurifier {
     }
   }
 
+  /// 强制回收当前 manager：eval 超时后原生 isolate 仍可能被 JS 卡住，
+  /// 不能再向它发送 dispose 命令（会永远等不到响应），必须直接 kill。
+  static Future<void> _forceDisposeManager() async {
+    final old = _manager;
+    _manager = null;
+    _managerInit = null;
+    _lastFailTime = null;
+    if (old != null) {
+      try {
+        await old.forceDispose();
+      } catch (_) {}
+    }
+  }
+
   /// 按规则列表净化 [input]；引擎不可用时返回原文本。
   Future<String> apply(String input, List<JsPurifyRule> rules) async {
-    final manager = await _getManager();
+    var manager = await _getManager();
     if (manager == null) return input;
     // 多条规则共用一个 engine：避免每条规则各起一个 isolate engine
     // （20 条 JS 规则否则要创建/销毁 20 次，显著拖慢每章净化）
-    var engine = await manager.createEngine('purify${_engineSeq++}');
+    JsEngine? engine = await manager.createEngine('purify${_engineSeq++}');
     try {
       var result = input;
-      for (final rule in rules) {
+      for (var i = 0; i < rules.length; i++) {
         try {
-          result = await _applyRule(engine, result, rule);
+          result = await _applyRule(engine!, result, rules[i]);
         } on TimeoutException {
-          // 单条规则死循环超时：引擎可能已卡死，重建后继续后续规则，
-          // 不能让一条坏规则废掉整组 JS 净化
-          try {
-            await engine.dispose();
-          } catch (_) {}
+          // 单条规则死循环超时：原生 isolate 可能已卡死，直接强制回收。
+          // 最后一条规则时直接返回，其余场景重建后继续，不让一条坏规则
+          // 废掉整组 JS 净化。
+          await _forceDisposeManager();
+          engine = null;
+          if (i == rules.length - 1) return result;
+          final next = await _getManager();
+          if (next == null) return result;
+          manager = next;
           engine = await manager.createEngine('purify${_engineSeq++}');
         } catch (_) {
           // 单条规则正则非法/脚本异常：跳过该条，不影响其他规则
@@ -79,7 +100,7 @@ class JsPurifier {
       return result;
     } finally {
       try {
-        await engine.dispose();
+        await engine?.dispose();
       } catch (_) {}
     }
   }

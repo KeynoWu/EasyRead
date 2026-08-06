@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:easy_read/core/network/dio_client.dart';
@@ -31,6 +32,24 @@ class _RedirectAdapter implements HttpClientAdapter {
     }
     lastHeaders = options.headers;
     return ResponseBody.fromString('ok', 200);
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+class _JsonAdapter implements HttpClientAdapter {
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    return ResponseBody.fromString(
+      '{"name":"规则"}',
+      200,
+      headers: {'content-type': ['application/json; charset=utf-8']},
+    );
   }
 
   @override
@@ -109,5 +128,14 @@ void main() {
     expect(result, isNotNull);
     expect(adapter.lastHeaders!['Cookie'], isNull);
     expect(adapter.lastHeaders!['Referer'], isNull);
+  });
+
+  test('getString keeps raw JSON payload', () async {
+    final dio = Dio()..httpClientAdapter = _JsonAdapter();
+    final client = DioClient.forTesting(dio);
+
+    final content = await client.getString('https://example.com/rules.json');
+    final decoded = jsonDecode(content) as Map<String, dynamic>;
+    expect(decoded['name'], '规则');
   });
 }

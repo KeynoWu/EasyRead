@@ -41,7 +41,7 @@ class ManagePurificationRules {
           name: item['name']?.toString() ?? '未命名',
           pattern: item['pattern']?.toString() ?? '',
           replacement: item['replacement']?.toString() ?? '',
-          enabled: item['isEnabled'] as bool? ?? true,
+          enabled: _readEnabled(item),
           isRegex: item['isRegex'] as bool? ?? true,
           group: item['group']?.toString(),
           order: item['order'] is num ? (item['order'] as num).toInt() : null,
@@ -186,11 +186,19 @@ class ManagePurificationRules {
       name: map['name']?.toString() ?? '未命名',
       pattern: map['pattern']?.toString() ?? '',
       replacement: map['replacement']?.toString() ?? '',
-      enabled: map['enabled'] as bool? ?? true,
+      enabled: _readEnabled(map),
       isRegex: map['isRegex'] as bool? ?? true,
       group: map['group']?.toString(),
       order: map['order'] is num ? (map['order'] as num).toInt() : null,
     );
+  }
+
+  /// 兼容 Hive 的 `enabled` 与外部 Legado 风格 JSON 的 `isEnabled`。
+  static bool _readEnabled(Map<String, dynamic> map) {
+    final enabled = map['enabled'];
+    if (enabled is bool) return enabled;
+    final isEnabled = map['isEnabled'];
+    return isEnabled is bool ? isEnabled : true;
   }
 
   static Map<String, dynamic> _toJson(PurificationRule rule) {
