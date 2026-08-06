@@ -28,13 +28,21 @@ Future<void> _build(BuildInput input, BuildOutputBuilder output) async {
   if (!input.config.buildAssetTypes.contains('code_assets/code')) return;
   final os = input.config.code.targetOS;
   // iOS 需交叉编译（宿主 clang 无法直接产出 iOS 目标）；
-  // 用独立 OBJDIR 隔离，避免宿主 .obj 混入导致架构不匹配
-  final env = os == OS.iOS ? await _iosBuildEnv() : const <String, String>{};
-  final makeArgs = [
-    '-j',
-    if (os == OS.iOS) 'OBJDIR=.obj-ios',
-    _repoLibName,
-  ];
+  // Android 用 NDK clang 交叉编译，每个 ABI 独立 OBJDIR 避免 .o 冲突
+  final makeArgs = <String>['-j'];
+  Map<String, String> env;
+  switch (os) {
+    case OS.iOS:
+      env = await _iosBuildEnv();
+      makeArgs.addAll(['OBJDIR=.obj-ios', _repoLibName]);
+    case OS.android:
+      env = await _androidBuildEnv(input);
+      final arch = input.config.code.targetArchitecture;
+      makeArgs.addAll(['OBJDIR=.obj-android-$arch', 'LIBS=-lm', _repoLibName]);
+    default:
+      env = const <String, String>{};
+      makeArgs.add(_repoLibName);
+  }
   final proc = await Process.start(
     'make',
     makeArgs,
@@ -87,4 +95,103 @@ Future<Map<String, String>> _iosBuildEnv() async {
     'CC': 'xcrun --sdk iphonesimulator clang',
     'CFLAGS': '-isysroot $sdk -arch arm64 -fPIC',
   };
+}
+
+/// Android 交叉编译环境：NDK clang（wrapper 自带 target/sysroot），
+/// 通过 CROSS_PREFIX 让 Makefile 自动选 clang/ar
+Future<Map<String, String>> _androidBuildEnv(BuildInput input) async {
+  final ndk = await _locateNdk();
+  final triple = _androidTriple(input.config.code.targetArchitecture);
+  final api = _androidApiLevel(ndk, triple, input.config.code.android.targetNdkApi);
+  final binDir = _ndkBinDir(ndk);
+  return {
+    'CROSS_PREFIX': p.join(binDir, '$triple$api-'),
+  };
+}
+
+/// 定位 NDK 根目录：ANDROID_NDK_HOME/ANDROID_NDK_ROOT 优先，
+/// 其次 SDK 的 ndk/ 目录（取版本最大），最后 macOS 默认安装位置
+Future<String> _locateNdk() async {
+  final candidates = <String>[];
+  final env = Platform.environment;
+  final direct = env['ANDROID_NDK_HOME'] ?? env['ANDROID_NDK_ROOT'];
+  if (direct != null && direct.isNotEmpty) candidates.add(direct);
+  final sdkCandidates = [
+    env['ANDROID_SDK_ROOT'],
+    env['ANDROID_HOME'],
+    if (Platform.isMacOS && env['HOME'] != null)
+      p.join(env['HOME']!, 'Library/Android/sdk'),
+  ];
+  for (final sdk in sdkCandidates) {
+    if (sdk == null || sdk.isEmpty) continue;
+    final ndkDir = Directory(p.join(sdk, 'ndk'));
+    if (!ndkDir.existsSync()) continue;
+    final versions = ndkDir
+        .listSync()
+        .whereType<Directory>()
+        .map((d) => p.basename(d.path))
+        .toList()
+      ..sort();
+    if (versions.isNotEmpty) candidates.add(p.join(ndkDir.path, versions.last));
+  }
+  for (final candidate in candidates) {
+    if (Directory(p.join(candidate, 'toolchains/llvm/prebuilt')).existsSync()) {
+      return candidate;
+    }
+  }
+  throw StateError(
+    '找不到 Android NDK。请设置 ANDROID_NDK_HOME 或 ANDROID_HOME/ndk，'
+    '或安装到默认位置（macOS: ~/Library/Android/sdk/ndk）。尝试过: $candidates',
+  );
+}
+
+String _ndkBinDir(String ndkRoot) {
+  final prebuilt = Directory(p.join(ndkRoot, 'toolchains/llvm/prebuilt'));
+  final dirs = prebuilt
+      .listSync()
+      .whereType<Directory>()
+      .map((d) => d.path)
+      .toList()
+    ..sort();
+  if (dirs.isEmpty) {
+    throw StateError('NDK 缺少 toolchains/llvm/prebuilt 目录: $ndkRoot');
+  }
+  return p.join(dirs.last, 'bin');
+}
+
+String _androidTriple(Architecture arch) {
+  switch (arch) {
+    case Architecture.arm64:
+      return 'aarch64-linux-android';
+    case Architecture.arm:
+      return 'armv7a-linux-androideabi';
+    case Architecture.x64:
+      return 'x86_64-linux-android';
+    case Architecture.ia32:
+      return 'i686-linux-android';
+    case Architecture.riscv64:
+      return 'riscv64-linux-android';
+    default:
+      throw StateError('不支持的 Android 架构: $arch');
+  }
+}
+
+/// 选择存在的 clang wrapper API level：优先 >= 目标 API 的最小值，
+/// 找不到则退回最大可用版本（NDK 28 提供 21-35）
+int _androidApiLevel(String ndkRoot, String triple, int targetNdkApi) {
+  final binDir = _ndkBinDir(ndkRoot);
+  final re = RegExp('^$triple([0-9]+)-clang\$');
+  final available = <int>[];
+  for (final entry in Directory(binDir).listSync()) {
+    final m = re.firstMatch(p.basename(entry.path));
+    if (m != null) available.add(int.parse(m.group(1)!));
+  }
+  if (available.isEmpty) {
+    throw StateError('NDK 缺少 $triple 的 clang wrapper: $binDir');
+  }
+  available.sort();
+  for (final api in available) {
+    if (api >= targetNdkApi) return api;
+  }
+  return available.last;
 }

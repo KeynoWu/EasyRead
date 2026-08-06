@@ -2239,10 +2239,12 @@ JSContext *JS_DupContext(JSContext *ctx)
     return ctx;
 }
 
+#ifndef JS_NAN_BOXING
 JSValue JS_MAKE_VALUE(int64_t tag, int32_t val)
 {
     return (JSValue){ (JSValueUnion){ .int32 = val }, tag };
 }
+#endif
 
 /* used by the GC */
 static void JS_MarkContext(JSRuntime *rt, JSContext *ctx,

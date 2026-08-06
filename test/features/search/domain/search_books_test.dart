@@ -8,7 +8,7 @@ import 'package:easy_read/features/book_source/domain/repositories/book_source_r
 
 class MockSearchRepository implements SearchRepository {
   @override
-  Future<List<SearchResult>> searchWithSource(String keyword, BookSource source, {CancelToken? cancelToken}) async {
+  Future<List<SearchResult>> searchWithSource(String keyword, BookSource source, {CancelToken? cancelToken, bool throwOnError = false}) async {
     if (keyword.isEmpty) return [];
     return [
       SearchResult(

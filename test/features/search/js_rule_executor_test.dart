@@ -48,4 +48,24 @@ void main() {
     expect(await JsRuleExecutor.execute(html, "<js>eval('1');</js>"), isNull);
     expect(await JsRuleExecutor.execute(html, "<js>cookie.set('a','b');</js>"), isNull);
   });
+
+  test('正常执行后 engine 释放（无泄漏）', () async {
+    await JsRuleExecutor.execute(html, "@js:java.get('tag.h3@text')");
+    // finally 中 dispose 已完成
+    expect(JsRuleExecutor.liveEngineCount, 0);
+    await JsRuleExecutor.execute(html, '@js:1+1');
+    await JsRuleExecutor.execute(html, "<js>java.get('tag.img', 'src')</js>");
+    // 多次执行不累积
+    expect(JsRuleExecutor.liveEngineCount, 0);
+  });
+
+  test('并发执行共享 manager 且各自释放', () async {
+    final results = await Future.wait([
+      JsRuleExecutor.execute(html, "@js:java.get('tag.h3@text')"),
+      JsRuleExecutor.execute(html, '@js:1+2'),
+      JsRuleExecutor.execute(html, "<js>java.get('tag.img', 'src')</js>"),
+    ]);
+    expect(results, ['书名A', '3', 'http://c/1.jpg']);
+    expect(JsRuleExecutor.liveEngineCount, 0);
+  });
 }

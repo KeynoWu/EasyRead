@@ -22,7 +22,7 @@ class SearchRepositoryImpl implements SearchRepository {
       : _client = client ?? DioClient();
 
   @override
-  Future<List<SearchResult>> searchWithSource(String keyword, BookSource source, {CancelToken? cancelToken}) async {
+  Future<List<SearchResult>> searchWithSource(String keyword, BookSource source, {CancelToken? cancelToken, bool throwOnError = false}) async {
     if (!source.enabled || source.searchUrl == null || source.bookListRule == null) {
       return [];
     }
@@ -133,6 +133,9 @@ class SearchRepositoryImpl implements SearchRepository {
       // 主动取消（换词时中断旧批次）不视为错误：返回空结果，
       // 避免上层把取消误报为搜索失败
       if (e is DioException && e.type == DioExceptionType.cancel) return [];
+      // throwOnError：流式聚合/书源检测需要区分"单源失败"与"真无结果"，
+      // 透传异常让上层统一计数失败并给出可重试入口
+      if (throwOnError) rethrow;
       return [];
     }
   }

@@ -20,9 +20,8 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   final _historyService = SearchHistoryService();
   late Future<List<String>> _historyFuture;
 
-  /// 当前生效的搜索关键词（防抖后），驱动结果 provider
+  /// 当前生效的搜索关键词，驱动结果 provider（仅手动搜索/回车时更新）
   String _keyword = '';
-  Timer? _debounce;
 
   /// 当前批次搜索的取消令牌：换词/清空/销毁时取消，中断旧批次网络请求
   CancelToken? _searchCancel;
@@ -35,7 +34,6 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
   @override
   void dispose() {
-    _debounce?.cancel();
     _searchCancel?.cancel();
     _searchController.dispose();
     super.dispose();
@@ -56,26 +54,18 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     _historyService.add(trimmed);
   }
 
-  /// 输入防抖：停止输入 350ms 后自动搜索，避免每键触发全源网络请求
+  /// 输入变化：仅处理清空（取消在途请求回到空状态）；
+  /// 搜索由搜索按钮/键盘回车显式触发
   void _onKeywordChanged(String value) {
-    _debounce?.cancel();
-    final trimmed = value.trim();
-    if (trimmed.isEmpty) {
-      // 清空关键词：取消在途请求并回到空状态
-      _searchCancel?.cancel();
-      _searchCancel = null;
-      ref.read(searchCancelTokenProvider.notifier).set(null);
-      setState(() => _keyword = '');
-      return;
-    }
-    _debounce = Timer(const Duration(milliseconds: 350), () {
-      if (!mounted) return;
-      _startSearch(trimmed);
-    });
+    if (value.trim().isNotEmpty) return;
+    _searchCancel?.cancel();
+    _searchCancel = null;
+    ref.read(searchCancelTokenProvider.notifier).set(null);
+    setState(() => _keyword = '');
   }
 
+  /// 执行搜索：同步输入框文本、收起键盘后触发
   void _search(String keyword) {
-    _debounce?.cancel();
     final trimmed = keyword.trim();
     if (trimmed.isEmpty) return;
     // 同步输入框文本，避免输入框与结果关键词不一致
@@ -104,9 +94,15 @@ class _SearchPageState extends ConsumerState<SearchPage> {
             child: TextField(
               controller: _searchController,
               autofocus: false,
+              textInputAction: TextInputAction.search,
               decoration: InputDecoration(
                 hintText: '搜索书籍',
                 prefixIcon: const Icon(Icons.search),
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.arrow_forward),
+                  onPressed: () => _search(_searchController.text),
+                  tooltip: '搜索',
+                ),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               ),
@@ -135,7 +131,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         Expanded(
           child: results.isEmpty
               ? (progress.finished
-                  ? _buildNoResultState()
+                  ? _buildNoResultState(progress)
                   : const Center(child: CircularProgressIndicator()))
               : ListView.builder(
                   itemCount: results.length,
@@ -166,7 +162,8 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  '${progress.completed}/${progress.total} 源',
+                  '${progress.completed}/${progress.total} 源'
+                  '${progress.failed > 0 ? ' · ${progress.failed} 失败' : ''}',
                   style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
                 ),
               ],
@@ -198,23 +195,39 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     );
   }
 
-  Widget _buildNoResultState() {
+  Widget _buildNoResultState(SearchProgress progress) {
+    // 有源请求失败时区分"全部失败/部分失败"与"真无结果"：
+    // 失败源数在最终态也展示，并给出重试入口
+    final failed = progress.failed;
+    final allFailed = failed > 0 && failed >= progress.completed;
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(Icons.search_off, size: 56, color: AppColors.textSecondary.withValues(alpha: 0.5)),
           const SizedBox(height: 12),
-          const Text('未找到相关书籍', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+          Text(
+            allFailed ? '搜索失败' : '未找到相关书籍',
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          ),
           const SizedBox(height: 6),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 32),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
             child: Text(
-              '可尝试更换关键词；若所有书源均被禁用，请到书源管理中开启',
+              failed > 0
+                  ? '${progress.failed} 个书源请求失败，其余源未返回结果'
+                  : '可尝试更换关键词；若所有书源均被禁用，请到书源管理中开启',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
             ),
           ),
+          if (failed > 0) ...[
+            const SizedBox(height: 12),
+            FilledButton.tonal(
+              onPressed: () => _startSearch(_keyword),
+              child: const Text('重试'),
+            ),
+          ],
         ],
       ),
     );

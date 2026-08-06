@@ -2,6 +2,9 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import '../entities/search_result.dart';
 import '../repositories/search_repository.dart';
+import '../../../../features/book_source/data/services/book_source_test_store.dart';
+import '../../../../features/book_source/domain/entities/book_source.dart';
+import '../../../../features/book_source/domain/entities/book_source_test_record.dart';
 import '../../../../features/book_source/domain/repositories/book_source_repository.dart';
 
 /// 流式搜索进度：每完成一个书源返回一次累积结果
@@ -10,12 +13,15 @@ class SearchProgress {
   final int completed;
   final int total;
   final bool finished;
+  /// 单源请求失败/超时计数：用于区分"全部失败"与"真无结果"
+  final int failed;
 
   const SearchProgress({
     required this.results,
     required this.completed,
     required this.total,
     required this.finished,
+    this.failed = 0,
   });
 
   static const empty = SearchProgress(results: [], completed: 0, total: 0, finished: true);
@@ -24,8 +30,30 @@ class SearchProgress {
 class SearchBooks {
   final SearchRepository searchRepo;
   final BookSourceRepository sourceRepo;
+  final BookSourceTestStore? testStore;
 
-  SearchBooks({required this.searchRepo, required this.sourceRepo});
+  SearchBooks({
+    required this.searchRepo,
+    required this.sourceRepo,
+    this.testStore,
+  });
+
+  /// 可参与搜索的源：开启 + 可搜索 + （未被检测 或 检测可用）。
+  /// 检测为不可用的源被排除（用户手动启用已测源的场景除外——可用性以
+  /// 最近一次检测为准）。
+  static bool isSearchableSource(
+    BookSource source,
+    Map<String, BookSourceTestRecord> records,
+  ) {
+    if (!source.enabled || !source.searchable) return false;
+    final record = records[source.id];
+    return record == null || record.usable;
+  }
+
+  /// 加载检测记录（未注入 testStore 时返回空表，等价不过滤检测结果）
+  Future<Map<String, BookSourceTestRecord>> _testRecords() async {
+    return testStore == null ? const {} : await testStore!.getAll();
+  }
 
   /// 单源搜索
   Future<List<SearchResult>> execute(String keyword, String sourceId) async {
@@ -40,10 +68,12 @@ class SearchBooks {
   Future<List<SearchResult>> executeMultiSource(String keyword, {CancelToken? cancelToken}) async {
     if (keyword.trim().isEmpty) return [];
 
+    final records = await _testRecords();
     final sources = (await sourceRepo.getEnabled())
-        .where((source) => source.searchable)
+        .where((source) => isSearchableSource(source, records))
         .toList()
       ..sort((a, b) => (b.searchWeight ?? 0).compareTo(a.searchWeight ?? 0));
+
     if (sources.isEmpty) return [];
 
     // 全局并发信号量：最多 4 个源同时请求，其余排队；
@@ -119,8 +149,9 @@ class SearchBooks {
         return;
       }
 
+      final records = await _testRecords();
       final sources = (await sourceRepo.getEnabled())
-          .where((source) => source.searchable)
+          .where((source) => isSearchableSource(source, records))
           .toList()
         ..sort((a, b) => (b.searchWeight ?? 0).compareTo(a.searchWeight ?? 0));
       if (sources.isEmpty) {
@@ -133,6 +164,7 @@ class SearchBooks {
       final groups = <String, SearchResult>{};
       final order = <String>[];
       var completed = 0;
+      var failed = 0;
       var nextIndex = 0;
 
       Future<void> worker() async {
@@ -141,11 +173,26 @@ class SearchBooks {
           final index = nextIndex++;
           if (index >= sources.length) return;
           final source = sources[index];
-          final results = await searchRepo
-              .searchWithSource(keyword, source, cancelToken: cancelToken)
-              .timeout(const Duration(seconds: 10),
-                  onTimeout: () => <SearchResult>[]);
-
+          List<SearchResult> results;
+          try {
+            results = await searchRepo
+                .searchWithSource(keyword, source,
+                    cancelToken: cancelToken, throwOnError: true)
+                .timeout(const Duration(seconds: 10));
+          } catch (e) {
+            // 主动取消直接退出，不计失败（取消途经请求不应被误报不可用）
+            if (cancelToken?.isCancelled ?? false) return;
+            failed++;
+            completed++;
+            controller.add(SearchProgress(
+              results: [for (final k in order) groups[k]!],
+              completed: completed,
+              total: sources.length,
+              failed: failed,
+              finished: completed >= sources.length,
+            ));
+            continue;
+          }
           // 增量合并去重
           for (final r in results) {
             final key =
@@ -181,6 +228,7 @@ class SearchBooks {
             results: [for (final k in order) groups[k]!],
             completed: completed,
             total: sources.length,
+            failed: failed,
             finished: completed >= sources.length,
           ));
         }
@@ -191,10 +239,17 @@ class SearchBooks {
       ];
       await Future.wait(workers);
       if (!controller.isClosed) {
+        // 取消后不发 finished: true 的残缺进度（completed < total）：
+        // 调用方已换词/销毁，直接关闭流即可
+        if (cancelToken?.isCancelled ?? false) {
+          await controller.close();
+          return;
+        }
         controller.add(SearchProgress(
           results: [for (final k in order) groups[k]!],
           completed: completed,
           total: sources.length,
+          failed: failed,
           finished: true,
         ));
         await controller.close();

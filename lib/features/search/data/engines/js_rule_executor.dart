@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:easy_quickjs/quickjs.dart';
+import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as parser;
 import '../../../../core/network/dio_client.dart';
 import 'rule_engine.dart';
@@ -17,13 +18,18 @@ import 'rule_engine.dart';
 /// 第一遍注入记录版 ajax（收集 URL），执行后 Dart 并发请求并注入结果；
 /// 第二遍用真实结果重执行取最终值（Legado 规则为纯计算，幂等可重放）。
 ///
+/// java.setContent 记录-重放（DOM 切换后查询）：
+/// 记录遍注入记录版 java 桥（get/setContent 调用序列 + ajax URL 收集），
+/// Dart 重放 doc 流（原 html → 按序 setContent 切换 → get 在对应 doc 查询）
+/// 得到提取值表；最终遍注入值表按调用顺序消费。setContent 参数依赖
+/// ajax 结果时（第一遍记录为空），真实 ajax 注入后重新记录一遍。
+///
 /// 能力边界（返回 null 由上层归类）：
 /// - eval()/decode()/startBrowser/cookie 动态操作：不支持
-/// - java.setContent 切换文档后依赖新 DOM 的查询：不支持（走模板子集）
 /// - java.get 变量参数（依赖运行时计算的选择器）：缓存 miss 返回空
 ///
-/// 两遍执行要求规则**幂等**（Legado 书源规则为纯计算/提取，符合该假设）：
-/// 非幂等脚本（x=x+1、数组 push 等副作用累积）在第二遍会重复执行导致
+/// 记录-重放要求规则**幂等**（Legado 书源规则为纯计算/提取，符合该假设）：
+/// 非幂等脚本（x=x+1、数组 push 等副作用累积）在重放时会重复执行导致
 /// 结果错误，此类规则不在支持范围。管理状态 [_manager] 为进程级单例，
 /// 死循环/异常触发 [_recycle] 强制销毁后会重建（后续执行多一次初始化
 /// 开销，不产生额外失败）。
@@ -42,17 +48,46 @@ class JsRuleExecutor {
   @visibleForTesting
   static Future<String> Function(String url)? fetcher;
 
+  /// 当前 manager 中存活的 engine 数（测试断言释放用）
+  @visibleForTesting
+  static int get liveEngineCount => _manager?.length ?? 0;
+
   static JsEngineManager? _manager;
+  static Future<JsEngineManager?>? _managerInit;
   static int _engineSeq = 0;
 
-  static Future<JsEngineManager?> _getManager() async {
-    if (_manager != null) return _manager!;
+  /// 上次初始化失败时间：无引擎平台（如 iOS）5 分钟内不重试，
+  /// 避免每次规则执行都触发 5s 超时挂起
+  static DateTime? _lastFailTime;
+
+  static Future<JsEngineManager?> _getManager() {
+    final failed = _lastFailTime;
+    if (failed != null &&
+        DateTime.now().difference(failed) < const Duration(minutes: 5)) {
+      return Future.value(null);
+    }
+    // 链式互斥：并发首次调用共享同一初始化 Future，避免双创建泄漏
+    final pending = _managerInit;
+    if (pending != null) return pending;
+    final future = _initManager();
+    _managerInit = future;
+    return future;
+  }
+
+  /// 引擎初始化超时：engineIsolate 启动失败（native 库缺失/平台降级）时
+  /// receivePort.first 永不返回，必须限时降级避免搜索挂死
+  static const Duration _initTimeout = Duration(seconds: 5);
+
+  static Future<JsEngineManager?> _initManager() async {
     try {
-      final m = await JsEngineManager.create();
+      final m = await JsEngineManager.create().timeout(_initTimeout);
       _manager = m;
       return m;
     } catch (_) {
-      // 平台无 quickjs 原生库（如 iOS native assets 不可用）→ 降级
+      // 平台无 quickjs 原生库（如 iOS native assets 不可用）→ 降级；
+      // 清除 init 锁，短时缓存失败避免反复超时
+      _managerInit = null;
+      _lastFailTime = DateTime.now();
       return null;
     }
   }
@@ -61,6 +96,9 @@ class JsRuleExecutor {
   static Future<void> _recycle() async {
     final old = _manager;
     _manager = null;
+    _managerInit = null;
+    // 异常回收 ≠ 平台无引擎：清除失败缓存，允许立即重建重试
+    _lastFailTime = null;
     if (old != null) {
       try {
         await old.forceDispose();
@@ -73,50 +111,127 @@ class JsRuleExecutor {
     final body = _scriptBody(rawRule);
     if (body == null || body.trim().isEmpty) return null;
     if (_unsupported(body)) return null;
-    // 含 setContent 的规则由阶段 4 模板子集处理（需 DOM 切换后查询）
-    if (body.contains('setContent')) return null;
-
-    // 预提取 java.get 字面量选择器 → Dart 查询 → 注入缓存
-    final cache = _extractLiterals(html, baseUrl ?? '', body);
     final hasAjax = body.contains('java.ajax');
+    final hasSetContent = body.contains('setContent');
 
     final manager = await _getManager();
     if (manager == null) return null;
     final engine = await manager.createEngine('jsrule${_engineSeq++}');
+    var recycled = false;
     try {
-      await engine.eval(_prelude(html, baseUrl ?? '', cache));
+      if (!hasSetContent) {
+        // 无 setContent：静态预提取 java.get 字面量 + 两遍 ajax
+        final cache = _extractLiterals(html, baseUrl ?? '', body);
+        await engine.eval(_prelude(html, baseUrl ?? '', cache));
+
+        if (hasAjax) {
+          // 第一遍：执行收集 ajax URL（占位 ajax 返回空可能引发 JS 异常，
+          // 用 try-catch 包裹——ajax 调用在异常前已记录 URL）
+          await engine
+              .eval('try { $body } catch (e) {}')
+              .timeout(evalTimeout);
+          final urls = _parseUrls(
+              (await engine.eval('JSON.stringify(__ajaxUrls)')).value);
+          if (urls.isNotEmpty) {
+            final results = await _fetchAll(urls);
+            await engine.eval(
+                'globalThis.__ajaxCache = ${jsonEncode(results)};');
+          }
+          // 切换为真实 ajax 桥
+          await engine.eval(_ajaxRealBridge);
+        }
+
+        // 第二遍：执行取最终值
+        final result = await engine.eval(body).timeout(evalTimeout);
+        final value = result.value.trim();
+        return value.isEmpty || value == 'undefined' ? null : value;
+      }
+
+      // setContent 路径：记录-重放（见类注释）
+      await engine.eval(_recordPrelude(html, baseUrl ?? ''));
+      await engine.eval('try { $body } catch (e) {}').timeout(evalTimeout);
+      var ops = await _readOps(engine);
 
       if (hasAjax) {
-        // 第一遍：执行收集 ajax URL（占位 ajax 返回空可能引发 JS 异常，
-        // 用 try-catch 包裹——ajax 调用在异常前已记录 URL）
-        await engine
-            .eval('try { $body } catch (e) {}')
-            .timeout(evalTimeout);
         final urls = _parseUrls(
             (await engine.eval('JSON.stringify(__ajaxUrls)')).value);
         if (urls.isNotEmpty) {
           final results = await _fetchAll(urls);
-          await engine.eval(
-              'globalThis.__ajaxCache = ${jsonEncode(results)};');
-          // 切换为真实 ajax 桥
-          await engine.eval(_ajaxRealBridge);
-        } else {
-          await engine.eval(_ajaxRealBridge);
+          await engine.eval('globalThis.__ajaxCache = ${jsonEncode(results)};');
+          // setContent 参数依赖 ajax 结果（第一遍记录为空）时，
+          // 用真实结果重新记录一遍（此时 setContent 拿到真实 html）
+          final staleSetContent = ops.any(
+              (op) => op[0] == 'setContent' && (op[1] as String).isEmpty);
+          if (staleSetContent) {
+            // 先切换真实 ajax 桥（保留 get/setContent 记录桥），
+            // 否则 c=java.ajax(u); setContent(c) 重录仍记录空 html
+            await engine.eval(_ajaxRealBridge);
+            await engine
+                .eval('globalThis.__ops = []; globalThis.__docIndex = 0;');
+            await engine.eval('try { $body } catch (e) {}').timeout(evalTimeout);
+            ops = await _readOps(engine);
+          }
         }
       }
 
-      // 第二遍：执行取最终值
+      // Dart 重放 doc 流 → 与记录顺序一致的提取值表 → 注入
+      final getValues = _replayGetValues(html, ops);
+      await engine.eval('globalThis.__getValues = ${jsonEncode(getValues)};');
+      await engine.eval(_finalPrelude);
+
+      // 最终遍：执行取最终值
       final result = await engine.eval(body).timeout(evalTimeout);
       final value = result.value.trim();
       return value.isEmpty || value == 'undefined' ? null : value;
     } on TimeoutException {
+      recycled = true;
       await _recycle();
       return null;
     } catch (_) {
       // eval 异常（规则错误/引擎损坏）：回收避免原生断言
+      recycled = true;
       await _recycle();
       return null;
+    } finally {
+      // 正常路径释放 engine（防泄漏）；异常/超时路径 manager 已被
+      // forceDispose，engine.dispose 会挂起（无超时响应）→ 跳过
+      if (!recycled) {
+        try {
+          await engine.dispose();
+        } catch (_) {}
+      }
     }
+  }
+
+  /// 读取记录遍的调用序列（['get'|'setContent', 参数..., docIndex]）
+  static Future<List<List<dynamic>>> _readOps(JsEngine engine) async {
+    final json = (await engine.eval('JSON.stringify(__ops)')).value;
+    try {
+      return (jsonDecode(json) as List).cast<List<dynamic>>();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Dart 重放 doc 流：原 html → 按序 setContent 切换 → get 在对应 doc
+  /// 查询，返回与记录顺序一致的提取值表
+  static List<String> _replayGetValues(String html, List<List<dynamic>> ops) {
+    final docs = <dom.Document>[parser.parse(html)];
+    final values = <String>[];
+    for (final op in ops) {
+      if (op[0] == 'setContent') {
+        docs.add(parser.parse(op[1] as String));
+      } else {
+        final idx = op[3] as int;
+        final doc = idx >= 0 && idx < docs.length ? docs[idx] : docs.last;
+        final elements = RuleEngine.queryIn(doc, op[1] as String);
+        final value = elements.isEmpty
+            ? ''
+            : (RuleEngine.valueOf(elements.first, op[2] as String?) ?? '');
+        values.add(value);
+      }
+    }
+    return values;
   }
 
   /// 解析 JSON 数组 URL 列表
@@ -210,6 +325,57 @@ globalThis.java = {
 };
 ''';
   }
+
+  /// 记录模式环境：get/setContent 记录调用序列（docIndex 关联切换后的
+  /// 文档），ajax 收集 URL 返回占位。规则执行后由 Dart 重放查询。
+  static String _recordPrelude(String html, String baseUrl) {
+    return '''
+globalThis.result = ${_quote(html)};
+globalThis.baseUrl = ${_quote(baseUrl)};
+globalThis.__ops = [];
+globalThis.__docIndex = 0;
+globalThis.__ajaxUrls = [];
+globalThis.__ajaxCache = {};
+globalThis.java = {
+  get: (sel, attr) => {
+    if (String(sel) === 'url') return baseUrl;
+    __ops.push(['get', String(sel), attr === undefined ? null : String(attr), __docIndex]);
+    return '';
+  },
+  getElement: (sel, attr) => {
+    if (String(sel) === 'url') return baseUrl;
+    __ops.push(['get', String(sel), attr === undefined ? null : String(attr), __docIndex]);
+    return '';
+  },
+  setContent: (html) => {
+    __ops.push(['setContent', String(html)]);
+    __docIndex++;
+    return '';
+  },
+  ajax: (url) => { __ajaxUrls.push(String(url)); return ''; }
+};
+''';
+  }
+
+  /// 最终执行环境：get 按记录顺序消费提取值表，setContent 为 no-op
+  /// （doc 切换已由 Dart 重放完成），ajax 走真实结果缓存
+  static const _finalPrelude = '''
+globalThis.__getIdx = 0;
+globalThis.java = {
+  get: (sel, attr) => {
+    if (String(sel) === 'url') return baseUrl;
+    const v = __getValues[__getIdx++];
+    return v === undefined || v === null ? '' : v;
+  },
+  getElement: (sel, attr) => {
+    if (String(sel) === 'url') return baseUrl;
+    const v = __getValues[__getIdx++];
+    return v === undefined || v === null ? '' : v;
+  },
+  setContent: (html) => '',
+  ajax: (url) => __ajaxCache[String(url)] || ''
+};
+''';
 
   /// 真实 ajax 桥：从预取缓存返回
   static const _ajaxRealBridge = '''

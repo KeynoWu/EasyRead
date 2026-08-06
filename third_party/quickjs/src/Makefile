@@ -90,6 +90,14 @@ else
   EXE=
 endif
 
+# headerpad 是 ld64(macOS) 专用选项；交叉编译(如 Android NDK 的 lld)不支持，
+# 通过 CROSS_PREFIX 非空自动去掉
+ifneq ($(CROSS_PREFIX),)
+HEADERPAD=
+else
+HEADERPAD=-Wl,-headerpad_max_install_names
+endif
+
 ifdef CONFIG_CLANG
   HOST_CC=clang
   CC=$(CROSS_PREFIX)clang
@@ -287,7 +295,7 @@ libquickjs$(LTOEXT).a: $(QJS_LIB_OBJS)
 QJS_SHARED_OBJS=$(filter-out $(OBJDIR)/quickjs-libc.o,$(QJS_LIB_OBJS))
 
 libquickjs$(LTOEXT).so: $(patsubst %.o, %.pic.o, $(QJS_SHARED_OBJS))
-	$(CC) $(CFLAGS) $(LDFLAGS) -fPIC -shared -Wl,-headerpad_max_install_names -o $@ $^
+	$(CC) $(CFLAGS) $(LDFLAGS) -fPIC -shared $(HEADERPAD) -o $@ $^
 
 ifdef CONFIG_LTO
 libquickjs.a: $(patsubst %.o, %.nolto.o, $(QJS_LIB_OBJS))

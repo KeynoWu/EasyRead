@@ -11,7 +11,12 @@ final searchRepositoryProvider = Provider<SearchRepositoryImpl>((ref) {
 final searchBooksProvider = Provider<SearchBooks>((ref) {
   final searchRepo = ref.watch(searchRepositoryProvider);
   final sourceRepo = ref.watch(bookSourceRepositoryProvider);
-  return SearchBooks(searchRepo: searchRepo, sourceRepo: sourceRepo);
+  final testStore = ref.watch(bookSourceTestStoreProvider);
+  return SearchBooks(
+    searchRepo: searchRepo,
+    sourceRepo: sourceRepo,
+    testStore: testStore,
+  );
 });
 
 /// 当前生效的搜索取消令牌：换词时由搜索页先 cancel 旧令牌再写入新令牌，
@@ -31,7 +36,10 @@ final searchCancelTokenProvider =
 /// 可参与搜索的书源数量（loading 态展示"正在从 N 个书源搜索"）
 final enabledSearchableCountProvider = FutureProvider<int>((ref) async {
   final sources = await ref.watch(bookSourceRepositoryProvider).getEnabled();
-  return sources.where((s) => s.searchable).length;
+  final records = await ref.watch(bookSourceTestStoreProvider).getAll();
+  return sources
+      .where((s) => SearchBooks.isSearchableSource(s, records))
+      .length;
 });
 
 /// 流式搜索结果：每个书源完成即产出累积结果，慢源不阻塞首屏。
