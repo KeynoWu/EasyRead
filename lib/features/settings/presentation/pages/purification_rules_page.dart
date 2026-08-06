@@ -1,5 +1,8 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../../core/purification/purify_pattern_guard.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../domain/entities/purification_rule.dart';
 import '../../domain/usecases/manage_purification_rules.dart';
@@ -19,6 +22,10 @@ class _PurificationRulesPageState extends ConsumerState<PurificationRulesPage> {
   @override
   void initState() {
     super.initState();
+    // 先确保内置规则导入（首次进入净化规则页时规则库可能为空）
+    _manager.ensureDefaults().then((_) {
+      if (mounted) _reload();
+    });
     _rulesFuture = _manager.getAll();
   }
 
@@ -134,10 +141,142 @@ class _PurificationRulesPageState extends ConsumerState<PurificationRulesPage> {
     _refreshPipeline();
   }
 
+  /// 导入净化规则：弹窗选择「从网络链接导入」或「从剪贴板导入」
+  Future<void> _importRules() async {
+    final source = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.link),
+              title: const Text('从网络链接导入'),
+              onTap: () => Navigator.pop(context, 'url'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.content_paste),
+              title: const Text('从剪贴板导入'),
+              onTap: () => Navigator.pop(context, 'clipboard'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null || !mounted) return;
+
+    if (source == 'url') {
+      await _importFromUrlDialog();
+    } else {
+      await _importFromClipboard();
+    }
+  }
+
+  Future<void> _importFromUrlDialog() async {
+    final controller = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('从网络链接导入'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: TextInputType.url,
+          decoration: const InputDecoration(
+            labelText: '净化规则 JSON 链接',
+            hintText: 'https://example.com/jinghua.json',
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('导入')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final url = controller.text.trim();
+    if (url.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请输入链接')),
+      );
+      return;
+    }
+
+    try {
+      final count = await _manager.importFromUrl(url);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已导入 $count 条净化规则')),
+      );
+      _refreshPipeline();
+    } on DioException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('下载失败：${_friendlyError(e)}')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('导入失败：${e.toString().replaceFirst('FormatException: ', '')}')),
+      );
+    }
+  }
+
+  Future<void> _importFromClipboard() async {
+    final data = await Clipboard.getData('text/plain');
+    if (data == null || data.text == null || data.text!.trim().isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('剪贴板为空')),
+      );
+      return;
+    }
+    try {
+      final count = await _manager.importFromJson(data.text!);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已导入 $count 条净化规则')),
+      );
+      _refreshPipeline();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('导入失败：${e.toString().replaceFirst('FormatException: ', '')}')),
+      );
+    }
+  }
+
+  /// Dio 异常转友好文案（不含服务器细节）
+  static String _friendlyError(DioException e) {
+    switch (e.type) {
+      case DioExceptionType.connectionTimeout:
+      case DioExceptionType.receiveTimeout:
+      case DioExceptionType.sendTimeout:
+        return '连接超时';
+      case DioExceptionType.connectionError:
+        return '无法连接服务器';
+      case DioExceptionType.badResponse:
+        return '服务器响应异常（${e.response?.statusCode}）';
+      case DioExceptionType.cancel:
+        return '已取消';
+      default:
+        return '请求失败';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('净化规则')),
+      appBar: AppBar(
+        title: const Text('净化规则'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.file_download_outlined),
+            onPressed: _importRules,
+            tooltip: '导入规则',
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: _addRule,
         child: const Icon(Icons.add),
