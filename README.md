@@ -12,6 +12,10 @@ Android APK 发布包请到 [GitHub Releases](https://github.com/KeynoWu/EasyRea
 
 ### 📚 书架
 - 网格 / 列表双视图切换
+- 书架内按书名/作者搜索
+- 长按书架书籍可更新详情或清除本书缓存
+- 一键批量更新全部书籍详情
+- 自动更新书架（1/6/24 小时定时更新全部详情）
 - 按阅读时间 / 书名 / 加入时间排序
 - 分组筛选（正在看 / 已完结 / 囤书 / 自定义）
 - 批量管理（多选删除、批量移动分组）
@@ -20,23 +24,51 @@ Android APK 发布包请到 [GitHub Releases](https://github.com/KeynoWu/EasyRea
 ### 🔗 书源管理
 - 本地 JSON 文件、网络链接、剪贴板三种导入方式
 - 可视化书源编辑器（搜索 / 目录 / 内容规则表单化编辑）
+- 可视化书源编辑器支持 ruleBookInfo 详情规则
 - 书源可用性校验（输入关键词实测解析）
+- `ruleSearch.checkKeyWord` 作为书源检测默认测试关键词
+- 书源调试页（查看原始响应与解析示例）
+- 书源更多菜单支持复制书源 JSON
+- 书源列表支持按分组筛选
+- 书源登录 CookieJar 持久化（enabledCookieJar）
+- WebView 书源登录（登录后一键读取并保存 Cookie）
 - 订阅链接管理（添加 / 删除 / 单条或批量更新）
 - 兼容阅读 3.0 书源规则格式
+- 支持 Legado AllInOne 正则列表（:正则链、$捕获组、##替换）
+- 支持 Legado `@put:` / `@get:` 变量传递（搜索 → 详情 → 目录 → 正文）
+- 支持完整 JS 规则 `java.put` 变量回传（列表 JS → 后续 URL/字段）
+- 支持 Legado 元素索引（多选/排除/范围/children）
+- 支持 `:contains` / `:containsOwn` 与 `text.xxx` 文本选择
+- 支持 URL 模板内嵌 HTML 规则（`{{@@...}}`）
+- 支持 URL 模板 page 四则运算（`{{(page-1)*50}}`）
+- 支持 URL/字段模板 `{{java.*}}`（put/get/getString/md5/base64编解码/hex/encodeURI/t2s/s2t/randomUUID/HMac/AES加解密/timeFormat）
+- 完整 JS 规则支持与模板一致的 java 加密桥（md5/base64/hex/HMac/AES/timeFormat）
+- 完整 JS 规则支持 `java.getElements` 集合（length/toArray/get/first/last/html/text/attr）、`java.getString/getStringList`（JSONPath/CSS）
+- 完整 JS 规则支持 `java.post`/`java.head`（响应头/Cookie 提取）、`java.digestHex`、`java.toNumChapter`、`java.htmlFormat`
+- 支持 Legado `createSymmetricCrypto(transformation,key,iv)` 对象式 AES/3DES 加解密
+- 支持 `loginCheckJs` 登录态脚本与 `cookie`/`source` 桥，搜索/详情/正文自动回写 CookieJar
+- 支持常见 XPath 子集（//tag、/tag、[@class/id]、contains、position() 比较、位置索引、/@attr）
 
 ### 🔍 搜索
 - 多源聚合搜索（并发分发 + 按书名分组去重）
+- 搜索结果分页（Legado `{{page}}`，加载更多跨页去重合并）
+- 发现/榜单入口（exploreUrl 分类与分页加载）
 - 智能换源（同一本书多源可选，阅读器内一键切换）
 - 搜索历史记录（去重、上限 20 条）
 
 ### 📖 阅读器
 - 翻页 / 滚动双模式 + 仿真翻页动画
 - 真实书源内容拉取（目录解析 → 章节正文 → 净化管线）
+- 书籍详情页（简介、作者、封面、目录与指定章节阅读）
+- 书籍详情页支持一键缓存全书
 - 章节目录导航、上一章 / 下一章
+- 目录/正文分页自动拼接（nextTocUrl / nextContentUrl）
 - 4 套阅读主题（日间 / 夜间 / 护眼绿 / 羊皮纸）
 - 字号 / 行距 / 阅读灯（屏幕亮度）调节
+- 正文简繁转换（原文 / 简体 / 繁体）
 - 书签（当前位置收藏 + 快速跳转）
 - 阅读笔记（随手记录想法）
+- 跨书统一管理全部书签与笔记
 - 章节内关键词搜索（命中页码导航）
 - TTS 听书（整章朗读）
 - 三阶段内容净化（标签 / 正则 / 排版）
@@ -44,8 +76,12 @@ Android APK 发布包请到 [GitHub Releases](https://github.com/KeynoWu/EasyRea
 
 ### ⚙️ 数据与设置
 - 本地 JSON 备份 / 恢复
+- 备份/恢复包含书源 CookieJar 登录态
 - WebDAV 云同步（跨设备备份与恢复）
+- 一键清除章节缓存
 - 自定义净化规则管理（正则替换、批量应用）
+- 净化规则支持标题/正文作用域（Legado scopeTitle/scopeContent）
+- 净化规则支持书/书源级 scope/excludeScope 过滤
 - 阅读统计（总时长 / 阅读天数 / 最近 7 天柱状图）
 - 章节缓存（500 章自动淘汰）+ 后续章节预加载
 
@@ -99,7 +135,7 @@ WebDAV 同步强制要求 HTTPS（仅允许 `localhost`/`127.0.0.1` 使用 HTTP 
 flutter test
 ```
 
-当前 83 个测试用例覆盖：内容净化管线、书源规则解析、搜索去重与权重、分页布局、TXT/EPUB 导入、备份恢复、网络重试与重定向、导入、阅读进度等核心逻辑。
+当前 302 个测试用例覆盖：内容净化管线、书源规则解析、完整 JS 加密桥、搜索去重与权重、分页布局、TXT/EPUB 导入、备份恢复、网络重试与重定向、导入、阅读进度等核心逻辑。
 
 ## 📄 文档
 

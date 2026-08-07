@@ -62,12 +62,13 @@ final class JsEngineManager {
   /// Async create a manager instance. One instance one isolate.
   static Future<JsEngineManager> create({
     bool verbose = false,
+    bool timersEnabled = false,
   }) async {
     final recv = ReceivePort('main.incoming');
     final notified = ReceivePort('main.notified');
-    final isolate = await Isolate.spawn<(SendPort, SendPort, bool)>(
+    final isolate = await Isolate.spawn<(SendPort, SendPort, bool, bool)>(
       engineIsolate,
-      (recv.sendPort, notified.sendPort, verbose),
+      (recv.sendPort, notified.sendPort, verbose, timersEnabled),
       errorsAreFatal: true,
       debugName: '_engineIsolate',
     );

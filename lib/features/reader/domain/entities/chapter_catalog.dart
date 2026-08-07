@@ -3,11 +3,14 @@ class ChapterItem {
   final String title;
   final String url;
   final int index;
+  /// 目录条目 `@put:` 保存的变量，用于正文 URL 的 `@get:{key}`。
+  final Map<String, String> variables;
 
   const ChapterItem({
     required this.title,
     required this.url,
     required this.index,
+    this.variables = const {},
   });
 }
 

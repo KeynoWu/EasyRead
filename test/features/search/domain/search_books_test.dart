@@ -7,9 +7,18 @@ import 'package:easy_read/features/book_source/domain/entities/book_source.dart'
 import 'package:easy_read/features/book_source/domain/repositories/book_source_repository.dart';
 
 class MockSearchRepository implements SearchRepository {
+  int? lastPage;
+
   @override
-  Future<List<SearchResult>> searchWithSource(String keyword, BookSource source, {CancelToken? cancelToken, bool throwOnError = false}) async {
+  Future<List<SearchResult>> searchWithSource(
+    String keyword,
+    BookSource source, {
+    int? page,
+    CancelToken? cancelToken,
+    bool throwOnError = false,
+  }) async {
     if (keyword.isEmpty) return [];
+    lastPage = page;
     return [
       SearchResult(
         bookId: '${source.id}_1',
@@ -20,6 +29,17 @@ class MockSearchRepository implements SearchRepository {
         sourceName: source.name,
       ),
     ];
+  }
+
+  @override
+  Future<List<SearchResult>> exploreWithSource(
+    BookSource source,
+    String url, {
+    int? page,
+    CancelToken? cancelToken,
+    bool throwOnError = false,
+  }) async {
+    return [];
   }
 }
 
@@ -90,6 +110,12 @@ void main() {
     expect(results.length, 1);
     expect(results.first.name, '测试书籍');
     expect(results.first.sourceId, 'src1');
+  });
+
+  test('executeMultiSource should pass page to each source', () async {
+    final results = await useCase.executeMultiSource('测试', page: 3);
+    expect(results, isNotEmpty);
+    expect(mockSearchRepo.lastPage, 3);
   });
 
   test('executeMultiSource should return empty when no sources', () async {
@@ -232,6 +258,13 @@ void main() {
         progress.add(p);
       }
       expect(progress, isEmpty);
+    });
+
+    test('searchWithProgress 透传 page', () async {
+      await for (final _ in useCase.searchWithProgress('测试', page: 2)) {
+        // 消费流即可
+      }
+      expect(mockSearchRepo.lastPage, 2);
     });
   });
 

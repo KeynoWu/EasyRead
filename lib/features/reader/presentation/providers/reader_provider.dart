@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:hive/hive.dart';
 import '../../core/pagination/page_layout.dart';
 import '../../core/parser/node_tree.dart';
 
@@ -15,6 +16,7 @@ import '../../../bookshelf/domain/entities/book.dart';
 import '../../../bookshelf/domain/repositories/bookshelf_repository.dart';
 import '../../../bookshelf/presentation/providers/bookshelf_provider.dart';
 import '../../../settings/presentation/providers/purify_pipeline_provider.dart';
+import '../../../settings/domain/entities/chinese_conversion.dart';
 
 final readerRepositoryProvider = Provider<ReaderRepositoryImpl>((ref) {
   // 注入真实书源仓库：否则默认 _EmptySourceRepo 会让所有章节读取返回占位内容
@@ -43,6 +45,7 @@ class ReaderState {
   final String? errorMessage;
   final ReadingMode readingMode;
   final Size viewportSize;
+  final ChineseConversionMode chineseMode;
   /// 当前章节解析后的原始节点（滚动模式直接渲染，不经过分页分段）
   final List<TextNode> nodes;
 
@@ -60,6 +63,7 @@ class ReaderState {
     this.errorMessage,
     this.viewportSize = const Size(400, 600),
     this.nodes = const [],
+    this.chineseMode = ChineseConversionMode.original,
   });
 
   static const Object _unset = Object();
@@ -78,6 +82,7 @@ class ReaderState {
     ReadingMode? readingMode,
     Size? viewportSize,
     List<TextNode>? nodes,
+    ChineseConversionMode? chineseMode,
   }) {
     return ReaderState(
       currentChapter: currentChapter == _unset
@@ -97,6 +102,7 @@ class ReaderState {
       readingMode: readingMode ?? this.readingMode,
       viewportSize: viewportSize ?? this.viewportSize,
       nodes: nodes ?? this.nodes,
+      chineseMode: chineseMode ?? this.chineseMode,
     );
   }
 }
@@ -138,6 +144,11 @@ class ReaderNotifier extends Notifier<ReaderState> {
   /// 书架同步串行链：同一本书的读-改-写依次执行，避免旧进度覆盖新进度
   Future<void> _syncChain = Future.value();
 
+  /// 当前书源规则 `@put:` 保存的变量（进入阅读页时从搜索/详情页带入）
+  Map<String, String> _variables = const {};
+
+  ChineseConversionMode? _chineseMode;
+
   @override
   ReaderState build() {
     // 不 watch 会重建本 notifier 的 provider：阅读中的 state（章节/分页/视口）
@@ -153,8 +164,13 @@ class ReaderNotifier extends Notifier<ReaderState> {
   }
 
   /// 打开新书时清空上一本书残留的内容、目录和请求状态。
-  void resetForBook(String bookId, {String? detailUrl}) {
+  void resetForBook(
+    String bookId, {
+    String? detailUrl,
+    Map<String, String> variables = const {},
+  }) {
     _loadSeq++;
+    _variables = variables;
     _activeBookId = bookId;
     widgetDetailUrl = detailUrl;
     _lastBookId = bookId;
@@ -185,7 +201,9 @@ class ReaderNotifier extends Notifier<ReaderState> {
     required int chapterIndex,
     required String sourceId,
     String? detailUrl,
+    Map<String, String> variables = const {},
   }) async {
+    final effectiveVariables = variables.isEmpty ? _variables : variables;
     final seq = ++_loadSeq;
     // 切章前立即落盘上一章防抖合并的进度
     unawaited(_flushProgress());
@@ -203,10 +221,14 @@ class ReaderNotifier extends Notifier<ReaderState> {
         chapterIndex: chapterIndex,
         sourceId: sourceId,
         detailUrl: detailUrl,
+        variables: effectiveVariables,
       );
       if (seq != _loadSeq) return; // 已被更新的请求取代
 
-      final nodes = _parser.parse(chapter.content);
+      final mode = await _loadChineseMode();
+      final nodes = _parser.parse(
+        ChineseConversion.convert(chapter.content, mode),
+      );
       _currentNodes = nodes;
 
       final progress = await _repository.loadProgress(bookId);
@@ -231,6 +253,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
         progress: progress,
         isLoading: false,
         errorMessage: null,
+        chineseMode: mode,
       );
 
       // 异步加载目录
@@ -239,6 +262,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
         sourceId: sourceId,
         detailUrl: detailUrl,
         seq: seq,
+        variables: effectiveVariables,
       );
 
       // 预加载后续 2 章（后台执行，不阻塞后续章节切换）
@@ -249,6 +273,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
         count: 2,
         sourceId: sourceId,
         detailUrl: detailUrl,
+        variables: effectiveVariables,
       );
       if (progress != null) {
         unawaited(_syncBookToShelf(progress));
@@ -268,6 +293,43 @@ class ReaderNotifier extends Notifier<ReaderState> {
         );
       }
     }
+  }
+
+  Future<ChineseConversionMode> _loadChineseMode() async {
+    final cached = _chineseMode;
+    if (cached != null) return cached;
+    final box = await Hive.openBox<int>('reader_settings');
+    final index = box.get('chineseMode', defaultValue: 0) ?? 0;
+    final mode = ChineseConversionMode.values[
+        index.clamp(0, ChineseConversionMode.values.length - 1)];
+    _chineseMode = mode;
+    return mode;
+  }
+
+  /// 切换简繁转换并立即重新解析当前章节。
+  Future<void> setChineseMode(ChineseConversionMode mode) async {
+    _chineseMode = mode;
+    final box = await Hive.openBox<int>('reader_settings');
+    await box.put('chineseMode', mode.index);
+    final chapter = state.currentChapter;
+    if (chapter == null) return;
+    _pageCache.clear();
+    final nodes = _parser.parse(
+      ChineseConversion.convert(chapter.content, mode),
+    );
+    _currentNodes = nodes;
+    final pages = _viewportReported
+        ? _paginate(nodes, chapter)
+        : const <PageContent>[];
+    final currentPage = state.currentPage
+        .clamp(0, pages.isEmpty ? 0 : pages.length - 1)
+        .toInt();
+    state = state.copyWith(
+      nodes: nodes,
+      pages: pages,
+      currentPage: currentPage,
+      chineseMode: mode,
+    );
   }
 
   /// 分页缓存 key：章节标识 + LayoutConfig 各字段 + 视口尺寸
@@ -441,6 +503,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
     required String sourceId,
     String? detailUrl,
     required int seq,
+    Map<String, String> variables = const {},
   }) async {
     if (detailUrl == null || detailUrl.isEmpty) return;
     try {
@@ -448,6 +511,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
         bookId: bookId,
         sourceId: sourceId,
         detailUrl: detailUrl,
+        variables: variables,
       );
       if (_activeBookId != bookId || seq != _loadSeq) return;
       if (catalog.chapters.isNotEmpty) {

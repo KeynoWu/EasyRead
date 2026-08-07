@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
 
 import 'package:easy_read/core/purification/js_purifier.dart';
+import 'package:easy_read/core/purification/purify_pipeline.dart';
 import 'package:easy_read/core/purification/regex_purifier.dart';
 import 'package:easy_read/features/settings/domain/entities/purification_rule.dart';
 import 'package:easy_read/features/settings/domain/usecases/manage_purification_rules.dart';
@@ -59,6 +60,62 @@ void main() {
     expect(
       purifier.jsRules.any((r) => r.pattern.startsWith('[０-９')),
       isTrue,
+    );
+  });
+
+  test('scopeTitle/scopeContent 规则分流', () async {
+    final manager = ManagePurificationRules();
+    await manager.add(const PurificationRule(
+      id: 'title',
+      name: '标题',
+      pattern: '第一章',
+      replacement: '第1章',
+      scopeTitle: true,
+      scopeContent: false,
+    ));
+    await manager.add(const PurificationRule(
+      id: 'content',
+      name: '正文',
+      pattern: '正文',
+      replacement: '内容',
+      scopeTitle: false,
+      scopeContent: true,
+    ));
+
+    final content = await manager.buildPurifier();
+    expect(content.purify('正文'), '内容');
+    expect(content.purify('第一章'), '第一章');
+
+    final title = await manager.buildTitlePurifier();
+    expect(title.purify('第一章'), '第1章');
+    expect(title.purify('正文'), '正文');
+  });
+
+  test('PurifyPipeline 可单独净化标题', () async {
+    final pipeline = PurifyPipeline(
+      titlePurifier: const RegexPurifier(
+        rules: [PurifyRule(pattern: '第一章', replacement: '第1章')],
+      ),
+    );
+    expect(await pipeline.purifyTitle('第一章 开始'), '第1章 开始');
+  });
+
+  test('scope/excludeScope 按书名和书源过滤', () {
+    const purifier = RegexPurifier(rules: [
+      PurifyRule(pattern: '正文', replacement: '内容', scope: '书A'),
+      PurifyRule(
+        pattern: '正文',
+        replacement: '排除内容',
+        excludeScope: '书A',
+      ),
+    ]);
+    expect(
+      purifier.scopedFor(bookName: '书A', sourceName: '源A').purify('正文'),
+      '内容',
+    );
+    expect(
+      purifier.scopedFor(bookName: '书B', sourceName: '源A').purify('正文'),
+      '排除内容',
     );
   });
 

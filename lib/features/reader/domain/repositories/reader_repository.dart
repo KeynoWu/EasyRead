@@ -1,5 +1,6 @@
 import '../entities/chapter.dart';
 import '../entities/chapter_catalog.dart';
+import '../entities/book_detail.dart';
 import '../entities/reading_progress.dart';
 
 /// 阅读器仓库接口
@@ -9,6 +10,15 @@ abstract class ReaderRepository {
     required String bookId,
     required String sourceId,
     required String detailUrl,
+    Map<String, String> variables = const {},
+  });
+
+  /// 获取书籍详情摘要（含简介/作者/封面/最新章节等）。
+  Future<BookDetail> getBookDetail({
+    required String bookId,
+    required String sourceId,
+    String? detailUrl,
+    Map<String, String> variables = const {},
   });
 
   /// 获取章节内容（优先缓存，无缓存时从网络获取）
@@ -17,6 +27,7 @@ abstract class ReaderRepository {
     required int chapterIndex,
     required String sourceId,
     String? detailUrl,
+    Map<String, String> variables = const {},
   });
 
   /// 保存阅读进度
@@ -35,5 +46,6 @@ abstract class ReaderRepository {
     required int count,
     required String sourceId,
     String? detailUrl,
+    Map<String, String> variables = const {},
   });
 }

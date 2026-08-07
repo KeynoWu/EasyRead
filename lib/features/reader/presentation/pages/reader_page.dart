@@ -27,6 +27,7 @@ class ReaderPage extends ConsumerStatefulWidget {
   final String? sourceId;
   final String? detailUrl;
   final String? alternativesJson;
+  final String? variablesJson;
 
   const ReaderPage({
     super.key,
@@ -34,6 +35,7 @@ class ReaderPage extends ConsumerStatefulWidget {
     this.sourceId,
     this.detailUrl,
     this.alternativesJson,
+    this.variablesJson,
   });
 
   @override
@@ -67,6 +69,22 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       return [];
     }
   }
+
+  /// 搜索/详情规则 `@put:` 产生的变量，用于目录/正文 URL 的 `@get:{key}`。
+  Map<String, String> get _variables {
+    final json = widget.variablesJson;
+    if (json == null || json.isEmpty) return const {};
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is Map) {
+        return {
+          for (final entry in decoded.entries)
+            entry.key.toString(): entry.value?.toString() ?? '',
+        };
+      }
+    } catch (_) {}
+    return const {};
+  }
   bool _isTtsPlaying = false;
   DateTime? _pageOpenTime;
   /// 进入阅读页时的应用亮度，退出时恢复（阅读页存活期间亮度才生效）
@@ -89,7 +107,11 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     Future.microtask(() async {
       // initState 处于 widget 构建期，Riverpod 禁止在此修改 provider；
       // 延迟到帧后执行（resetForBook 先清残留，再按进度续读）
-      ref.read(readerProvider.notifier).resetForBook(widget.bookId, detailUrl: widget.detailUrl);
+      ref.read(readerProvider.notifier).resetForBook(
+        widget.bookId,
+        detailUrl: widget.detailUrl,
+        variables: _variables,
+      );
       // 读取保存的进度，续读到正确章节
       final repo = ref.read(readerRepositoryProvider);
       final progress = await repo.loadProgress(widget.bookId);
@@ -102,6 +124,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         chapterIndex: startChapter,
         sourceId: sourceId!,
         detailUrl: widget.detailUrl,
+        variables: _variables,
       );
     });
   }

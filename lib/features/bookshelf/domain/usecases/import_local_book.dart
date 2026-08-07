@@ -79,7 +79,7 @@ class ImportLocalBook {
     return null;
   }
 
-  /// 章节写入缓存盒，key 与阅读器缓存格式一致：{bookId}_{sourceId}_{index}
+  /// 章节写入缓存盒，key 与阅读器缓存格式一致：v3_{bookId}_{sourceId}_{index}
   Future<void> _saveChapters(String bookId, List<(String, String)> chapters) async {
     if (chapters.isEmpty) return;
     final box = await Hive.openBox<ChapterModel>(HiveBoxes.chapters);
@@ -87,8 +87,8 @@ class ImportLocalBook {
     final now = DateTime.now();
     final entries = <String, ChapterModel>{
       for (int i = 0; i < chapters.length; i++)
-        '${bookId}_${localSourceId}_$i': ChapterModel.fromEntity(Chapter(
-          id: '${bookId}_${localSourceId}_$i',
+        'v3_${bookId}_${localSourceId}_$i': ChapterModel.fromEntity(Chapter(
+          id: 'v3_${bookId}_${localSourceId}_$i',
           bookId: bookId,
           title: chapters[i].$1,
           content: chapters[i].$2,

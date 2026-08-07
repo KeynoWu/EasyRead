@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 
 import '../../../../core/database/hive_init.dart';
+import '../../../../core/data/cookie_jar_service.dart';
 import '../../../book_source/data/models/book_source_model.dart';
 import '../../../book_source/data/models/source_subscription_model.dart';
 import '../../../book_source/domain/entities/source_subscription.dart';
@@ -60,6 +61,7 @@ class BackupRestore {
       'reading_stats': await _readStringBoxMap('reading_stats'),
       'book_details': await _readStringBoxMap('book_details'),
       'source_subscriptions': await _readSubscriptionsMap(),
+      'cookie_jar': await _readCookieJarMap(),
     };
     return jsonEncode(backup);
   }
@@ -155,34 +157,80 @@ class BackupRestore {
         }
       }
 
+      final cookieJar = <String, String>{};
+      final rawCookies = data['cookie_jar'];
+      if (rawCookies is Map) {
+        for (final entry in rawCookies.entries) {
+          cookieJar[entry.key.toString()] = entry.value?.toString() ?? '';
+        }
+      }
+
       // === 第二阶段：解析全部通过，执行清空 + 写入 ===
-      await _clearBox<BookModel>(HiveBoxes.bookshelf);
-      for (final book in books) {
-        await bookshelfRepo.save(book);
+      var failures = 0;
+      Future<void> safe(Future<void> Function() op) async {
+        try {
+          await op();
+        } catch (_) {
+          failures++;
+        }
       }
 
-      await _clearBox<BookSourceModel>(HiveBoxes.bookSources);
-      for (final source in sources) {
-        await sourceRepo.save(source);
-      }
+      await safe(() async {
+        await _clearBox<BookModel>(HiveBoxes.bookshelf);
+        for (final book in books) {
+          await bookshelfRepo.save(book);
+        }
+      });
 
-      await _clearBox<ReadingProgressModel>(HiveBoxes.readingProgress);
-      final progressBox = await Hive.openBox<ReadingProgressModel>(HiveBoxes.readingProgress);
-      for (final progress in progressMap.values) {
-        await progressBox.put(progress.bookId, ReadingProgressModel.fromEntity(progress));
-      }
+      await safe(() async {
+        await _clearBox<BookSourceModel>(HiveBoxes.bookSources);
+        for (final source in sources) {
+          await sourceRepo.save(source);
+        }
+      });
+
+      await safe(() async {
+        await _clearBox<ReadingProgressModel>(HiveBoxes.readingProgress);
+        final progressBox =
+            await Hive.openBox<ReadingProgressModel>(HiveBoxes.readingProgress);
+        for (final progress in progressMap.values) {
+          await progressBox.put(
+            progress.bookId,
+            ReadingProgressModel.fromEntity(progress),
+          );
+        }
+      });
 
       for (final entry in stringBoxes.entries) {
-        await _restoreStringBox(entry.key, entry.value);
+        await safe(() => _restoreStringBox(entry.key, entry.value));
       }
 
-      await _clearBox<SourceSubscriptionModel>(HiveBoxes.sourceSubscriptions);
-      final subBox = await Hive.openBox<SourceSubscriptionModel>(HiveBoxes.sourceSubscriptions);
-      for (final entry in subscriptions.entries) {
-        await subBox.put(entry.key, SourceSubscriptionModel.fromEntity(entry.value));
-      }
+      await safe(() async {
+        await _clearBox<SourceSubscriptionModel>(HiveBoxes.sourceSubscriptions);
+        final subBox =
+            await Hive.openBox<SourceSubscriptionModel>(HiveBoxes.sourceSubscriptions);
+        for (final entry in subscriptions.entries) {
+          await subBox.put(
+            entry.key,
+            SourceSubscriptionModel.fromEntity(entry.value),
+          );
+        }
+      });
 
-      return '恢复成功：${books.length} 本书，${sources.length} 个书源';
+      await safe(() async {
+        await _clearBox<String>(CookieJarService.boxName);
+        final cookieBox = await Hive.openBox<String>(CookieJarService.boxName);
+        for (final entry in cookieJar.entries) {
+          if (entry.value.isNotEmpty) {
+            await cookieBox.put(entry.key, entry.value);
+          }
+        }
+      });
+
+      return failures == 0
+          ? '恢复成功：${books.length} 本书，${sources.length} 个书源'
+          : '恢复完成：${books.length} 本书，${sources.length} 个书源，'
+              '$failures 项写入失败';
     } catch (e) {
       return '恢复失败: $e';
     }
@@ -275,6 +323,12 @@ class BackupRestore {
       };
     }
     return result;
+  }
+
+  /// 读取 CookieJar（String 盒）
+  Future<Map<String, dynamic>> _readCookieJarMap() async {
+    final box = await Hive.openBox<String>(CookieJarService.boxName);
+    return {for (final key in box.keys) key.toString(): box.get(key)};
   }
 
   /// 恢复 JSON 字符串盒（先清空）

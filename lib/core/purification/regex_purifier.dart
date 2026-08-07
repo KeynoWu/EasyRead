@@ -5,11 +5,15 @@ class PurifyRule {
   final String pattern;
   final String replacement;
   final bool caseSensitive;
+  final String? scope;
+  final String? excludeScope;
 
   const PurifyRule({
     required this.pattern,
     required this.replacement,
     this.caseSensitive = false,
+    this.scope,
+    this.excludeScope,
   });
 
   RegExp get regex => RegExp(pattern, caseSensitive: caseSensitive);
@@ -25,11 +29,15 @@ class JsPurifyRule {
   final String pattern;
   final String script;
   final String replacement;
+  final String? scope;
+  final String? excludeScope;
 
   const JsPurifyRule({
     required this.pattern,
     this.script = '',
     this.replacement = '',
+    this.scope,
+    this.excludeScope,
   });
 }
 
@@ -45,6 +53,41 @@ class RegexPurifier {
   static final Map<String, RegExp> _regexCache = {};
 
   const RegexPurifier({this.rules = const [], this.jsRules = const []});
+
+  /// 按书名/书源过滤 Legado scope/excludeScope 后返回新的执行器。
+  RegexPurifier scopedFor({String? bookName, String? sourceName}) {
+    return RegexPurifier(
+      rules: [
+        for (final rule in rules)
+          if (_matchesScope(rule.scope, rule.excludeScope, bookName, sourceName))
+            rule,
+      ],
+      jsRules: [
+        for (final rule in jsRules)
+          if (_matchesScope(rule.scope, rule.excludeScope, bookName, sourceName))
+            rule,
+      ],
+    );
+  }
+
+  static bool _matchesScope(
+    String? scope,
+    String? excludeScope,
+    String? bookName,
+    String? sourceName,
+  ) {
+    final target = '${bookName ?? ''}|${sourceName ?? ''}';
+    if (excludeScope != null && excludeScope.trim().isNotEmpty) {
+      for (final item in excludeScope.split(',')) {
+        if (item.trim().isNotEmpty && target.contains(item.trim())) return false;
+      }
+    }
+    if (scope == null || scope.trim().isEmpty) return true;
+    for (final item in scope.split(',')) {
+      if (item.trim().isNotEmpty && target.contains(item.trim())) return true;
+    }
+    return false;
+  }
 
   /// 同步净化：仅 Dart 规则
   String purify(String input) {

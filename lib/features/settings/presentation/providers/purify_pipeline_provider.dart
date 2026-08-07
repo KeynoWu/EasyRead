@@ -9,5 +9,9 @@ final purifyPipelineProvider = FutureProvider<PurifyPipeline>((ref) async {
   final manager = ManagePurificationRules();
   await manager.ensureDefaults();
   final purifier = await manager.buildPurifier();
-  return PurifyPipeline(regexPurifier: purifier);
+  final titlePurifier = await manager.buildTitlePurifier();
+  return PurifyPipeline(
+    regexPurifier: purifier,
+    titlePurifier: titlePurifier,
+  );
 });

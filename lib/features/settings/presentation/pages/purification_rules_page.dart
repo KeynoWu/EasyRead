@@ -61,20 +61,35 @@ class _PurificationRulesPageState extends ConsumerState<PurificationRulesPage> {
     final nameController = TextEditingController(text: rule?.name ?? '');
     final patternController = TextEditingController(text: rule?.pattern ?? '');
     final replacementController = TextEditingController(text: rule?.replacement ?? '');
+    var scopeTitle = rule?.scopeTitle ?? true;
+    var scopeContent = rule?.scopeContent ?? true;
 
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(rule == null ? '添加规则' : '编辑规则'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: nameController, decoration: const InputDecoration(labelText: '规则名称')),
-            const SizedBox(height: 12),
-            TextField(controller: patternController, decoration: const InputDecoration(labelText: '正则表达式'), maxLines: 2),
-            const SizedBox(height: 12),
-            TextField(controller: replacementController, decoration: const InputDecoration(labelText: '替换为'), maxLines: 2),
-          ],
+        content: StatefulBuilder(
+          builder: (context, setDialogState) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(controller: nameController, decoration: const InputDecoration(labelText: '规则名称')),
+              const SizedBox(height: 12),
+              TextField(controller: patternController, decoration: const InputDecoration(labelText: '正则表达式'), maxLines: 2),
+              const SizedBox(height: 12),
+              TextField(controller: replacementController, decoration: const InputDecoration(labelText: '替换为'), maxLines: 2),
+              const SizedBox(height: 4),
+              SwitchListTile(
+                title: const Text('作用于标题'),
+                value: scopeTitle,
+                onChanged: (v) => setDialogState(() => scopeTitle = v),
+              ),
+              SwitchListTile(
+                title: const Text('作用于正文'),
+                value: scopeContent,
+                onChanged: (v) => setDialogState(() => scopeContent = v),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
@@ -119,6 +134,14 @@ class _PurificationRulesPageState extends ConsumerState<PurificationRulesPage> {
         pattern: patternController.text,
         replacement: replacementController.text,
         enabled: rule?.enabled ?? true,
+        isRegex: rule?.isRegex ?? true,
+        scopeTitle: scopeTitle,
+        scopeContent: scopeContent,
+        scope: rule?.scope,
+        excludeScope: rule?.excludeScope,
+        timeoutMillisecond: rule?.timeoutMillisecond,
+        group: rule?.group,
+        order: rule?.order,
       );
       if (rule == null) {
         await _manager.add(newRule);

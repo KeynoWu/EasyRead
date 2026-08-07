@@ -5,6 +5,7 @@ import '../../domain/entities/book.dart';
 class BookCard extends StatelessWidget {
   final Book book;
   final void Function(Book)? onBookTap;
+  final void Function(Book)? onBookLongPress;
   final bool editMode;
   final bool selected;
 
@@ -12,6 +13,7 @@ class BookCard extends StatelessWidget {
     super.key,
     required this.book,
     this.onBookTap,
+    this.onBookLongPress,
     this.editMode = false,
     this.selected = false,
   });
@@ -20,6 +22,7 @@ class BookCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onBookTap == null ? null : () => onBookTap!(book),
+      onLongPress: onBookLongPress == null ? null : () => onBookLongPress!(book),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

@@ -5,6 +5,7 @@ import 'book_card.dart';
 class BookshelfGrid extends StatelessWidget {
   final List<Book> books;
   final void Function(Book)? onBookTap;
+  final void Function(Book)? onBookLongPress;
   final bool editMode;
   final Set<String> selectedIds;
 
@@ -12,6 +13,7 @@ class BookshelfGrid extends StatelessWidget {
     super.key,
     required this.books,
     this.onBookTap,
+    this.onBookLongPress,
     this.editMode = false,
     this.selectedIds = const {},
   });
@@ -30,6 +32,7 @@ class BookshelfGrid extends StatelessWidget {
       itemBuilder: (context, index) => BookCard(
         book: books[index],
         onBookTap: onBookTap,
+        onBookLongPress: onBookLongPress,
         editMode: editMode,
         selected: selectedIds.contains(books[index].id),
       ),

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
 import 'package:easy_read/core/database/hive_init.dart';
+import 'package:easy_read/core/data/cookie_jar_service.dart';
 import 'package:easy_read/features/bookshelf/data/models/book_model.dart';
 import 'package:easy_read/features/bookshelf/data/repositories/bookshelf_repository_impl.dart';
 import 'package:easy_read/features/bookshelf/domain/entities/book.dart';
@@ -108,6 +109,23 @@ void main() {
       final json = await backupRestore.buildBackupJson();
       final data = jsonDecode(json) as Map<String, dynamic>;
       expect(data['bookmarks'], containsPair('bookmark-1', isA<String>()));
+    });
+
+    test('backup and restore preserves cookie jar', () async {
+      final jar = CookieJarService();
+      await jar.set('s1', 'session=abc');
+      final backupRestore = BackupRestore(
+        bookshelfRepo: BookshelfRepositoryImpl(),
+        sourceRepo: BookSourceRepositoryImpl(),
+      );
+      final json = await backupRestore.buildBackupJson();
+      final data = jsonDecode(json) as Map<String, dynamic>;
+      expect(data['cookie_jar'], containsPair('s1', 'session=abc'));
+
+      await jar.remove('s1');
+      final result = await backupRestore.restoreFromJson(json);
+      expect(result, contains('恢复成功'));
+      expect(await jar.get('s1'), 'session=abc');
     });
   });
 }

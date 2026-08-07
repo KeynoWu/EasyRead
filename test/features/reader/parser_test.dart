@@ -45,6 +45,17 @@ void main() {
     expect(nodes[0].text, '第一行\n第二行');
   });
 
+  test('should parse top-level image nodes', () {
+    const html = '<p>配图前</p><img src="https://example.com/a.jpg"><p>配图后</p>';
+    final nodes = parser.parse(html);
+    expect(nodes.map((n) => n.type), [
+      NodeType.paragraph,
+      NodeType.image,
+      NodeType.paragraph,
+    ]);
+    expect(nodes[1].imageUrl, 'https://example.com/a.jpg');
+  });
+
   test('should handle empty content', () {
     const html = '';
     final nodes = parser.parse(html);

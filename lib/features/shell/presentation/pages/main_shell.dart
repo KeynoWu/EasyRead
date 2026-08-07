@@ -47,6 +47,11 @@ class MainShell extends StatelessWidget {
                 label: '搜索',
               ),
               BottomNavigationBarItem(
+                icon: Icon(Icons.explore_outlined),
+                activeIcon: Icon(Icons.explore),
+                label: '发现',
+              ),
+              BottomNavigationBarItem(
                 icon: Icon(Icons.link_outlined),
                 activeIcon: Icon(Icons.link),
                 label: '书源',

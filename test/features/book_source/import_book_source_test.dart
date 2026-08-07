@@ -36,7 +36,7 @@ class _SlowDownloadClient implements DioClient {
   Dio get dio => Dio();
 
   @override
-  Future<String> getString(String url, {Map<String, String>? headers, String? sourceId, CancelToken? cancelToken}) async {
+  Future<String> getString(String url, {Map<String, String>? headers, String? sourceId, String? charset, CancelToken? cancelToken}) async {
     return '';
   }
 
@@ -78,6 +78,7 @@ class _SlowDownloadClient implements DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    String? charset,
     Map<String, dynamic>? extra,
     void Function(int received, int total)? onProgress,
     CancelToken? cancelToken,
@@ -104,7 +105,7 @@ class _StalledClient implements DioClient {
   Dio get dio => Dio();
 
   @override
-  Future<String> getString(String url, {Map<String, String>? headers, String? sourceId, CancelToken? cancelToken}) async {
+  Future<String> getString(String url, {Map<String, String>? headers, String? sourceId, String? charset, CancelToken? cancelToken}) async {
     return '';
   }
 
@@ -146,6 +147,7 @@ class _StalledClient implements DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    String? charset,
     Map<String, dynamic>? extra,
     void Function(int received, int total)? onProgress,
     CancelToken? cancelToken,
@@ -163,7 +165,7 @@ class _TooLargeClient implements DioClient {
   Dio get dio => Dio();
 
   @override
-  Future<String> getString(String url, {Map<String, String>? headers, String? sourceId, CancelToken? cancelToken}) async {
+  Future<String> getString(String url, {Map<String, String>? headers, String? sourceId, String? charset, CancelToken? cancelToken}) async {
     return '';
   }
 
@@ -205,6 +207,7 @@ class _TooLargeClient implements DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    String? charset,
     Map<String, dynamic>? extra,
     void Function(int received, int total)? onProgress,
     CancelToken? cancelToken,

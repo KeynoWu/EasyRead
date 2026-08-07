@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import '../../core/pagination/page_layout.dart';
 import '../../core/theme/reader_theme.dart';
+import '../../../settings/domain/entities/chinese_conversion.dart';
 import '../providers/reader_provider.dart';
 
 class ReaderSettingsPanel extends ConsumerStatefulWidget {
@@ -134,6 +135,30 @@ class _ReaderSettingsPanelState extends ConsumerState<ReaderSettingsPanel> {
               ],
               selected: {state.readingMode},
               onSelectionChanged: (selection) => notifier.switchMode(selection.first),
+            ),
+          ),
+          const SizedBox(height: 16),
+          // 简繁转换
+          _buildSection(
+            title: '简繁',
+            child: SegmentedButton<ChineseConversionMode>(
+              segments: const [
+                ButtonSegment(
+                  value: ChineseConversionMode.original,
+                  label: Text('原文'),
+                ),
+                ButtonSegment(
+                  value: ChineseConversionMode.simplified,
+                  label: Text('简体'),
+                ),
+                ButtonSegment(
+                  value: ChineseConversionMode.traditional,
+                  label: Text('繁体'),
+                ),
+              ],
+              selected: {state.chineseMode},
+              onSelectionChanged: (selection) =>
+                  notifier.setChineseMode(selection.first),
             ),
           ),
           const SizedBox(height: 16),

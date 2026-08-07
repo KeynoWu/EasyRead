@@ -43,6 +43,13 @@ class ManagePurificationRules {
           replacement: item['replacement']?.toString() ?? '',
           enabled: _readEnabled(item),
           isRegex: item['isRegex'] as bool? ?? true,
+          scopeTitle: item['scopeTitle'] as bool? ?? true,
+          scopeContent: item['scopeContent'] as bool? ?? true,
+          scope: item['scope']?.toString(),
+          excludeScope: item['excludeScope']?.toString(),
+          timeoutMillisecond: item['timeoutMillisecond'] is num
+              ? (item['timeoutMillisecond'] as num).toInt()
+              : null,
           group: item['group']?.toString(),
           order: item['order'] is num ? (item['order'] as num).toInt() : null,
         );
@@ -133,11 +140,22 @@ class ManagePurificationRules {
   /// 其余（JS lookbehind 语法 / @js 替换）→ [JsPurifyRule]，
   /// 由净化管线在具备 quickjs 引擎时执行，否则跳过。
   Future<RegexPurifier> buildPurifier() async {
+    return _buildPurifier(forTitle: false);
+  }
+
+  /// 仅构建作用于章节标题的净化规则。
+  Future<RegexPurifier> buildTitlePurifier() async {
+    return _buildPurifier(forTitle: true);
+  }
+
+  Future<RegexPurifier> _buildPurifier({required bool forTitle}) async {
     final rules = await getAll();
     final enabled = <PurifyRule>[];
     final jsRules = <JsPurifyRule>[];
     for (final rule in rules) {
       if (!rule.enabled || rule.pattern.isEmpty) continue;
+      if (forTitle && !rule.scopeTitle) continue;
+      if (!forTitle && !rule.scopeContent) continue;
       // isRegex=false：pattern 是普通文本，转义正则元字符后按字面量替换，
       // 与正则路径统一走同一执行管线（Dart/JS 分流逻辑一致）
       final pattern = rule.isRegex ? rule.pattern : RegExp.escape(rule.pattern);
@@ -153,11 +171,15 @@ class ManagePurificationRules {
           jsRules.add(JsPurifyRule(
             pattern: pattern,
             script: rule.replacement.substring(4),
+            scope: rule.scope,
+            excludeScope: rule.excludeScope,
           ));
         } else {
           enabled.add(PurifyRule(
             pattern: pattern,
             replacement: rule.replacement,
+            scope: rule.scope,
+            excludeScope: rule.excludeScope,
           ));
         }
       } catch (_) {
@@ -168,6 +190,8 @@ class ManagePurificationRules {
           pattern: pattern,
           script: isJsReplacement ? rule.replacement.substring(4) : '',
           replacement: isJsReplacement ? '' : rule.replacement,
+          scope: rule.scope,
+          excludeScope: rule.excludeScope,
         ));
       }
     }
@@ -188,6 +212,13 @@ class ManagePurificationRules {
       replacement: map['replacement']?.toString() ?? '',
       enabled: _readEnabled(map),
       isRegex: map['isRegex'] as bool? ?? true,
+      scopeTitle: map['scopeTitle'] as bool? ?? true,
+      scopeContent: map['scopeContent'] as bool? ?? true,
+      scope: map['scope']?.toString(),
+      excludeScope: map['excludeScope']?.toString(),
+      timeoutMillisecond: map['timeoutMillisecond'] is num
+          ? (map['timeoutMillisecond'] as num).toInt()
+          : null,
       group: map['group']?.toString(),
       order: map['order'] is num ? (map['order'] as num).toInt() : null,
     );
@@ -209,6 +240,12 @@ class ManagePurificationRules {
       'replacement': rule.replacement,
       'enabled': rule.enabled,
       'isRegex': rule.isRegex,
+      'scopeTitle': rule.scopeTitle,
+      'scopeContent': rule.scopeContent,
+      if (rule.scope != null) 'scope': rule.scope,
+      if (rule.excludeScope != null) 'excludeScope': rule.excludeScope,
+      if (rule.timeoutMillisecond != null)
+        'timeoutMillisecond': rule.timeoutMillisecond,
       if (rule.group != null) 'group': rule.group,
       if (rule.order != null) 'order': rule.order,
     };

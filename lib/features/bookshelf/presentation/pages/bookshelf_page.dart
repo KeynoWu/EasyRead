@@ -22,11 +22,21 @@ class BookshelfPage extends ConsumerStatefulWidget {
 
 class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   bool _isGrid = true;
-  String _sortMode = 'time'; // time | name | added
+  String _sortMode = 'time'; // time | name | author | added
   String? _selectedGroup; // null = 全部
   bool _editMode = false;
   bool _importing = false;
+  bool _refreshingAll = false;
+  bool _showSearch = false;
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
   final Set<String> _selectedIds = {};
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   /// 排序/分组结果缓存：key 为 (books 集合, sortMode, 分组)，
   /// 数据或筛选条件未变时复用，避免编辑模式每次勾选触发全量重排
@@ -57,6 +67,11 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     }
   }
 
+  Future<void> _refreshBookshelf() async {
+    ref.invalidate(bookshelfListProvider);
+    await ref.read(bookshelfListProvider.future);
+  }
+
   /// 打开书籍阅读（续读上次进度）
   Future<void> _openReader(Book book) async {
     final detail = await ref.read(bookDetailServiceProvider).get(book.id);
@@ -72,10 +87,113 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     );
   }
 
+  Future<void> _showBookActions(Book book) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.refresh),
+              title: const Text('更新书籍详情'),
+              onTap: () => Navigator.pop(context, 'refresh'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_sweep_outlined),
+              title: const Text('清除本书缓存'),
+              onTap: () => Navigator.pop(context, 'clearCache'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted) return;
+    switch (action) {
+      case 'refresh':
+        await _refreshBookDetail(book);
+      case 'clearCache':
+        await _clearBookCache(book);
+    }
+  }
+
+  Future<void> _refreshBookDetail(Book book, {bool showFeedback = true}) async {
+    final sourceId = book.sourceId;
+    if (sourceId == null) return;
+    final detail = await ref.read(bookDetailServiceProvider).get(book.id);
+    final detailUrl = detail?.detailUrl;
+    if (detailUrl == null || detailUrl.isEmpty) return;
+    try {
+      final fetched = await ref
+          .read(readerRepositoryProvider)
+          .getBookDetail(
+            bookId: book.id,
+            sourceId: sourceId,
+            detailUrl: detailUrl,
+          );
+      await ref.read(bookshelfRepositoryProvider).save(Book(
+        id: book.id,
+        name: fetched.name ?? book.name,
+        author: fetched.author ?? book.author,
+        coverUrl: fetched.coverUrl ?? book.coverUrl,
+        sourceId: sourceId,
+        lastChapter: fetched.lastChapter ?? book.lastChapter,
+        progress: book.progress,
+        group: book.group,
+        lastReadAt: book.lastReadAt,
+      ));
+      ref.invalidate(bookshelfListProvider);
+      if (showFeedback && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('书籍详情已更新')),
+        );
+      }
+    } catch (_) {
+      if (showFeedback && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('更新失败，请检查网络或书源规则')),
+        );
+      }
+    }
+  }
+
+  Future<void> _refreshAllBooks() async {
+    if (_refreshingAll) return;
+    setState(() => _refreshingAll = true);
+    final repo = ref.read(bookshelfRepositoryProvider);
+    for (final book in await repo.getAll()) {
+      if (book.sourceId == null) continue;
+      await _refreshBookDetail(book, showFeedback: false);
+    }
+    if (!mounted) return;
+    setState(() => _refreshingAll = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已尝试更新全部书籍详情')),
+    );
+  }
+
+  Future<void> _clearBookCache(Book book) async {
+    await ref.read(readerRepositoryProvider).clearBookCache(book.id);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('本书缓存已清除')),
+    );
+  }
+
   void _toggleEditMode() {
     setState(() {
       _editMode = !_editMode;
       _selectedIds.clear();
+    });
+  }
+
+  void _toggleSearch() {
+    setState(() {
+      _showSearch = !_showSearch;
+      if (!_showSearch) {
+        _searchQuery = '';
+        _searchController.clear();
+      }
     });
   }
 
@@ -196,6 +314,22 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
           ),
           if (!_editMode) ...[
             IconButton(
+              icon: Icon(_showSearch ? Icons.close : Icons.search),
+              onPressed: _toggleSearch,
+              tooltip: '搜索书架',
+            ),
+            IconButton(
+              icon: _refreshingAll
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh),
+              onPressed: _refreshingAll ? null : _refreshAllBooks,
+              tooltip: '更新全部详情',
+            ),
+            IconButton(
               icon: const Icon(Icons.file_upload_outlined),
               onPressed: _importLocalBook,
               tooltip: '导入本地书籍',
@@ -206,6 +340,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
               itemBuilder: (context) => [
                 const PopupMenuItem(value: 'time', child: Text('按阅读时间')),
                 const PopupMenuItem(value: 'name', child: Text('按书名')),
+                const PopupMenuItem(value: 'author', child: Text('按作者')),
                 const PopupMenuItem(value: 'added', child: Text('按加入时间')),
               ],
             ),
@@ -235,46 +370,77 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                       ? sorted
                       : ManageBookGroup(repository: ref.read(bookshelfRepositoryProvider))
                           .filterByGroup(sorted, _selectedGroup);
+                  final query = _searchQuery.trim();
+                  filtered = query.isEmpty
+                      ? filtered
+                      : filtered
+                          .where((book) =>
+                              book.name.contains(query) ||
+                              (book.author ?? '').contains(query))
+                          .toList();
                   _cachedSorted = sorted;
                   _cachedFiltered = filtered;
                   _cachedViewKey = viewKey;
                 }
                 return Column(
                   children: [
+                    if (_showSearch)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                        child: TextField(
+                          controller: _searchController,
+                          onChanged: (value) => setState(() {
+                            _searchQuery = value;
+                            _cachedViewKey = null;
+                          }),
+                          decoration: const InputDecoration(
+                            hintText: '搜索书名或作者',
+                            prefixIcon: Icon(Icons.search),
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                          ),
+                        ),
+                      ),
                     if (!_editMode) _buildGroupFilter(books),
                     Expanded(
-                      child: filtered.isEmpty
-                          ? Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
+                      child: RefreshIndicator(
+                        onRefresh: _refreshBookshelf,
+                        child: filtered.isEmpty
+                            ? ListView(
+                                physics: const AlwaysScrollableScrollPhysics(),
                                 children: [
+                                  const SizedBox(height: 120),
                                   Icon(Icons.auto_stories, size: 64, color: AppColors.tint.withValues(alpha: 0.5)),
                                   const SizedBox(height: 16),
-                                  const Text('书架空空', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+                                  const Text('书架空空', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
                                   const SizedBox(height: 8),
-                                  const Text('去搜索添加书籍，或导入本地 TXT/EPUB', style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+                                  const Text('去搜索添加书籍，或导入本地 TXT/EPUB', textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
                                   const SizedBox(height: 24),
-                                  FilledButton.icon(
-                                    onPressed: _importLocalBook,
-                                    icon: const Icon(Icons.file_upload_outlined),
-                                    label: const Text('导入本地书籍'),
+                                  Center(
+                                    child: FilledButton.icon(
+                                      onPressed: _importLocalBook,
+                                      icon: const Icon(Icons.file_upload_outlined),
+                                      label: const Text('导入本地书籍'),
+                                    ),
                                   ),
                                 ],
-                              ),
-                            )
-                          : _isGrid
-                              ? BookshelfGrid(
-                                  books: filtered,
-                                  editMode: _editMode,
-                                  selectedIds: _selectedIds,
-                                  onBookTap: _editMode ? (b) => _toggleSelect(b.id) : _openReader,
-                                )
-                              : BookshelfList(
-                                  books: filtered,
-                                  editMode: _editMode,
-                                  selectedIds: _selectedIds,
-                                  onBookTap: _editMode ? (b) => _toggleSelect(b.id) : _openReader,
-                                ),
+                              )
+                            : _isGrid
+                                ? BookshelfGrid(
+                                    books: filtered,
+                                    editMode: _editMode,
+                                    selectedIds: _selectedIds,
+                                    onBookTap: _editMode ? (b) => _toggleSelect(b.id) : _openReader,
+                                    onBookLongPress: _editMode ? null : _showBookActions,
+                                  )
+                                : BookshelfList(
+                                    books: filtered,
+                                    editMode: _editMode,
+                                    selectedIds: _selectedIds,
+                                    onBookTap: _editMode ? (b) => _toggleSelect(b.id) : _openReader,
+                                    onBookLongPress: _editMode ? null : _showBookActions,
+                                  ),
+                      ),
                     ),
                   ],
                 );
@@ -334,6 +500,9 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     switch (_sortMode) {
       case 'name':
         list.sort((a, b) => a.name.compareTo(b.name));
+        break;
+      case 'author':
+        list.sort((a, b) => (a.author ?? '').compareTo(b.author ?? ''));
         break;
       case 'added':
         // 本地导入的书籍 id 为创建时间戳；其他来源按最早时间兜底

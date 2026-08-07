@@ -124,6 +124,29 @@ void main() {
       expect(await service.getBookmarks('book1'), isEmpty);
       expect((await service.getBookmarks('book2')).length, 1);
     });
+
+    test('should list all bookmarks and remove by global id', () async {
+      final service = BookmarkService();
+      await service.add(Bookmark(
+        id: 'g1',
+        bookId: 'book1',
+        chapterIndex: 1,
+        pageIndex: 2,
+        createdAt: DateTime(2026, 1, 1),
+      ));
+      await service.add(Bookmark(
+        id: 'g2',
+        bookId: 'book2',
+        chapterIndex: 3,
+        pageIndex: 4,
+        createdAt: DateTime(2026, 1, 2),
+      ));
+
+      final all = await service.getAll();
+      expect(all.length, 2);
+      await service.removeById('g1');
+      expect((await service.getAll()).single.id, 'g2');
+    });
   });
 
   group('NoteService', () {
@@ -170,6 +193,28 @@ void main() {
       await service.remove('book1', 'same-id');
       expect(await service.getNotes('book1'), isEmpty);
       expect((await service.getNotes('book2')).length, 1);
+    });
+
+    test('should list all notes and remove by global id', () async {
+      final service = NoteService();
+      await service.add(ReadingNote(
+        id: 'g1',
+        bookId: 'book1',
+        chapterIndex: 1,
+        text: '笔记1',
+        createdAt: DateTime(2026, 1, 1),
+      ));
+      await service.add(ReadingNote(
+        id: 'g2',
+        bookId: 'book2',
+        chapterIndex: 2,
+        text: '笔记2',
+        createdAt: DateTime(2026, 1, 2),
+      ));
+
+      expect((await service.getAll()).length, 2);
+      await service.removeById('g1');
+      expect((await service.getAll()).single.text, '笔记2');
     });
   });
 }

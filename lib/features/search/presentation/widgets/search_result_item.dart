@@ -1,10 +1,7 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import '../../../../core/theme/app_colors.dart';
-import '../../../bookshelf/domain/entities/book.dart';
-import '../../../bookshelf/presentation/providers/bookshelf_provider.dart';
+import '../../../reader/presentation/pages/book_detail_page.dart';
 import '../../domain/entities/search_result.dart';
 
 class SearchResultItem extends ConsumerStatefulWidget {
@@ -24,37 +21,29 @@ class _SearchResultItemState extends ConsumerState<SearchResultItem> {
     if (_busy) return;
     _busy = true;
     final result = widget.result;
-    final bookId = source?.bookId ?? result.bookId;
-    final detailUrl = source?.detailUrl ?? result.detailUrl;
-    final sourceId = source?.sourceId ?? result.sourceId;
+    final detailResult = source == null
+        ? result
+        : SearchResult(
+            bookId: source.bookId,
+            name: result.name,
+            author: result.author,
+            coverUrl: result.coverUrl,
+            detailUrl: source.detailUrl,
+            intro: result.intro,
+            kind: result.kind,
+            lastChapter: result.lastChapter,
+            wordCount: result.wordCount,
+            sourceId: source.sourceId,
+            sourceName: source.sourceName,
+            alternatives: result.alternatives,
+          );
     try {
-      // 替代书源列表 = 全部替代源（含当前选中源，用于阅读器内继续换源）
-      final alts = result.alternatives.map((a) => {
-        'bookId': a.bookId,
-        'sourceId': a.sourceId,
-        'sourceName': a.sourceName,
-        'detailUrl': a.detailUrl,
-      }).toList();
-      await ref.read(bookshelfRepositoryProvider).save(Book(
-        id: bookId,
-        name: result.name,
-        author: result.author,
-        coverUrl: result.coverUrl,
-        sourceId: sourceId,
-        lastReadAt: DateTime.now(),
-      ));
-      await ref.read(bookDetailServiceProvider).save(
-        bookId,
-        detailUrl: detailUrl,
-        alternativesJson: jsonEncode(alts),
-      );
-      ref.invalidate(bookshelfListProvider);
       if (!mounted) return;
-      context.push(
-        '/reader/${Uri.encodeComponent(bookId)}'
-        '?sourceId=${Uri.encodeComponent(sourceId)}'
-        '&detailUrl=${Uri.encodeComponent(detailUrl ?? '')}'
-        '&alternatives=${Uri.encodeComponent(jsonEncode(alts))}',
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => BookDetailPage(result: detailResult),
+        ),
       );
     } catch (_) {
       if (mounted) {
@@ -159,6 +148,19 @@ class _SearchResultItemState extends ConsumerState<SearchResultItem> {
                         child: Text(
                           result.author!,
                           style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                        ),
+                      ),
+                    if (result.kind != null || result.lastChapter != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          [
+                            if (result.kind != null) result.kind!,
+                            if (result.lastChapter != null) result.lastChapter!,
+                          ].join(' · '),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
                         ),
                       ),
                     const SizedBox(height: 6),

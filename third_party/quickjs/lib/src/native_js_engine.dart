@@ -170,8 +170,11 @@ late _EngineManager _manager;
 
 /// A lightweight shell for initialization of the global variable.
 final class NativeEngineManager {
-  NativeEngineManager({bool? verbose}) {
-    _manager = _EngineManager(verbose: verbose ?? false);
+  NativeEngineManager({bool? verbose, bool timersEnabled = false}) {
+    _manager = _EngineManager(
+      verbose: verbose ?? false,
+      timersEnabled: timersEnabled,
+    );
   }
 
   void dispose() => _manager.dispose();
@@ -182,6 +185,7 @@ final class NativeEngineManager {
 final class _EngineManager {
   final ffi.Pointer<lib.JSRuntime> rt;
   final bool verbose;
+  final bool timersEnabled;
   final _engines = <int, NativeJsEngine>{};
   var _count = 0;
   DartStringReader? strReader;
@@ -194,13 +198,16 @@ final class _EngineManager {
   /// A char buffer of small chunk size, shared by all engines.
   final buf = NativeString();
 
-  _EngineManager._(this.rt, this.verbose);
+  _EngineManager._(this.rt, this.verbose, this.timersEnabled);
 
-  factory _EngineManager({bool? verbose}) {
+  factory _EngineManager({bool? verbose, bool timersEnabled = false}) {
     final rt = lib.JS_NewRuntime();
+    // 用户书源规则不可信：限制单 isolate 内存/栈，超限由 eval 异常回收。
+    lib.JS_SetMemoryLimit(rt, 64 * 1024 * 1024);
+    lib.JS_SetMaxStackSize(rt, 1024 * 1024);
     final pf = ffi.Pointer.fromFunction<_DartJSModuleLoadFunc>(_loadJsModule);
     lib.JS_SetModuleLoaderFunc(rt, ffi.nullptr, pf, ffi.nullptr);
-    return _EngineManager._(rt, verbose ?? false);
+    return _EngineManager._(rt, verbose ?? false, timersEnabled);
   }
 
   /// The implementation of engine creation.
@@ -211,7 +218,9 @@ final class _EngineManager {
     final globalThis = lib.JS_GetGlobalObject(ctx);
     e._bindConsole(globalThis, 'console');
     e._bindNotify(globalThis, '_ffiNotify');
-    e._bindSetTimer(globalThis, 'setTimeout');
+    if (timersEnabled) {
+      e._bindSetTimer(globalThis, 'setTimeout');
+    }
     c.JS_FreeValue(ctx, globalThis);
     JsEvalResult? result;
     if (code != null) {
@@ -367,11 +376,14 @@ const closeCommand = <String, dynamic>{'cmd': _closeTag};
 /// [outgoing] port was to reply the command from main isolate, while [notifying]
 /// port was to send notify event at the time of executing js without command
 /// from main isolate.
-void engineIsolate((SendPort, SendPort, bool) r) async {
-  final (outgoing, notifying, verbose) = r;
+void engineIsolate((SendPort, SendPort, bool, bool) r) async {
+  final (outgoing, notifying, verbose, timersEnabled) = r;
   final incoming = ReceivePort('_isolate.incoming');
   outgoing.send(incoming.sendPort);
-  final manager = _manager = _EngineManager(verbose: verbose);
+  final manager = _manager = _EngineManager(
+    verbose: verbose,
+    timersEnabled: timersEnabled,
+  );
   final requests = incoming.cast<Map<String, dynamic>>();
   manager.onDartNotified = (engine, method, data) {
     notifying.send({

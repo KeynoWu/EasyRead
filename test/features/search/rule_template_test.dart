@@ -1,0 +1,66 @@
+import 'package:easy_read/features/search/data/engines/rule_template.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  test('RuleTemplate 支持 JSON 字段插值', () {
+    const template = r'/detail?book_id={{$.book_id}}&source={{$.source}}';
+    final url = RuleTemplate.interpolate(
+      template,
+      json: const {'book_id': '123', 'source': '番茄'},
+      encodeValues: true,
+    );
+    expect(url, '/detail?book_id=123&source=%E7%95%AA%E8%8C%84');
+  });
+
+  test('RuleTemplate 支持默认值兜底', () {
+    final value = RuleTemplate.interpolate(
+      r'{{$.time || 未知}}',
+      json: const <String, dynamic>{},
+    );
+    expect(value, '未知');
+  });
+
+  test('RuleTemplate 支持 key/page 变量', () {
+    expect(
+      RuleTemplate.interpolate(
+        '/search?q={{key}}&page={{page}}',
+        values: const {'key': '测试'},
+        page: 2,
+      ),
+      '/search?q=测试&page=2',
+    );
+  });
+
+  test('RuleTemplate 支持 {{@@...}} 内嵌 HTML 规则', () {
+    const html = '''
+      <div>
+        <span>类别：玄幻</span>
+        <span>更新时间：2026</span>
+      </div>
+    ''';
+    expect(
+      RuleTemplate.interpolate(
+        '/detail?type={{@@span:contains(类别：)@text##类别：}}',
+        html: html,
+      ),
+      '/detail?type=玄幻',
+    );
+  });
+
+  test('RuleTemplate 支持 page 四则运算模板', () {
+    expect(
+      RuleTemplate.interpolate(
+        '/list?passback={{(page-1)*50}}&p={{page+1}}',
+        page: 2,
+      ),
+      '/list?passback=50&p=3',
+    );
+    expect(
+      RuleTemplate.interpolate(
+        '/list?offset={{(page-1)*20+1}}',
+        page: 3,
+      ),
+      '/list?offset=41',
+    );
+  });
+}

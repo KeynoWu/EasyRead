@@ -15,6 +15,7 @@ class BookSourceCard extends StatelessWidget {
   final VoidCallback? onLongPress;
   final VoidCallback? onToggle;
   final VoidCallback? onTap;
+  final VoidCallback? onMore;
 
   const BookSourceCard({
     super.key,
@@ -25,6 +26,7 @@ class BookSourceCard extends StatelessWidget {
     this.onLongPress,
     this.onToggle,
     this.onTap,
+    this.onMore,
   });
 
   @override
@@ -81,7 +83,9 @@ class BookSourceCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 3),
-                    Row(
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
                       children: [
                         if (source.bookSourceGroup != null) ...[
                           Container(
@@ -97,6 +101,10 @@ class BookSourceCard extends StatelessWidget {
                           ),
                           const SizedBox(width: 6),
                         ],
+                        if (source.enabledExplore)
+                          const _CapabilityTag(label: '发现'),
+                        if (source.enabledCookieJar)
+                          const _CapabilityTag(label: 'CookieJar'),
                         _TestStatusBadge(testRecord: testRecord),
                       ],
                     ),
@@ -104,16 +112,41 @@ class BookSourceCard extends StatelessWidget {
                 ),
               ),
               // 启用开关（非多选模式）
-              if (!selectionMode)
+              if (!selectionMode) ...[
+                IconButton(
+                  icon: const Icon(Icons.more_vert, size: 20),
+                  color: AppColors.textSecondary,
+                  onPressed: onMore,
+                  tooltip: '更多',
+                ),
                 Switch(
                   value: source.enabled,
                   activeTrackColor: AppColors.tint,
                   onChanged: (_) => onToggle?.call(),
                 ),
+              ],
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+class _CapabilityTag extends StatelessWidget {
+  final String label;
+
+  const _CapabilityTag({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppColors.tintSoft,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(label, style: const TextStyle(fontSize: 10, color: AppColors.tint)),
     );
   }
 }

@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import '../../../search/data/repositories/search_repository_impl.dart';
+import '../../../search/domain/entities/search_result.dart';
 import '../../../search/domain/repositories/search_repository.dart';
 import '../entities/book_source.dart';
 
@@ -8,11 +9,13 @@ class BookSourceTestResult {
   final bool success;
   final String message;
   final int resultCount;
+  final List<SearchResult> samples;
 
   const BookSourceTestResult({
     required this.success,
     required this.message,
     this.resultCount = 0,
+    this.samples = const [],
   });
 }
 
@@ -52,6 +55,7 @@ class TestBookSource {
         success: true,
         message: '搜索成功，找到 ${results.length} 个结果',
         resultCount: results.length,
+        samples: results.take(3).toList(),
       );
     } on DioException catch (e) {
       return BookSourceTestResult(

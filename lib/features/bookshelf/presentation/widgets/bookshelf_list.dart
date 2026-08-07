@@ -5,6 +5,7 @@ import '../../domain/entities/book.dart';
 class BookshelfList extends StatelessWidget {
   final List<Book> books;
   final void Function(Book)? onBookTap;
+  final void Function(Book)? onBookLongPress;
   final bool editMode;
   final Set<String> selectedIds;
 
@@ -12,6 +13,7 @@ class BookshelfList extends StatelessWidget {
     super.key,
     required this.books,
     this.onBookTap,
+    this.onBookLongPress,
     this.editMode = false,
     this.selectedIds = const {},
   });
@@ -27,6 +29,7 @@ class BookshelfList extends StatelessWidget {
         return Card(
           child: InkWell(
             onTap: () => onBookTap?.call(book),
+            onLongPress: () => onBookLongPress?.call(book),
             borderRadius: BorderRadius.circular(12),
             child: Padding(
               padding: const EdgeInsets.all(12),

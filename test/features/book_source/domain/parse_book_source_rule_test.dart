@@ -72,20 +72,24 @@ void main() {
       "bookSourceUrl": "https://test.com",
       "ruleSearch": {
         "url": "https://test.com/search?keyword={{key}}",
+        "charset": "gbk",
         "bookList": "div.list > .item",
         "name": "h2.title@text",
         "author": "span.author@text",
         "coverUrl": "img.cover@src",
-        "bookUrl": "a.link@href"
+        "bookUrl": "a.link@href",
+        "checkKeyWord": "我的"
       },
       "ruleToc": {
         "chapterList": "ul.chapters > li",
         "chapterName": "a@text",
-        "chapterUrl": "a@href"
+        "chapterUrl": "a@href",
+        "nextTocUrl": "{{\$.next}}"
       },
       "ruleContent": {
         "content": "div.content@html",
-        "contentUrl": "https://test.com/chapter/{{id}}.html"
+        "contentUrl": "https://test.com/chapter/{{id}}.html",
+        "nextContentUrl": "{{\$.next}}"
       }
     }
     ''';
@@ -95,10 +99,14 @@ void main() {
       (l) => fail('Expected Right'),
       (source) {
         expect(source.searchUrl, contains('{{key}}'));
+        expect(source.checkKeyWord, '我的');
         expect(source.bookListRule, 'div.list > .item');
         expect(source.chapterListRule, 'ul.chapters > li');
         expect(source.chapterContentRule, 'div.content@html');
         expect(source.contentUrl, 'https://test.com/chapter/{{id}}.html');
+        expect(source.responseCharset, 'gbk');
+        expect(source.nextTocUrl, r'{{$.next}}');
+        expect(source.nextContentUrl, r'{{$.next}}');
       },
     );
   });

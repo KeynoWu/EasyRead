@@ -1,11 +1,15 @@
 import 'dart:io';
 import 'package:dio/dio.dart';
+import 'package:easy_read/core/data/cookie_jar_service.dart';
 import 'package:easy_read/core/network/dio_client.dart';
+import 'package:easy_read/core/purification/purify_pipeline.dart';
+import 'package:easy_read/core/purification/regex_purifier.dart';
 import 'package:easy_read/features/book_source/domain/entities/book_source.dart';
 import 'package:easy_read/features/book_source/domain/repositories/book_source_repository.dart';
 import 'package:easy_read/features/reader/data/models/chapter_model.dart';
 import 'package:easy_read/features/reader/data/models/reading_progress_model.dart';
 import 'package:easy_read/features/reader/data/repositories/reader_repository_impl.dart';
+import 'package:easy_read/features/search/data/engines/js_rule_executor.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
 
@@ -23,6 +27,7 @@ class _DynamicClient implements DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    String? charset,
     CancelToken? cancelToken,
   }) async {
     return responder(url);
@@ -66,6 +71,7 @@ class _DynamicClient implements DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    String? charset,
     Map<String, dynamic>? extra,
     void Function(int received, int total)? onProgress,
     CancelToken? cancelToken,
@@ -95,6 +101,23 @@ class _SourceRepo implements BookSourceRepository {
   Future<List<BookSource>> getEnabled() async => [source];
 }
 
+class _FakeCookieJar extends CookieJarService {
+  String? stored;
+
+  @override
+  Future<String?> get(String sourceId) async => stored;
+
+  @override
+  Future<void> set(String sourceId, String cookie) async {
+    stored = cookie;
+  }
+
+  @override
+  Future<void> remove(String sourceId) async {
+    stored = null;
+  }
+}
+
 void main() {
   setUp(() async {
     Hive.init(Directory.systemTemp.createTempSync('hive_reader_fix').path);
@@ -111,6 +134,63 @@ void main() {
   });
 
   group('reader_repository 修复回归', () {
+    test('完整 JS 正文规则可展开 @get 变量', () async {
+      const source = BookSource(
+        id: 'js-content-var',
+        name: 'JS正文变量源',
+        bookSourceUrl: 'https://example.com',
+        rules: {
+          'chapterContent': "@js:java.getString('@get:{sel}')",
+        },
+      );
+      final client = _DynamicClient(
+        (_) => '<div><h1>正文变量</h1></div>',
+      );
+      final repo = ReaderRepositoryImpl(
+        client: client,
+        sourceRepo: _SourceRepo(source),
+      );
+      final chapter = await repo.getChapter(
+        bookId: 'book-var',
+        chapterIndex: 0,
+        sourceId: 'js-content-var',
+        detailUrl: 'https://example.com/book/1',
+        variables: const {'sel': 'h1'},
+      );
+      expect(chapter.content, contains('正文变量'));
+    });
+
+    test('loginCheckJs 替换正文并回写 CookieJar', () async {
+      const source = BookSource(
+        id: 'login-reader',
+        name: '登录阅读源',
+        bookSourceUrl: 'https://example.com',
+        rules: {
+          'chapterContent': '#content@text',
+          'loginCheckJs':
+              "@js:cookie.setCookie(source.getKey(), 'session=xyz'); "
+              "'<div id=\"content\"><p>登录正文</p></div>'",
+        },
+      );
+      final client = _DynamicClient(
+        (_) => '<div>旧正文</div>',
+      );
+      final cookieJar = _FakeCookieJar();
+      final repo = ReaderRepositoryImpl(
+        client: client,
+        sourceRepo: _SourceRepo(source),
+        cookieJar: cookieJar,
+      );
+      final chapter = await repo.getChapter(
+        bookId: 'book1',
+        chapterIndex: 0,
+        sourceId: 'login-reader',
+        detailUrl: 'https://example.com/book/1',
+      );
+      expect(chapter.content, contains('登录正文'));
+      expect(cookieJar.stored, 'session=xyz');
+    });
+
     test('#1/#3 兜底正文提取命中真实正文且跳过 script', () async {
       const source = BookSource(
         id: 'src1',
@@ -301,6 +381,469 @@ void main() {
         throwsA(isA<ChapterLoadException>()
             .having((e) => e.message, 'message', '无法定位章节')),
       );
+    });
+
+    test('本地导入章节 v3 key 可直接读取', () async {
+      final box = await Hive.openBox<ChapterModel>('chapters');
+      await box.put(
+        'v3_book1_local_0',
+        ChapterModel(
+          id: 'v3_book1_local_0',
+          bookId: 'book1',
+          title: '第一章',
+          content: '本地正文',
+          index: 0,
+          sourceId: 'local',
+          cachedAt: DateTime.now(),
+        ),
+      );
+      final repo = ReaderRepositoryImpl(
+        client: _DynamicClient((_) => ''),
+        sourceRepo: _SourceRepo(
+          const BookSource(id: 'unused', name: 'unused'),
+        ),
+      );
+
+      final chapter = await repo.getChapter(
+        bookId: 'book1',
+        chapterIndex: 0,
+        sourceId: 'local',
+      );
+      expect(chapter.content, '本地正文');
+    });
+
+    test('旧版本地缓存 key 可兼容读取', () async {
+      final box = await Hive.openBox<ChapterModel>('chapters');
+      await box.put(
+        'book1_local_0',
+        ChapterModel(
+          id: 'book1_local_0',
+          bookId: 'book1',
+          title: '第一章',
+          content: '旧本地正文',
+          index: 0,
+          sourceId: 'local',
+          cachedAt: DateTime.now(),
+        ),
+      );
+      final repo = ReaderRepositoryImpl(
+        client: _DynamicClient((_) => ''),
+        sourceRepo: _SourceRepo(
+          const BookSource(id: 'unused', name: 'unused'),
+        ),
+      );
+
+      final chapter = await repo.getChapter(
+        bookId: 'book1',
+        chapterIndex: 0,
+        sourceId: 'local',
+      );
+      expect(chapter.content, '旧本地正文');
+    });
+
+    test('相对详情 URL 基于书源地址 resolve', () async {
+      const source = BookSource(
+        id: 'src1',
+        name: '测试源',
+        bookSourceUrl: 'https://example.com',
+        rules: {
+          'chapterList': 'ul > li',
+          'chapterName': 'a',
+          'chapterUrl': 'a@href',
+        },
+      );
+      final client = _DynamicClient((url) {
+        expect(url, 'https://example.com/book/1');
+        return '<ul><li><a href="/ch/1">第一章</a></li></ul>';
+      });
+      final repo = ReaderRepositoryImpl(
+        client: client,
+        sourceRepo: _SourceRepo(source),
+      );
+
+      final catalog = await repo.getCatalog(
+        bookId: 'book1',
+        sourceId: 'src1',
+        detailUrl: '/book/1',
+      );
+      expect(catalog.chapters.single.url, '/ch/1');
+    });
+
+    test('成功规则提取仍经过净化管线', () async {
+      const source = BookSource(
+        id: 'src1',
+        name: '测试源',
+        bookSourceUrl: 'https://example.com',
+        rules: {
+          'chapterContent': 'div.content@text',
+        },
+      );
+      final client = _DynamicClient(
+        (_) => '<div class="content">正文内容</div>',
+      );
+      final pipeline = PurifyPipeline(
+        regexPurifier: const RegexPurifier(
+          rules: [PurifyRule(pattern: '正文', replacement: '净化')],
+        ),
+      );
+      final repo = ReaderRepositoryImpl(
+        client: client,
+        sourceRepo: _SourceRepo(source),
+        pipeline: pipeline,
+      );
+
+      final chapter = await repo.getChapter(
+        bookId: 'book1',
+        chapterIndex: 0,
+        sourceId: 'src1',
+        detailUrl: 'https://example.com/book/1',
+      );
+      expect(chapter.content, contains('净化内容'));
+    });
+
+    test('智能正文兜底保留段落结构', () async {
+      const source = BookSource(
+        id: 'src1',
+        name: '测试源',
+        bookSourceUrl: 'https://example.com',
+        rules: {
+          'chapterContent': '.missing',
+        },
+      );
+      final client = _DynamicClient(
+        (_) => '<body><div><p>第一段</p><p>第二段</p></div></body>',
+      );
+      final repo = ReaderRepositoryImpl(
+        client: client,
+        sourceRepo: _SourceRepo(source),
+      );
+
+      final chapter = await repo.getChapter(
+        bookId: 'book1',
+        chapterIndex: 0,
+        sourceId: 'src1',
+        detailUrl: 'https://example.com/book/1',
+      );
+      expect(chapter.content, contains('<p>第一段</p>'));
+      expect(chapter.content, contains('<p>第二段</p>'));
+    });
+
+    test('完整 JS 正文规则可执行', () async {
+      const source = BookSource(
+        id: 'src1',
+        name: '测试源',
+        bookSourceUrl: 'https://example.com',
+        rules: {
+          'chapterContent': r'<js>r = result.match(/<p>(.*?)<\/p>/); r[1]</js>',
+        },
+      );
+      final client = _DynamicClient((_) => '<p>JS正文</p>');
+      final repo = ReaderRepositoryImpl(
+        client: client,
+        sourceRepo: _SourceRepo(source),
+      );
+
+      final chapter = await repo.getChapter(
+        bookId: 'book1',
+        chapterIndex: 0,
+        sourceId: 'src1',
+        detailUrl: 'https://example.com/book/1',
+      );
+      expect(chapter.content, contains('JS正文'));
+    });
+
+    test('完整 JS chapterList 返回 JSON 数组时解析目录', () async {
+      final raw = await JsRuleExecutor.execute(
+        '',
+        r"<js>JSON.stringify([{n:'第一章',u:'/ch/1'}])</js>",
+      );
+      expect(raw, isNotNull, reason: 'JS 目录规则应返回 JSON');
+      const source = BookSource(
+        id: 'src1',
+        name: '测试源',
+        bookSourceUrl: 'https://example.com',
+        rules: {
+          'chapterList': r"<js>JSON.stringify([{n:'第一章',u:'/ch/1'}])</js>",
+          'chapterName': r'$.n',
+          'chapterUrl': r'$.u',
+        },
+      );
+      final repo = ReaderRepositoryImpl(
+        client: _DynamicClient((_) => ''),
+        sourceRepo: _SourceRepo(source),
+      );
+
+      final catalog = await repo.getCatalog(
+        bookId: 'book1',
+        sourceId: 'src1',
+        detailUrl: 'https://example.com/book/1',
+      );
+      expect(catalog.chapters.single.title, '第一章');
+      expect(catalog.chapters.single.url, '/ch/1');
+    });
+
+    test('ruleBookInfo 先解析详情再按 tocUrl 拉取目录', () async {
+      const source = BookSource(
+        id: 'src1',
+        name: '测试源',
+        bookSourceUrl: 'https://example.com',
+        rules: {
+          'ruleBookInfo': {
+            'init': r'$.data',
+            'tocUrl': r'/catalog?book_id={{$.book_id}}',
+          },
+          'ruleToc': {
+            'chapterList': r'$.data',
+            'chapterName': r'$.title',
+            'chapterUrl': r'/content?item_id={{$.item_id}}',
+          },
+        },
+      );
+      final client = _DynamicClient((url) {
+        if (url.contains('/book/')) {
+          return '{"data":{"book_id":"1"}}';
+        }
+        if (url.contains('/catalog')) {
+          return '{"data":[{"title":"第一章","item_id":"a"}]}';
+        }
+        return '';
+      });
+      final repo = ReaderRepositoryImpl(
+        client: client,
+        sourceRepo: _SourceRepo(source),
+      );
+
+      final catalog = await repo.getCatalog(
+        bookId: 'book1',
+        sourceId: 'src1',
+        detailUrl: '/book/1',
+      );
+      expect(catalog.chapters.single.title, '第一章');
+      expect(catalog.chapters.single.url, '/content?item_id=a');
+    });
+
+    test('getBookDetail 返回详情字段', () async {
+      const source = BookSource(
+        id: 'src1',
+        name: '测试源',
+        bookSourceUrl: 'https://example.com',
+        rules: {
+          'ruleBookInfo': {
+            'init': r'$.data',
+            'name': r'$.name',
+            'author': r'$.author',
+            'intro': r'$.intro',
+            'coverUrl': r'$.cover_url',
+            'lastChapter': r'$.last_chapter',
+            'tocUrl': r'/catalog?book_id={{$.book_id}}',
+          },
+          'ruleToc': {
+            'chapterList': r'$.data',
+            'chapterName': r'$.title',
+            'chapterUrl': r'/content?item_id={{$.item_id}}',
+          },
+        },
+      );
+      final client = _DynamicClient((url) {
+        if (url.contains('/book/')) {
+          return '{"data":{"book_id":"1","name":"书A","author":"作者A",'
+              '"intro":"简介内容","cover_url":"/cover.jpg","last_chapter":"第100章"}}';
+        }
+        return '{"data":[{"title":"第一章","item_id":"a"}]}';
+      });
+      final repo = ReaderRepositoryImpl(
+        client: client,
+        sourceRepo: _SourceRepo(source),
+      );
+
+      final detail = await repo.getBookDetail(
+        bookId: 'book1',
+        sourceId: 'src1',
+        detailUrl: '/book/1',
+      );
+      expect(detail.name, '书A');
+      expect(detail.author, '作者A');
+      expect(detail.intro, '简介内容');
+      expect(detail.coverUrl, 'https://example.com/cover.jpg');
+      expect(detail.lastChapter, '第100章');
+    });
+
+    test('JSONPath 正文规则直接提取 JSON 内容', () async {
+      const source = BookSource(
+        id: 'src1',
+        name: '测试源',
+        bookSourceUrl: 'https://example.com',
+        rules: {
+          'ruleToc': {
+            'chapterList': r'$.data',
+            'chapterName': r'$.title',
+            'chapterUrl': r'/content?item_id={{$.item_id}}',
+          },
+          'ruleContent': {
+            'content': r'$.content',
+          },
+        },
+      );
+      final client = _DynamicClient((url) {
+        if (url.contains('/book/')) {
+          return '{"data":[{"title":"第一章","item_id":"a"}]}';
+        }
+        return '{"content":"JSON正文"}';
+      });
+      final repo = ReaderRepositoryImpl(
+        client: client,
+        sourceRepo: _SourceRepo(source),
+      );
+
+      final chapter = await repo.getChapter(
+        bookId: 'book1',
+        chapterIndex: 0,
+        sourceId: 'src1',
+        detailUrl: '/book/1',
+      );
+      expect(chapter.content, contains('JSON正文'));
+    });
+
+    test('目录分页 nextTocUrl 自动拼接章节', () async {
+      const source = BookSource(
+        id: 'src1',
+        name: '测试源',
+        bookSourceUrl: 'https://example.com',
+        rules: {
+          'ruleToc': {
+            'chapterList': r'$.data',
+            'chapterName': r'$.title',
+            'chapterUrl': r'/content?item_id={{$.item_id}}',
+            'nextTocUrl': r'$.next_url',
+          },
+        },
+      );
+      final client = _DynamicClient((url) {
+        if (url.contains('/toc/2')) {
+          return '{"data":[{"title":"第二章","item_id":"b"}]}';
+        }
+        return '{"data":[{"title":"第一章","item_id":"a"}],"next_url":"/toc/2"}';
+      });
+      final repo = ReaderRepositoryImpl(
+        client: client,
+        sourceRepo: _SourceRepo(source),
+      );
+
+      final catalog = await repo.getCatalog(
+        bookId: 'book1',
+        sourceId: 'src1',
+        detailUrl: '/book/1',
+      );
+      expect(catalog.chapters.map((c) => c.title), ['第一章', '第二章']);
+    });
+
+    test('正文分页 nextContentUrl 自动拼接内容', () async {
+      const source = BookSource(
+        id: 'src1',
+        name: '测试源',
+        bookSourceUrl: 'https://example.com',
+        rules: {
+          'ruleContent': {
+            'content': r'$.content',
+            'nextContentUrl': r'$.next_url',
+          },
+        },
+      );
+      final client = _DynamicClient((url) {
+        if (url.contains('/ch/2')) {
+          return '{"content":"第二页"}';
+        }
+        return '{"content":"第一页","next_url":"/ch/2"}';
+      });
+      final repo = ReaderRepositoryImpl(
+        client: client,
+        sourceRepo: _SourceRepo(source),
+      );
+
+      final chapter = await repo.getChapter(
+        bookId: 'book1',
+        chapterIndex: 0,
+        sourceId: 'src1',
+        detailUrl: '/book/1',
+      );
+      expect(chapter.content, contains('第一页'));
+      expect(chapter.content, contains('第二页'));
+    });
+
+    test('正文开头重复章节标题自动去除', () async {
+      const source = BookSource(
+        id: 'src1',
+        name: '测试源',
+        bookSourceUrl: 'https://example.com',
+        rules: {
+          'chapterList': 'ul > li',
+          'chapterName': 'a',
+          'chapterUrl': 'a@href',
+          'chapterContent': 'div.content@text',
+        },
+      );
+      final client = _DynamicClient((url) {
+        if (url.contains('/book/')) {
+          return '<ul><li><a href="/ch/1">第一章 开始</a></li></ul>';
+        }
+        return '<div class="content">第一章 开始正文内容</div>';
+      });
+      final repo = ReaderRepositoryImpl(
+        client: client,
+        sourceRepo: _SourceRepo(source),
+      );
+
+      final chapter = await repo.getChapter(
+        bookId: 'book1',
+        chapterIndex: 0,
+        sourceId: 'src1',
+        detailUrl: '/book/1',
+      );
+      expect(chapter.content, isNot(startsWith('第一章 开始')));
+      expect(chapter.content, contains('正文内容'));
+    });
+
+    test('目录 @put 变量用于正文 URL @get', () async {
+      const source = BookSource(
+        id: 'srcVar',
+        name: '变量源',
+        bookSourceUrl: 'https://example.com',
+        rules: {
+          'chapterList': 'ul > li',
+          'chapterName': r'a@text@put:{cid:span.cid@text}',
+          'chapterUrl': 'a@href',
+          'contentUrl': 'https://example.com/content/@get:{cid}/{{id}}',
+          'chapterContent': '#content',
+        },
+      );
+      final client = _DynamicClient((url) {
+        if (url.contains('/book/')) {
+          return '<ul><li><a href="/ch/1">第一章</a>'
+              '<span class="cid">99</span></li></ul>';
+        }
+        if (url.contains('/content/99/')) {
+          return '<div id="content">变量正文</div>';
+        }
+        return '<div id="content">错误 URL</div>';
+      });
+      final repo = ReaderRepositoryImpl(
+        client: client,
+        sourceRepo: _SourceRepo(source),
+      );
+
+      final catalog = await repo.getCatalog(
+        bookId: 'bookVar',
+        sourceId: 'srcVar',
+        detailUrl: 'https://example.com/book/1',
+      );
+      expect(catalog.chapters.single.variables, {'cid': '99'});
+      final chapter = await repo.getChapter(
+        bookId: 'bookVar',
+        chapterIndex: 0,
+        sourceId: 'srcVar',
+        detailUrl: 'https://example.com/book/1',
+      );
+      expect(chapter.content, contains('变量正文'));
     });
   });
 }

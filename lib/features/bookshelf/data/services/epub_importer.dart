@@ -239,8 +239,17 @@ class EpubImporter {
   }
 
   static String _joinPath(String base, String href) {
-    if (href.startsWith('/')) return href.substring(1);
-    if (base.isEmpty) return href;
-    return '$base/$href';
+    final combined =
+        href.startsWith('/') ? href.substring(1) : (base.isEmpty ? href : '$base/$href');
+    final segments = <String>[];
+    for (final part in combined.split('/')) {
+      if (part.isEmpty || part == '.') continue;
+      if (part == '..') {
+        if (segments.isNotEmpty) segments.removeLast();
+      } else {
+        segments.add(part);
+      }
+    }
+    return segments.join('/');
   }
 }

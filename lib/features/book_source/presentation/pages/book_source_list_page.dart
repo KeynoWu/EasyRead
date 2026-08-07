@@ -1,12 +1,16 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../../core/data/cookie_jar_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../domain/entities/book_source.dart';
 import '../../domain/entities/book_source_test_record.dart';
 import '../providers/book_source_provider.dart';
 import '../widgets/book_source_card.dart';
 import 'book_source_edit_page.dart';
+import 'book_source_login_page.dart';
 import 'book_source_test_page.dart';
 import 'subscription_page.dart';
 
@@ -32,7 +36,11 @@ class BookSourceListPage extends ConsumerStatefulWidget {
 class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
   final Set<String> _pendingToggles = {};
   SourceFilter _filter = SourceFilter.all;
+  String? _groupFilter;
   bool _sortBySpeed = false;
+  bool _showSearch = false;
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
 
   // 多选管理
   bool _selectionMode = false;
@@ -41,6 +49,22 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
 
   /// 当前筛选下的可见书源 id（build 时更新，供全选使用）
   List<String> _visibleIds = const [];
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _toggleSearch() {
+    setState(() {
+      _showSearch = !_showSearch;
+      if (!_showSearch) {
+        _searchQuery = '';
+        _searchController.clear();
+      }
+    });
+  }
 
   Future<void> _openEditor({String? sourceId}) async {
     final repo = ref.read(bookSourceRepositoryProvider);
@@ -59,6 +83,67 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
         ref.invalidate(bookSourceTestRecordsProvider);
       }
       ref.invalidate(bookSourceListProvider);
+    }
+  }
+
+  Future<void> _showSourceMenu(BookSource source) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.copy),
+              title: const Text('复制书源 JSON'),
+              onTap: () => Navigator.pop(context, 'copy'),
+            ),
+            if ((source.loginUrl?.isNotEmpty ?? false) ||
+                (source.bookSourceUrl?.isNotEmpty ?? false))
+              ListTile(
+                leading: const Icon(Icons.login),
+                title: const Text('登录书源'),
+                subtitle: const Text('WebView 登录并保存 Cookie'),
+                onTap: () => Navigator.pop(context, 'login'),
+              ),
+            ListTile(
+              leading: const Icon(Icons.checklist),
+              title: const Text('进入多选'),
+              onTap: () => Navigator.pop(context, 'select'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted) return;
+    switch (action) {
+      case 'copy':
+        final json = jsonEncode({
+          'bookSourceName': source.name,
+          'bookSourceGroup': source.bookSourceGroup,
+          'bookSourceUrl': source.bookSourceUrl,
+          'enabled': source.enabled,
+          ...source.rules,
+        });
+        await Clipboard.setData(ClipboardData(text: json));
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('书源 JSON 已复制')),
+        );
+      case 'select':
+        _enterSelection(source);
+      case 'login':
+        final success = await Navigator.push<bool>(
+          context,
+          MaterialPageRoute(
+            builder: (_) => BookSourceLoginPage(source: source),
+          ),
+        );
+        if (success == true && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('登录 Cookie 已保存')),
+          );
+        }
     }
   }
 
@@ -174,9 +259,11 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
     try {
       final repo = ref.read(bookSourceRepositoryProvider);
       final store = ref.read(bookSourceTestStoreProvider);
+      final cookieJar = CookieJarService();
       for (final id in _selectedIds) {
         await repo.delete(id);
         await store.remove(id);
+        await cookieJar.remove(id);
       }
       ref.invalidate(bookSourceListProvider);
       ref.invalidate(bookSourceTestRecordsProvider);
@@ -208,12 +295,30 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
     }
   }
 
+  Future<void> _refreshSources() async {
+    ref.invalidate(bookSourceListProvider);
+    ref.invalidate(bookSourceTestRecordsProvider);
+    await Future.wait([
+      ref.read(bookSourceListProvider.future),
+      ref.read(bookSourceTestRecordsProvider.future),
+    ]);
+  }
+
   /// 应用筛选 + 排序
   List<BookSource> _applyView(
     List<BookSource> sources,
     Map<String, BookSourceTestRecord> records,
   ) {
     var result = sources.where((s) {
+      final query = _searchQuery.trim();
+      if (query.isNotEmpty &&
+          !s.name.contains(query) &&
+          !(s.bookSourceGroup ?? '').contains(query)) {
+        return false;
+      }
+      if (_groupFilter != null && s.bookSourceGroup != _groupFilter) {
+        return false;
+      }
       final record = records[s.id];
       switch (_filter) {
         case SourceFilter.all:
@@ -279,6 +384,11 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
               ]
             : [
                 IconButton(
+                  icon: Icon(_showSearch ? Icons.close : Icons.search),
+                  onPressed: _toggleSearch,
+                  tooltip: '搜索书源',
+                ),
+                IconButton(
                   icon: const Icon(Icons.rule_folder_outlined),
                   onPressed: _openTestPage,
                   tooltip: '批量检测',
@@ -307,29 +417,48 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
             _visibleIds = [for (final s in view) s.id];
             return Column(
               children: [
-                if (!_selectionMode) _buildFilterBar(isDark, records),
+                if (_showSearch)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                    child: TextField(
+                      controller: _searchController,
+                      onChanged: (value) => setState(() => _searchQuery = value),
+                      decoration: const InputDecoration(
+                        hintText: '搜索书源名称或分组',
+                        prefixIcon: Icon(Icons.search),
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                if (!_selectionMode) _buildFilterBar(sources, isDark, records),
                 Expanded(
                   child: view.isEmpty
                       ? const Center(
                           child: Text('没有符合条件的书源',
                               style: TextStyle(color: AppColors.textSecondary)),
                         )
-                      : ListView.builder(
-                          itemCount: view.length,
-                          itemBuilder: (context, index) {
-                            final source = view[index];
-                            return BookSourceCard(
-                              source: source,
-                              testRecord: records[source.id],
-                              selectionMode: _selectionMode,
-                              selected: _selectedIds.contains(source.id),
-                              onTap: _selectionMode
-                                  ? () => _toggleSelected(source.id)
-                                  : () => _openEditor(sourceId: source.id),
-                              onLongPress: () => _enterSelection(source),
-                              onToggle: () => _toggleSource(source),
-                            );
-                          },
+                      : RefreshIndicator(
+                          onRefresh: _refreshSources,
+                          child: ListView.builder(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            itemCount: view.length,
+                            itemBuilder: (context, index) {
+                              final source = view[index];
+                              return BookSourceCard(
+                                source: source,
+                                testRecord: records[source.id],
+                                selectionMode: _selectionMode,
+                                selected: _selectedIds.contains(source.id),
+                                onTap: _selectionMode
+                                    ? () => _toggleSelected(source.id)
+                                    : () => _openEditor(sourceId: source.id),
+                                onLongPress: () => _enterSelection(source),
+                                onMore: _selectionMode ? null : () => _showSourceMenu(source),
+                                onToggle: () => _toggleSource(source),
+                              );
+                            },
+                          ),
                         ),
                 ),
               ],
@@ -351,7 +480,16 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
     );
   }
 
-  Widget _buildFilterBar(bool isDark, Map<String, BookSourceTestRecord> records) {
+  Widget _buildFilterBar(
+    List<BookSource> sources,
+    bool isDark,
+    Map<String, BookSourceTestRecord> records,
+  ) {
+    final groups = <String>{
+      for (final source in sources)
+        if (source.bookSourceGroup != null) source.bookSourceGroup!,
+    }.toList()
+      ..sort();
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: Row(
@@ -391,6 +529,32 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
             ),
           ),
           const SizedBox(width: 4),
+          PopupMenuButton<String?>(
+            icon: Icon(
+              _groupFilter == null ? Icons.filter_alt_outlined : Icons.filter_alt,
+              size: 18,
+              color: _groupFilter == null ? AppColors.textSecondary : AppColors.tint,
+            ),
+            tooltip: '按分组筛选',
+            onSelected: (value) {
+              setState(() {
+                _groupFilter = value;
+                _selectionMode = false;
+                _selectedIds.clear();
+              });
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem<String?>(
+                value: null,
+                child: Text('全部分组'),
+              ),
+              for (final group in groups)
+                PopupMenuItem<String?>(
+                  value: group,
+                  child: Text(group),
+                ),
+            ],
+          ),
           InkWell(
             onTap: () => setState(() => _sortBySpeed = !_sortBySpeed),
             borderRadius: BorderRadius.circular(8),

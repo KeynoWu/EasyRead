@@ -1,14 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:hive/hive.dart';
+import '../../../../core/database/hive_init.dart';
 import 'purification_rules_page.dart';
 import 'reading_stats_page.dart';
 import 'webdav_config_page.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../reader/data/models/chapter_model.dart';
+import '../../../reader/presentation/pages/book_marks_notes_page.dart';
 import '../../domain/usecases/backup_restore.dart';
 import '../../domain/usecases/webdav_sync.dart';
 import '../providers/purify_pipeline_provider.dart';
 import '../../../book_source/presentation/providers/book_source_provider.dart';
+import '../../../book_source/domain/usecases/manage_subscription.dart';
+import '../../../bookshelf/data/services/auto_refresh_service.dart';
 import '../../../bookshelf/presentation/providers/bookshelf_provider.dart';
+import '../../../reader/presentation/providers/reader_provider.dart';
 
 class SettingsPage extends ConsumerWidget {
   const SettingsPage({super.key});
@@ -18,6 +25,11 @@ class SettingsPage extends ConsumerWidget {
     final backupRestore = BackupRestore(
       bookshelfRepo: ref.watch(bookshelfRepositoryProvider),
       sourceRepo: ref.watch(bookSourceRepositoryProvider),
+    );
+    final autoUpdater = BookshelfAutoUpdater(
+      readerRepo: ref.watch(readerRepositoryProvider),
+      bookshelfRepo: ref.watch(bookshelfRepositoryProvider),
+      detailService: ref.watch(bookDetailServiceProvider),
     );
 
     return Scaffold(
@@ -120,10 +132,65 @@ class SettingsPage extends ConsumerWidget {
                 ref.invalidate(purifyPipelineProvider);
               },
             ),
+            const _Divider(),
+            ListTile(
+              leading: const Icon(Icons.sync_outlined),
+              title: const Text('更新全部书源订阅'),
+              subtitle: const Text('刷新所有订阅并同步书源'),
+              trailing: const Icon(Icons.chevron_right, size: 18),
+              onTap: () async {
+                final manager = ManageSubscription(
+                  bookSourceRepository: ref.read(bookSourceRepositoryProvider),
+                );
+                final count = await manager.updateAll();
+                ref.invalidate(bookSourceListProvider);
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('订阅更新完成，新增/更新 $count 个书源')),
+                );
+              },
+            ),
+            const _Divider(),
+            ListTile(
+              leading: const Icon(Icons.delete_sweep_outlined),
+              title: const Text('清除章节缓存'),
+              subtitle: const Text('删除全部已缓存章节，下次阅读重新获取'),
+              trailing: const Icon(Icons.chevron_right, size: 18),
+              onTap: () async {
+                final box = await Hive.openBox<ChapterModel>(HiveBoxes.chapters);
+                final count = box.length;
+                if (!context.mounted) return;
+                final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('清除章节缓存'),
+                    content: Text('将删除全部已缓存章节（共 $count 章），确定继续吗？'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('取消'),
+                      ),
+                      FilledButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        child: const Text('清除'),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirmed != true || !context.mounted) return;
+                await box.clear();
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('章节缓存已清除')),
+                );
+              },
+            ),
           ]),
 
           const _SectionHeader(title: '阅读'),
           _GroupCard(children: [
+            _AutoRefreshTile(updater: autoUpdater),
+            const _Divider(),
             ListTile(
               leading: const Icon(Icons.cleaning_services_outlined),
               title: const Text('管理净化规则'),
@@ -141,6 +208,19 @@ class SettingsPage extends ConsumerWidget {
               trailing: const Icon(Icons.chevron_right, size: 18),
               onTap: () async {
                 await Navigator.push(context, MaterialPageRoute(builder: (_) => const ReadingStatsPage()));
+              },
+            ),
+            const _Divider(),
+            ListTile(
+              leading: const Icon(Icons.bookmarks_outlined),
+              title: const Text('书签与笔记'),
+              subtitle: const Text('跨书查看和管理全部书签、笔记'),
+              trailing: const Icon(Icons.chevron_right, size: 18),
+              onTap: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const BookMarksNotesPage()),
+                );
               },
             ),
           ]),
@@ -162,6 +242,69 @@ class SettingsPage extends ConsumerWidget {
           const SizedBox(height: 24),
         ],
       ),
+    );
+  }
+}
+
+/// 自动更新书架设置：0 关闭，其余为间隔小时数。
+class _AutoRefreshTile extends StatefulWidget {
+  final BookshelfAutoUpdater updater;
+
+  const _AutoRefreshTile({required this.updater});
+
+  @override
+  State<_AutoRefreshTile> createState() => _AutoRefreshTileState();
+}
+
+class _AutoRefreshTileState extends State<_AutoRefreshTile> {
+  int _hours = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    AutoRefreshSettings.load().then((hours) {
+      if (mounted) setState(() => _hours = hours);
+    });
+  }
+
+  Future<void> _pick() async {
+    final selected = await showDialog<int>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('自动更新书架'),
+        children: [
+          for (final entry in const {
+            0: '关闭',
+            1: '每 1 小时',
+            6: '每 6 小时',
+            24: '每 24 小时',
+          }.entries)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, entry.key),
+              child: Text(
+                entry.value,
+                style: TextStyle(
+                  fontWeight: _hours == entry.key ? FontWeight.w600 : null,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+    if (selected == null || !mounted) return;
+    await AutoRefreshSettings.save(selected);
+    await AutoRefreshScheduler.restart(widget.updater.updateAll);
+    if (mounted) setState(() => _hours = selected);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: const Icon(Icons.update_outlined),
+      title: const Text('自动更新书架'),
+      subtitle: Text(_hours <= 0 ? '关闭' : '每 $_hours 小时更新全部书籍详情'),
+      trailing: const Icon(Icons.chevron_right, size: 18),
+      onTap: _pick,
     );
   }
 }

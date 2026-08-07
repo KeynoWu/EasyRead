@@ -31,6 +31,18 @@ class HtmlContentParser {
       }
       final child = frame.element.nodes[frame.index++];
       if (child is dom.Element) {
+        if (child.localName == 'img') {
+          final src = child.attributes['src'] ?? '';
+          if (src.isNotEmpty) {
+            final text = frame.buffer.toString().trim();
+            if (text.isNotEmpty) {
+              nodes.add(TextNode(type: NodeType.paragraph, text: text));
+            }
+            frame.buffer.clear();
+            nodes.add(TextNode(type: NodeType.image, imageUrl: src));
+          }
+          continue;
+        }
         if (_blockTags.contains(child.localName) ||
             child.localName?.startsWith('h') == true) {
           // flush 当前帧 buffer 后，将块级子元素作为新帧压栈（等价 _parseElement 递归）
@@ -49,12 +61,6 @@ class HtmlContentParser {
                 text: child.text.trim(),
                 headingLevel: level,
               ));
-              break;
-            case 'img':
-              final src = child.attributes['src'] ?? '';
-              if (src.isNotEmpty) {
-                nodes.add(TextNode(type: NodeType.image, imageUrl: src));
-              }
               break;
             default:
               // p/div/section/article/li/blockquote → 递归处理其内容（压帧）

@@ -5,6 +5,7 @@ import '../../features/book_source/presentation/pages/book_source_list_page.dart
 import '../../features/reader/presentation/pages/reader_page.dart';
 import '../../features/search/presentation/pages/search_page.dart';
 import '../../features/settings/presentation/pages/settings_page.dart';
+import '../../features/discover/presentation/pages/discover_page.dart';
 import '../../features/shell/presentation/pages/main_shell.dart';
 
 class AppRouter {
@@ -28,6 +29,13 @@ class AppRouter {
               path: '/search',
               name: 'search',
               builder: (context, state) => const SearchPage(),
+            ),
+          ]),
+          StatefulShellBranch(routes: [
+            GoRoute(
+              path: '/discover',
+              name: 'discover',
+              builder: (context, state) => const DiscoverPage(),
             ),
           ]),
           StatefulShellBranch(routes: [
@@ -59,11 +67,13 @@ class AppRouter {
           final sourceId = state.uri.queryParameters['sourceId'];
           final detailUrl = state.uri.queryParameters['detailUrl'];
           final alternativesJson = state.uri.queryParameters['alternatives'];
+          final variablesJson = state.uri.queryParameters['variables'];
           return ReaderPage(
             bookId: bookId,
             sourceId: sourceId,
             detailUrl: detailUrl,
             alternativesJson: alternativesJson,
+            variablesJson: variablesJson,
           );
         },
       ),

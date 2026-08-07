@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:easy_read/core/network/dio_client.dart';
+import 'package:fast_gbk/fast_gbk.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _RedirectAdapter implements HttpClientAdapter {
@@ -50,6 +51,24 @@ class _JsonAdapter implements HttpClientAdapter {
       200,
       headers: {'content-type': ['application/json; charset=utf-8']},
     );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+class _BytesAdapter implements HttpClientAdapter {
+  final Uint8List bytes;
+
+  _BytesAdapter(this.bytes);
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    return ResponseBody.fromBytes(bytes, 200);
   }
 
   @override
@@ -137,5 +156,15 @@ void main() {
     final content = await client.getString('https://example.com/rules.json');
     final decoded = jsonDecode(content) as Map<String, dynamic>;
     expect(decoded['name'], '规则');
+  });
+
+  test('getString decodes GBK response with charset parameter', () async {
+    final dio = Dio()
+      ..httpClientAdapter = _BytesAdapter(
+        Uint8List.fromList(gbk.encode('小说正文')),
+      );
+    final client = DioClient.forTesting(dio);
+
+    expect(await client.getString('https://example.com/book', charset: 'gbk'), '小说正文');
   });
 }

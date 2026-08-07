@@ -37,6 +37,28 @@ class NoteService {
     return notes;
   }
 
+  /// 获取全部笔记（按创建时间倒序）
+  Future<List<ReadingNote>> getAll() async {
+    final box = await _box();
+    final notes = <ReadingNote>[];
+    for (final key in box.keys) {
+      final raw = box.get(key);
+      if (raw == null) continue;
+      try {
+        final map = jsonDecode(raw) as Map<String, dynamic>;
+        notes.add(ReadingNote(
+          id: map['id']?.toString() ?? key.toString(),
+          bookId: map['book_id']?.toString() ?? '',
+          chapterIndex: (map['chapter_index'] as num?)?.toInt() ?? 0,
+          text: map['text']?.toString() ?? '',
+          createdAt: DateTime.tryParse(map['created_at']?.toString() ?? '') ?? DateTime.now(),
+        ));
+      } catch (_) {}
+    }
+    notes.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return notes;
+  }
+
   /// 添加笔记
   Future<void> add(ReadingNote note) async {
     final box = await _box();
@@ -74,5 +96,21 @@ class NoteService {
     }
     if (key == null) return;
     await box.delete(key);
+  }
+
+  /// 按笔记 id 删除（兼容跨书统一管理）
+  Future<void> removeById(String id) async {
+    final box = await _box();
+    for (final key in box.keys) {
+      final raw = box.get(key);
+      if (raw == null) continue;
+      try {
+        final map = jsonDecode(raw) as Map<String, dynamic>;
+        if (map['id']?.toString() == id) {
+          await box.delete(key);
+          return;
+        }
+      } catch (_) {}
+    }
   }
 }

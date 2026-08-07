@@ -30,9 +30,9 @@ Uint8List _buildMinimalEpub() {
     <dc:title>测试书籍</dc:title>
   </metadata>
   <manifest>
-    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
-    <item id="c1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
-    <item id="c2" href="chapter2.xhtml" media-type="application/xhtml+xml"/>
+    <item id="nav" href="Text/nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="c1" href="Text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="c2" href="Text/chapter2.xhtml" media-type="application/xhtml+xml"/>
   </manifest>
   <spine>
     <itemref idref="c1"/>
@@ -44,14 +44,14 @@ Uint8List _buildMinimalEpub() {
 
   // nav.xhtml（EPUB3 导航，提供章节标题）
   archive.addFile(ArchiveFile.string(
-    'OEBPS/nav.xhtml',
+    'OEBPS/Text/nav.xhtml',
     '''
 <html xmlns="http://www.w3.org/1999/xhtml">
   <body>
     <nav epub:type="toc">
       <ol>
-        <li><a href="chapter1.xhtml">第一章 测试标题</a></li>
-        <li><a href="chapter2.xhtml">第二章 测试标题</a></li>
+        <li><a href="../Text/chapter1.xhtml">第一章 测试标题</a></li>
+        <li><a href="../Text/chapter2.xhtml">第二章 测试标题</a></li>
       </ol>
     </nav>
   </body>
@@ -61,7 +61,7 @@ Uint8List _buildMinimalEpub() {
 
   // chapter1.xhtml
   archive.addFile(ArchiveFile.string(
-    'OEBPS/chapter1.xhtml',
+    'OEBPS/Text/chapter1.xhtml',
     '''
 <html xmlns="http://www.w3.org/1999/xhtml">
   <body>
@@ -74,7 +74,7 @@ Uint8List _buildMinimalEpub() {
 
   // chapter2.xhtml
   archive.addFile(ArchiveFile.string(
-    'OEBPS/chapter2.xhtml',
+    'OEBPS/Text/chapter2.xhtml',
     '''
 <html xmlns="http://www.w3.org/1999/xhtml">
   <body>

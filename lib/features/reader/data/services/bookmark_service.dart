@@ -37,6 +37,28 @@ class BookmarkService {
     return bookmarks;
   }
 
+  /// 获取全部书签（按创建时间倒序）
+  Future<List<Bookmark>> getAll() async {
+    final box = await _box();
+    final bookmarks = <Bookmark>[];
+    for (final key in box.keys) {
+      final raw = box.get(key);
+      if (raw == null) continue;
+      try {
+        final map = jsonDecode(raw) as Map<String, dynamic>;
+        bookmarks.add(Bookmark(
+          id: map['id']?.toString() ?? key.toString(),
+          bookId: map['book_id']?.toString() ?? '',
+          chapterIndex: (map['chapter_index'] as num?)?.toInt() ?? 0,
+          pageIndex: (map['page_index'] as num?)?.toInt() ?? 0,
+          createdAt: DateTime.tryParse(map['created_at']?.toString() ?? '') ?? DateTime.now(),
+        ));
+      } catch (_) {}
+    }
+    bookmarks.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return bookmarks;
+  }
+
   /// 添加书签
   Future<void> add(Bookmark bookmark) async {
     final box = await _box();
@@ -74,6 +96,22 @@ class BookmarkService {
     }
     if (key == null) return;
     await box.delete(key);
+  }
+
+  /// 按书签 id 删除（兼容跨书统一管理）
+  Future<void> removeById(String id) async {
+    final box = await _box();
+    for (final key in box.keys) {
+      final raw = box.get(key);
+      if (raw == null) continue;
+      try {
+        final map = jsonDecode(raw) as Map<String, dynamic>;
+        if (map['id']?.toString() == id) {
+          await box.delete(key);
+          return;
+        }
+      } catch (_) {}
+    }
   }
 
   /// 检查某位置是否已有书签（仅按该书 key 前缀过滤，避免全表遍历）

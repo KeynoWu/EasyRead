@@ -44,15 +44,21 @@ class DioClient {
 
   Dio get dio => _dio;
 
-  Future<String> getString(String url, {Map<String, String>? headers, String? sourceId, CancelToken? cancelToken}) async {
+  Future<String> getString(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
     final response = await _get(
       url,
       headers: headers,
       sourceId: sourceId,
-      responseType: ResponseType.plain,
+      responseType: ResponseType.bytes,
       cancelToken: cancelToken,
     );
-    return response.data.toString();
+    return _decodeBody(response.data, charset);
   }
 
   /// 请求并返回响应头，用于书源登录后捕获 Set-Cookie。
@@ -76,6 +82,7 @@ class DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    String? charset,
     Map<String, dynamic>? extra,
     void Function(int received, int total)? onProgress,
     CancelToken? cancelToken,
@@ -86,14 +93,14 @@ class DioClient {
       headers: headers,
       sourceId: sourceId,
       extra: extra,
-      responseType: ResponseType.plain,
+      responseType: ResponseType.bytes,
       // 大文件下载的空闲判定由 ImportBookSource 控制，
       // 这里用 Duration.zero 禁用 Dio 固定 receiveTimeout，避免其先于上层超时生效。
       receiveTimeout: Duration.zero,
       onReceiveProgress: onProgress,
       cancelToken: cancelToken,
     );
-    return response.data.toString();
+    return _decodeBody(response.data, charset);
   }
 
   /// POST 表单请求（Legado 书源搜索等场景）。

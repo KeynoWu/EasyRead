@@ -56,16 +56,20 @@ class SearchBooks {
   }
 
   /// 单源搜索
-  Future<List<SearchResult>> execute(String keyword, String sourceId) async {
+  Future<List<SearchResult>> execute(String keyword, String sourceId, {int page = 1}) async {
     if (keyword.trim().isEmpty) return [];
     final source = await sourceRepo.getById(sourceId);
     if (source == null || !source.enabled) return [];
-    return searchRepo.searchWithSource(keyword.trim(), source);
+    return searchRepo.searchWithSource(keyword.trim(), source, page: page);
   }
 
   /// 多源聚合搜索（并发上限 4 + 按 书名|作者 分组去重）
   /// [cancelToken] 透传给每个源的网络请求，供上层换词时取消旧批次。
-  Future<List<SearchResult>> executeMultiSource(String keyword, {CancelToken? cancelToken}) async {
+  Future<List<SearchResult>> executeMultiSource(
+    String keyword, {
+    int page = 1,
+    CancelToken? cancelToken,
+  }) async {
     if (keyword.trim().isEmpty) return [];
 
     final records = await _testRecords();
@@ -88,7 +92,12 @@ class SearchBooks {
         if (index >= sources.length) return;
         final source = sources[index];
         final list = await searchRepo
-            .searchWithSource(keyword, source, cancelToken: cancelToken)
+            .searchWithSource(
+              keyword,
+              source,
+              page: page,
+              cancelToken: cancelToken,
+            )
             .timeout(const Duration(seconds: 10), onTimeout: () => <SearchResult>[]);
         results.add(list);
       }
@@ -124,8 +133,13 @@ class SearchBooks {
         author: primary.author,
         coverUrl: primary.coverUrl,
         detailUrl: primary.detailUrl,
+        intro: primary.intro,
+        kind: primary.kind,
+        lastChapter: primary.lastChapter,
+        wordCount: primary.wordCount,
         sourceId: primary.sourceId,
         sourceName: primary.sourceName,
+        variables: primary.variables,
         alternatives: alternatives,
       ));
     }
@@ -138,6 +152,7 @@ class SearchBooks {
   /// 作为替代源追加），仅产出时机不同。
   Stream<SearchProgress> searchWithProgress(
     String keyword, {
+    int page = 1,
     CancelToken? cancelToken,
   }) {
     final controller = StreamController<SearchProgress>();
@@ -176,8 +191,13 @@ class SearchBooks {
           List<SearchResult> results;
           try {
             results = await searchRepo
-                .searchWithSource(keyword, source,
-                    cancelToken: cancelToken, throwOnError: true)
+                .searchWithSource(
+                  keyword,
+                  source,
+                  page: page,
+                  cancelToken: cancelToken,
+                  throwOnError: true,
+                )
                 .timeout(const Duration(seconds: 10));
           } catch (e) {
             // 主动取消直接退出，不计失败（取消途经请求不应被误报不可用）
@@ -208,9 +228,14 @@ class SearchBooks {
                 author: existing.author,
                 coverUrl: existing.coverUrl,
                 detailUrl: existing.detailUrl,
-                sourceId: existing.sourceId,
-                sourceName: existing.sourceName,
-                alternatives: [
+                intro: existing.intro,
+                kind: existing.kind,
+                lastChapter: existing.lastChapter,
+                wordCount: existing.wordCount,
+              sourceId: existing.sourceId,
+              sourceName: existing.sourceName,
+              variables: existing.variables,
+              alternatives: [
                   ...existing.alternatives,
                   SourceOption(
                     bookId: r.bookId,

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../data/services/search_history_service.dart';
+import '../../domain/entities/search_result.dart';
 import '../../domain/usecases/search_books.dart';
 import '../providers/search_provider.dart';
 import '../widgets/search_result_item.dart';
@@ -25,6 +26,12 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
   /// 当前批次搜索的取消令牌：换词/清空/销毁时取消，中断旧批次网络请求
   CancelToken? _searchCancel;
+
+  /// 当前搜索页码与已合并的分页结果
+  int _page = 1;
+  List<SearchResult> _allResults = [];
+  bool _loadingMore = false;
+  bool _loadMoreError = false;
 
   @override
   void initState() {
@@ -51,12 +58,72 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     ref.read(searchCancelTokenProvider.notifier).set(token);
     // 同关键词重试时也必须 invalidate：_keyword 未变化，但旧 provider
     // 已经完成/失败，不能复用其已结束的 stream。
-    ref.invalidate(searchResultsProvider(target));
+    ref.invalidate(searchResultsProvider((target, 1)));
     setState(() {
       _keyword = target;
+      _page = 1;
+      _allResults = [];
+      _loadingMore = false;
+      _loadMoreError = false;
       _historyFuture = _historyService.getRecent();
     });
     _historyService.add(target);
+  }
+
+  /// 加载下一分页：保留当前结果，新批次完成后去重追加。
+  void _loadMore() {
+    if (_keyword.isEmpty || _loadingMore) return;
+    _searchCancel?.cancel();
+    final token = CancelToken();
+    _searchCancel = token;
+    ref.read(searchCancelTokenProvider.notifier).set(token);
+    final nextPage = _loadMoreError ? _page : _page + 1;
+    ref.invalidate(searchResultsProvider((_keyword, nextPage)));
+    setState(() {
+      _page = nextPage;
+      _loadingMore = true;
+      _loadMoreError = false;
+    });
+  }
+
+  /// 跨页合并去重：同名同作者视为同一本，保留先出现的条目。
+  List<SearchResult> _mergeSearchResults(
+    List<SearchResult> current,
+    List<SearchResult> incoming,
+  ) {
+    final seen = <String>{};
+    final merged = <SearchResult>[];
+    for (final result in [...current, ...incoming]) {
+      final key =
+          '${result.name.toLowerCase().trim()}|'
+          '${result.author?.toLowerCase().trim() ?? ''}';
+      if (seen.add(key)) {
+        merged.add(result);
+        continue;
+      }
+      final index = merged.indexWhere((item) =>
+          '${item.name.toLowerCase().trim()}|'
+              '${item.author?.toLowerCase().trim() ?? ''}' ==
+          key);
+      if (index < 0 || result.alternatives.isEmpty) continue;
+      final existing = merged[index];
+      merged[index] = SearchResult(
+        bookId: existing.bookId,
+        name: existing.name,
+        author: existing.author,
+        coverUrl: existing.coverUrl,
+        detailUrl: existing.detailUrl,
+        intro: existing.intro,
+        kind: existing.kind,
+        lastChapter: existing.lastChapter,
+        wordCount: existing.wordCount,
+        sourceId: existing.sourceId,
+        sourceName: existing.sourceName,
+        variables: existing.variables,
+        alternatives: [...existing.alternatives, ...result.alternatives],
+      );
+    }
+    return merged;
   }
 
   /// 输入变化：仅处理清空（取消在途请求回到空状态）；
@@ -66,7 +133,13 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     _searchCancel?.cancel();
     _searchCancel = null;
     ref.read(searchCancelTokenProvider.notifier).set(null);
-    setState(() => _keyword = '');
+    setState(() {
+      _keyword = '';
+      _page = 1;
+      _allResults = [];
+      _loadingMore = false;
+      _loadMoreError = false;
+    });
   }
 
   /// 执行搜索：同步输入框文本、收起键盘后触发
@@ -90,6 +163,25 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_keyword.isNotEmpty) {
+      ref.listen<AsyncValue<SearchProgress>>(
+        searchResultsProvider((_keyword, _page)),
+        (previous, next) {
+          if (next is AsyncData<SearchProgress> && next.value.finished) {
+            setState(() {
+              _allResults = _mergeSearchResults(_allResults, next.value.results);
+              _loadingMore = false;
+              _loadMoreError = false;
+            });
+          } else if (next is AsyncError && _page > 1) {
+            setState(() {
+              _loadingMore = false;
+              _loadMoreError = true;
+            });
+          }
+        },
+      );
+    }
     return Scaffold(
       appBar: AppBar(title: const Text('搜索')),
       body: Column(
@@ -118,10 +210,12 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           Expanded(
             child: _keyword.isEmpty
                 ? _buildEmptyState()
-                : ref.watch(searchResultsProvider(_keyword)).when(
+                : ref.watch(searchResultsProvider((_keyword, _page))).when(
                     data: (progress) => _buildResults(progress),
                     loading: () => _buildSearchingState(),
-                    error: (_, _) => _buildErrorState(),
+                    error: (_, _) => _allResults.isNotEmpty && _page > 1
+                        ? _buildResultsWithError()
+                        : _buildErrorState(),
                   ),
           ),
         ],
@@ -130,12 +224,12 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   }
 
   Widget _buildResults(SearchProgress progress) {
-    final results = progress.results;
+    final results = _allResults.isEmpty ? progress.results : _allResults;
     return Column(
       children: [
         Expanded(
           child: results.isEmpty
-              ? (progress.finished
+              ? (_page == 1 && progress.finished
                   ? _buildNoResultState(progress)
                   : const Center(child: CircularProgressIndicator()))
               : ListView.builder(
@@ -144,8 +238,21 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                       SearchResultItem(result: results[index]),
                 ),
         ),
-        // 搜索进度条：流式显示已完成的源数
-        if (!progress.finished)
+        // 加载更多：第一页有结果且当前页完成后提供下一页入口
+        if (results.isNotEmpty && progress.finished && !_loadingMore)
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: OutlinedButton.icon(
+                onPressed: _loadMore,
+                icon: const Icon(Icons.expand_more, size: 18),
+                label: const Text('加载更多'),
+              ),
+            ),
+          ),
+        // 搜索/分页进度条：流式显示已完成的源数
+        if (!progress.finished || _loadingMore)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
@@ -197,6 +304,37 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildResultsWithError() {
+    return Column(
+      children: [
+        Expanded(
+          child: ListView.builder(
+            itemCount: _allResults.length,
+            itemBuilder: (context, index) =>
+                SearchResultItem(result: _allResults[index]),
+          ),
+        ),
+        SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Text('加载更多失败，请重试'),
+                const SizedBox(width: 8),
+                OutlinedButton(
+                  onPressed: _loadMore,
+                  child: const Text('重试'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 

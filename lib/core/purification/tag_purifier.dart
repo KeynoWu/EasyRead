@@ -4,7 +4,10 @@ import 'package:html/dom.dart' as dom;
 /// 第一阶段：标签净化 — 移除广告标签、script、style、无意义标签
 class TagPurifier {
   static const _adKeywords = ['ad', 'ads', 'advertisement', 'advert', 'banner', 'promotion', 'sponsor'];
-  static const _removeTags = ['script', 'style', 'iframe', 'noscript'];
+  static const _removeTags = [
+    'script', 'style', 'iframe', 'noscript',
+    'nav', 'header', 'footer', 'aside',
+  ];
 
   String purify(String html) {
     final doc = parser.parse(html);

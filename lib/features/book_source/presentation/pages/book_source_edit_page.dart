@@ -3,6 +3,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../domain/entities/book_source.dart';
 import '../../domain/repositories/book_source_repository.dart';
 import '../../domain/usecases/test_book_source.dart';
+import 'book_source_debug_page.dart';
 
 /// 可视化书源编辑器
 class BookSourceEditPage extends StatefulWidget {
@@ -22,32 +23,50 @@ class BookSourceEditPage extends StatefulWidget {
 class _BookSourceEditPageState extends State<BookSourceEditPage> {
   late final Map<String, TextEditingController> _controllers;
   late bool _enabled;
+  late bool _enabledExplore;
+  late bool _enabledCookieJar;
 
   @override
   void initState() {
     super.initState();
     final s = widget.source;
     _enabled = s?.enabled ?? true;
+    _enabledExplore = s?.enabledExplore ?? false;
+    _enabledCookieJar = s?.enabledCookieJar ?? false;
     _searchable = s?.rules['searchable'] == null || s!.rules['searchable'] == true;
     _controllers = {
       'name': TextEditingController(text: s?.name ?? ''),
       'group': TextEditingController(text: s?.bookSourceGroup ?? ''),
       'url': TextEditingController(text: s?.bookSourceUrl ?? ''),
-      'searchUrl': TextEditingController(text: s?.rules['searchUrl']?.toString() ?? ''),
-      'bookList': TextEditingController(text: s?.rules['bookList']?.toString() ?? ''),
-      'bookName': TextEditingController(text: s?.rules['bookName']?.toString() ?? ''),
-      'bookAuthor': TextEditingController(text: s?.rules['bookAuthor']?.toString() ?? ''),
-      'coverUrl': TextEditingController(text: s?.rules['coverUrl']?.toString() ?? ''),
-      'bookDetailUrl': TextEditingController(text: s?.rules['bookDetailUrl']?.toString() ?? ''),
-      'contentUrl': TextEditingController(text: s?.rules['contentUrl']?.toString() ?? ''),
-      'chapterList': TextEditingController(text: s?.rules['chapterList']?.toString() ?? ''),
-      'chapterName': TextEditingController(text: s?.rules['chapterName']?.toString() ?? ''),
-      'chapterUrl': TextEditingController(text: s?.rules['chapterUrl']?.toString() ?? ''),
-      'chapterContent': TextEditingController(text: s?.rules['chapterContent']?.toString() ?? ''),
+      'searchUrl': TextEditingController(text: s?.searchUrl ?? ''),
+      'exploreUrl': TextEditingController(text: s?.exploreUrl ?? ''),
+      'bookList': TextEditingController(text: s?.bookListRule ?? ''),
+      'bookName': TextEditingController(text: s?.bookNameRule ?? ''),
+      'bookAuthor': TextEditingController(text: s?.bookAuthorRule ?? ''),
+      'coverUrl': TextEditingController(text: s?.coverUrlRule ?? ''),
+      'bookDetailUrl': TextEditingController(text: s?.bookDetailUrlRule ?? ''),
+      'bookInfoName': TextEditingController(text: s?.bookInfoRules?['name']?.toString() ?? ''),
+      'bookInfoAuthor': TextEditingController(text: s?.bookInfoRules?['author']?.toString() ?? ''),
+      'bookInfoCoverUrl': TextEditingController(text: s?.bookInfoRules?['coverUrl']?.toString() ?? ''),
+      'bookInfoIntro': TextEditingController(text: s?.bookInfoRules?['intro']?.toString() ?? ''),
+      'bookInfoTocUrl': TextEditingController(text: s?.bookInfoRules?['tocUrl']?.toString() ?? ''),
+      'exploreBookList': TextEditingController(text: s?.exploreBookListRule ?? ''),
+      'exploreBookName': TextEditingController(text: s?.exploreNameRule ?? ''),
+      'exploreBookAuthor': TextEditingController(text: s?.exploreAuthorRule ?? ''),
+      'exploreCoverUrl': TextEditingController(text: s?.exploreCoverUrlRule ?? ''),
+      'exploreBookUrl': TextEditingController(text: s?.exploreBookUrlRule ?? ''),
+      'contentUrl': TextEditingController(text: s?.contentUrl ?? ''),
+      'chapterList': TextEditingController(text: s?.chapterListRule ?? ''),
+      'chapterName': TextEditingController(text: s?.chapterNameRule ?? ''),
+      'chapterUrl': TextEditingController(text: s?.chapterUrlRule ?? ''),
+      'nextTocUrl': TextEditingController(text: s?.nextTocUrl ?? ''),
+      'chapterContent': TextEditingController(text: s?.chapterContentRule ?? ''),
+      'nextContentUrl': TextEditingController(text: s?.nextContentUrl ?? ''),
       'weight': TextEditingController(text: s?.rules['weight']?.toString() ?? ''),
-      'header': TextEditingController(text: s?.rules['header']?.toString() ?? ''),
-      'cookie': TextEditingController(text: s?.rules['cookie']?.toString() ?? ''),
-      'loginUrl': TextEditingController(text: s?.rules['loginUrl']?.toString() ?? ''),
+      'header': TextEditingController(text: s?.headerRule ?? ''),
+      'cookie': TextEditingController(text: s?.cookieRule ?? ''),
+      'loginUrl': TextEditingController(text: s?.loginUrl ?? ''),
+      'loginCheckJs': TextEditingController(text: s?.loginCheckJs ?? ''),
     };
   }
 
@@ -58,23 +77,50 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
     final base = Map<String, dynamic>.from(widget.source?.rules ?? {});
     const editableKeys = [
       'searchUrl', 'bookList', 'bookName', 'bookAuthor', 'coverUrl', 'bookDetailUrl',
+      'bookInfoName', 'bookInfoAuthor', 'bookInfoCoverUrl', 'bookInfoIntro', 'bookInfoTocUrl',
+      'exploreBookList', 'exploreBookName', 'exploreBookAuthor', 'exploreCoverUrl', 'exploreBookUrl',
       'contentUrl', 'chapterList', 'chapterName', 'chapterUrl', 'chapterContent',
+      'nextTocUrl', 'nextContentUrl', 'exploreUrl', 'loginCheckJs',
       'weight', 'header', 'cookie', 'loginUrl',
     ];
     for (final k in editableKeys) {
       final text = _controllers[k]!.text.trim();
-      if (text.isEmpty) {
-        base.remove(k);
-      } else if (k == 'weight') {
-        // weight 以数字存储，非数字输入直接丢弃
-        final weight = int.tryParse(text);
-        if (weight != null) base[k] = weight;
-      } else {
-        base[k] = text;
+      if (k == 'weight') {
+        if (text.isEmpty) {
+          base.remove(k);
+        } else {
+          // weight 以数字存储，非数字输入直接丢弃
+          final weight = int.tryParse(text);
+          if (weight != null) base[k] = weight;
+        }
+        continue;
       }
+      _writeRule(base, k, text);
     }
     base['searchable'] = _searchable;
+    base['enabledExplore'] = _enabledExplore;
+    base['enabledCookieJar'] = _enabledCookieJar;
     return base;
+  }
+
+  /// 写入规则字段：优先更新原书源已有的 Legado 嵌套容器，
+  /// 未使用嵌套结构的书源仍写顶层字段。
+  void _writeRule(Map<String, dynamic> rules, String key, String text) {
+    final alias = BookSource.nestedAliasFor(key);
+    final nested = alias != null ? rules[alias.$1] : null;
+    if (text.isEmpty) {
+      rules.remove(key);
+      if (alias != null && nested is Map) {
+        nested.remove(alias.$2);
+      }
+      return;
+    }
+    if (alias != null && nested is Map) {
+      rules.remove(key);
+      nested[alias.$2] = text;
+    } else {
+      rules[key] = text;
+    }
   }
 
   @override
@@ -87,7 +133,9 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
 
   Future<void> _test() async {
     final name = _controllers['name']!.text.trim();
-    final keywordController = TextEditingController(text: '测试');
+    final keywordController = TextEditingController(
+      text: widget.source?.checkKeyWord ?? '测试',
+    );
 
     final keyword = await showDialog<String>(
       context: context,
@@ -136,11 +184,35 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: Text(result.success ? '✓ 测试成功' : '✗ 测试失败'),
-        content: Text(result.message),
+        content: Text(() {
+          if (result.samples.isEmpty) return result.message;
+          final samples = result.samples
+              .map((s) => '${s.name} · ${s.author ?? '未知作者'}')
+              .join('\n');
+          return '${result.message}\n\n解析示例：\n$samples';
+        }()),
         actions: [
           FilledButton(onPressed: () => Navigator.pop(context), child: const Text('确定')),
         ],
       ),
+    );
+  }
+
+  Future<void> _openDebug() async {
+    final name = _controllers['name']!.text.trim();
+    final source = TestBookSource().buildTestSource(
+      name: name.isEmpty ? '测试' : name,
+      url: _controllers['url']!.text.trim().isEmpty
+          ? null
+          : _controllers['url']!.text.trim(),
+      group: _controllers['group']!.text.trim().isEmpty
+          ? null
+          : _controllers['group']!.text.trim(),
+      rules: _buildRules(),
+    );
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => BookSourceDebugPage(source: source)),
     );
   }
 
@@ -196,6 +268,11 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
         title: Text(widget.source == null ? '新建书源' : '编辑书源'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.bug_report_outlined),
+            onPressed: _openDebug,
+            tooltip: '调试规则',
+          ),
+          IconButton(
             icon: const Icon(Icons.science_outlined),
             onPressed: _test,
             tooltip: '测试书源',
@@ -227,26 +304,54 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
           const Divider(),
           _sectionTitle('搜索规则'),
           _buildField('搜索 URL', 'searchUrl', hint: 'https://example.com/search?keyword={{key}}'),
+          _buildField('发现 URL', 'exploreUrl', hint: '榜单 URL，或 [{“title”:“榜单”,”url”:“/discover”}]', maxLines: 3),
+          _buildField('发现列表规则', 'exploreBookList', hint: 'ruleExplore.bookList'),
+          _buildField('发现书名规则', 'exploreBookName', hint: 'ruleExplore.name'),
+          _buildField('发现作者规则', 'exploreBookAuthor', hint: 'ruleExplore.author'),
+          _buildField('发现封面规则', 'exploreCoverUrl', hint: 'ruleExplore.coverUrl'),
+          _buildField('发现详情链接规则', 'exploreBookUrl', hint: 'ruleExplore.bookUrl'),
           _buildField('书籍列表', 'bookList', hint: 'CSS 选择器'),
           _buildField('书名规则', 'bookName', hint: 'h3.title@text'),
           _buildField('作者规则', 'bookAuthor', hint: 'span.author@text'),
           _buildField('封面规则', 'coverUrl', hint: 'img.cover@src'),
           _buildField('详情链接规则', 'bookDetailUrl', hint: 'a.detail@href'),
           const Divider(),
+          _sectionTitle('详情规则'),
+          _buildField('书名规则', 'bookInfoName', hint: 'ruleBookInfo.name'),
+          _buildField('作者规则', 'bookInfoAuthor', hint: 'ruleBookInfo.author'),
+          _buildField('封面规则', 'bookInfoCoverUrl', hint: 'ruleBookInfo.coverUrl'),
+          _buildField('简介规则', 'bookInfoIntro', hint: 'ruleBookInfo.intro', maxLines: 3),
+          _buildField('目录 URL 规则', 'bookInfoTocUrl', hint: 'ruleBookInfo.tocUrl'),
+          const Divider(),
           _sectionTitle('目录规则'),
           _buildField('内容 URL', 'contentUrl', hint: 'https://example.com/chapter/{{id}}.html'),
           _buildField('章节列表', 'chapterList', hint: 'ul.chapter-list > li'),
           _buildField('章节名规则', 'chapterName', hint: 'a@text'),
           _buildField('章节链接规则', 'chapterUrl', hint: 'a@href'),
+          _buildField('目录下一页', 'nextTocUrl', hint: 'nextTocUrl 规则'),
           const Divider(),
           _sectionTitle('内容规则'),
           _buildField('章节内容', 'chapterContent', hint: 'div#content@html', maxLines: 3),
+          _buildField('正文下一页', 'nextContentUrl', hint: 'nextContentUrl 规则'),
           const Divider(),
           _sectionTitle('高级设置'),
+          SwitchListTile(
+            title: const Text('启用发现'),
+            subtitle: const Text('在发现 Tab 展示该书源榜单'),
+            value: _enabledExplore,
+            onChanged: (v) => setState(() => _enabledExplore = v),
+          ),
+          SwitchListTile(
+            title: const Text('启用 CookieJar'),
+            subtitle: const Text('请求时携带书源 CookieJar'),
+            value: _enabledCookieJar,
+            onChanged: (v) => setState(() => _enabledCookieJar = v),
+          ),
           _buildField('搜索权重', 'weight', hint: '数值越大优先级越高（默认 0）', keyboardType: TextInputType.number),
           _buildField('请求头', 'header', hint: 'JSON 格式，如 {"Referer": "https://example.com"}', maxLines: 3),
           _buildField('Cookie', 'cookie', hint: '登录后 Cookie'),
           _buildField('登录 URL', 'loginUrl', hint: '需要登录时填写的登录地址'),
+          _buildField('登录校验 JS', 'loginCheckJs', hint: 'loginCheckJs 规则', maxLines: 3),
           const SizedBox(height: 24),
         ],
       ),

@@ -45,11 +45,17 @@ final enabledSearchableCountProvider = FutureProvider<int>((ref) async {
 /// 流式搜索结果：每个书源完成即产出累积结果，慢源不阻塞首屏。
 /// autoDispose：旧关键词不再被监听即销毁；取消令牌在新批次启动时读取。
 final searchResultsProvider = StreamProvider.autoDispose
-    .family<SearchProgress, String>((ref, keyword) {
+    .family<SearchProgress, (String, int)>((ref, request) {
+  final keyword = request.$1;
+  final page = request.$2;
   if (keyword.trim().isEmpty) return Stream.value(SearchProgress.empty);
   final searchBooks = ref.watch(searchBooksProvider);
   // 仅在新批次启动时读取当前令牌；用 ref.read 而非 ref.watch，
   // 避免令牌更新触发旧关键词批次意外重启
   final cancelToken = ref.read(searchCancelTokenProvider);
-  return searchBooks.searchWithProgress(keyword, cancelToken: cancelToken);
+  return searchBooks.searchWithProgress(
+    keyword,
+    page: page,
+    cancelToken: cancelToken,
+  );
 });

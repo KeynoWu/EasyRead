@@ -1,16 +1,23 @@
 import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:hive/hive.dart';
 import '../../../../core/database/hive_init.dart';
+import '../../../../core/data/cookie_jar_service.dart';
 import '../../../../core/network/dio_client.dart';
 import '../../../../core/purification/purify_pipeline.dart';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as parser;
 import '../../../../features/book_source/domain/entities/book_source.dart';
 import '../../../../features/book_source/domain/repositories/book_source_repository.dart';
+import '../../../../features/search/data/engines/js_rule_executor.dart';
+import '../../../../features/search/data/engines/js_template.dart';
 import '../../../../features/search/data/engines/rule_engine.dart';
+import '../../../../features/search/data/engines/rule_template.dart';
+import '../../../../features/search/data/engines/rule_variables.dart';
 import '../../domain/entities/chapter.dart';
 import '../../domain/entities/chapter_catalog.dart';
+import '../../domain/entities/book_detail.dart';
 import '../../domain/entities/reading_progress.dart';
 import '../../domain/repositories/reader_repository.dart';
 import '../models/chapter_model.dart';
@@ -27,13 +34,19 @@ class ChapterLoadException implements Exception {
 }
 
 class ReaderRepositoryImpl implements ReaderRepository {
+  static const String localSourceId = 'local';
+
   final DioClient _client;
   PurifyPipeline _pipeline;
   final BookSourceRepository _sourceRepo;
+  final CookieJarService _cookieJar;
   Box<ChapterModel>? _cachedChapterBox;
   Box<ReadingProgressModel>? _cachedProgressBox;
   ChapterCatalog? _cachedCatalog;
   String? _cachedCatalogKey;
+  BookDetail? _lastBookDetail;
+  String? _lastBookDetailKey;
+  final Map<String, Map<String, String>> _variablesCache = {};
 
   Future<Box<ChapterModel>> _chapterBox() async =>
       _cachedChapterBox ??= await Hive.openBox<ChapterModel>(HiveBoxes.chapters);
@@ -45,9 +58,11 @@ class ReaderRepositoryImpl implements ReaderRepository {
     DioClient? client,
     PurifyPipeline? pipeline,
     BookSourceRepository? sourceRepo,
+    CookieJarService? cookieJar,
   })  : _client = client ?? DioClient(),
         _pipeline = pipeline ?? PurifyPipeline(),
-        _sourceRepo = sourceRepo ?? _EmptySourceRepo();
+        _sourceRepo = sourceRepo ?? _EmptySourceRepo(),
+        _cookieJar = cookieJar ?? CookieJarService();
 
   /// 运行时注入净化规则（用户配置加载完成后调用）
   void setPipeline(PurifyPipeline pipeline) {
@@ -58,51 +73,180 @@ class ReaderRepositoryImpl implements ReaderRepository {
     return _sourceRepo.getById(sourceId);
   }
 
+  Future<Map<String, String>> _requestHeaders(
+    BookSource source,
+    String sourceId,
+  ) async {
+    final headers = source.requestHeaders;
+    if (source.enabledCookieJar) {
+      final cookie = await _cookieJar.get(sourceId);
+      if (cookie != null && cookie.isNotEmpty) {
+        headers.putIfAbsent('Cookie', () => cookie);
+      }
+    }
+    return headers;
+  }
+
+  Future<String> _getStringWithLoginCheck(
+    BookSource source,
+    String sourceId,
+    String url,
+    Map<String, String> headers, {
+    String? charset,
+  }) async {
+    final html = await _client.getString(
+      url,
+      headers: headers.isEmpty ? null : headers,
+      sourceId: sourceId,
+      charset: charset,
+    );
+    final loginCheckJs = source.loginCheckJs;
+    if (loginCheckJs == null || loginCheckJs.trim().isEmpty) return html;
+
+    final cookieStore = <String, String>{};
+    final storedCookie = headers['Cookie'];
+    if (storedCookie != null && storedCookie.isNotEmpty) {
+      cookieStore[source.id] = storedCookie;
+      cookieStore[source.bookSourceUrl ?? ''] = storedCookie;
+      cookieStore[url] = storedCookie;
+    }
+    final value = await JsRuleExecutor.execute(
+      html,
+      loginCheckJs,
+      baseUrl: url,
+      charset: charset,
+      cookies: cookieStore,
+    );
+    final updatedCookie = cookieStore[source.id] ??
+        cookieStore[source.bookSourceUrl ?? ''] ??
+        cookieStore[url] ??
+        '';
+    if (updatedCookie.isNotEmpty) {
+      headers['Cookie'] = updatedCookie;
+      await _cookieJar.set(sourceId, updatedCookie);
+    } else if (cookieStore.containsKey(source.id) ||
+        cookieStore.containsKey(source.bookSourceUrl ?? '') ||
+        cookieStore.containsKey(url)) {
+      headers.remove('Cookie');
+      await _cookieJar.remove(sourceId);
+    }
+    return value != null && value.isNotEmpty ? value : html;
+  }
+
   @override
   Future<ChapterCatalog> getCatalog({
     required String bookId,
     required String sourceId,
     required String detailUrl,
+    Map<String, String> variables = const {},
   }) async {
     final source = await _getSource(sourceId);
     if (source == null || detailUrl.isEmpty || source.chapterListRule == null) {
       return ChapterCatalog(bookId: bookId, fetchedAt: DateTime.now());
     }
 
+    final expandedDetailUrl = RuleVariables.expand(detailUrl, variables);
+    final resolvedDetailUrl = _resolveUrl(source.bookSourceUrl, expandedDetailUrl);
     final cacheKey =
-        '${bookId}_${sourceId}_$detailUrl|${source.chapterListRule}|${source.chapterNameRule}|${source.chapterUrlRule}|${jsonEncode(source.requestHeaders)}';
+        '${bookId}_${sourceId}_$resolvedDetailUrl|'
+        '${source.chapterListRule}|${source.chapterNameRule}|'
+        '${source.chapterUrlRule}|${source.loginCheckJs}|'
+        '${jsonEncode(source.bookInfoRules)}|${source.nextTocUrl}|'
+        '${jsonEncode(source.requestHeaders)}|${source.responseCharset}|'
+        '${jsonEncode(variables)}';
     if (_cachedCatalogKey == cacheKey && _cachedCatalog != null) {
       return _cachedCatalog!;
     }
 
     try {
-      final headers = source.requestHeaders;
-      final html = await _client.getString(
-        detailUrl,
-        headers: headers.isEmpty ? null : headers,
-        sourceId: sourceId,
+      final headers = await _requestHeaders(source, sourceId);
+      final detailHtml = await _getStringWithLoginCheck(
+        source,
+        sourceId,
+        resolvedDetailUrl,
+        headers,
+        charset: source.responseCharset,
       );
-      final items = RuleEngine.extractElements(html, source.chapterListRule);
+      var tocUrl = resolvedDetailUrl;
+      var tocHtml = detailHtml;
+      final infoRules = source.bookInfoRules;
+      if (infoRules != null) {
+        final info = await _parseBookInfo(
+          infoRules,
+          detailHtml,
+          resolvedDetailUrl,
+          source,
+          variables,
+        );
+        if (info.tocUrl.isNotEmpty && info.tocUrl != resolvedDetailUrl) {
+          tocUrl = info.tocUrl;
+          tocHtml = await _getStringWithLoginCheck(
+            source,
+            sourceId,
+            tocUrl,
+            headers,
+            charset: source.responseCharset,
+          );
+        }
+        _lastBookDetail = _toBookDetail(
+          bookId: bookId,
+          info: info,
+          fallbackName: null,
+        );
+        _lastBookDetailKey = '${bookId}_${sourceId}_$resolvedDetailUrl';
+      }
       final chapters = <ChapterItem>[];
-
-      for (int i = 0; i < items.length; i++) {
-        final item = items[i];
-        if (item == null) continue;
-        final title = RuleEngine.getElementText(item, source.chapterNameRule);
-        final url = RuleEngine.getElementText(item, source.chapterUrlRule);
-        if (title == null || title.isEmpty) continue;
-        chapters.add(ChapterItem(
-          title: title,
-          url: url ?? '',
-          index: i,
-        ));
+      var pageUrl = tocUrl;
+      var pageHtml = tocHtml;
+      final visited = <String>{pageUrl};
+      for (var page = 0; page < 20; page++) {
+        chapters.addAll(
+          await _parseCatalogPage(source, pageHtml, pageUrl, variables),
+        );
+        final nextRule = source.nextTocUrl;
+        if (nextRule == null || nextRule.trim().isEmpty) break;
+        final nextUrl = await _extractNextUrl(
+          nextRule,
+          pageHtml,
+          pageUrl,
+          source,
+          variables,
+        );
+        if (nextUrl.isEmpty || !visited.add(nextUrl)) break;
+        pageUrl = nextUrl;
+        pageHtml = await _getStringWithLoginCheck(
+          source,
+          sourceId,
+          pageUrl,
+          headers,
+          charset: source.responseCharset,
+        );
       }
 
-      final catalog = ChapterCatalog(bookId: bookId, chapters: chapters, fetchedAt: DateTime.now());
+      final seen = <String>{};
+      final uniqueChapters = <ChapterItem>[
+        for (final chapter in chapters)
+          if (seen.add('${chapter.title}|${chapter.url}')) chapter,
+      ];
+      for (var i = 0; i < uniqueChapters.length; i++) {
+        uniqueChapters[i] = ChapterItem(
+          title: uniqueChapters[i].title,
+          url: uniqueChapters[i].url,
+          index: i,
+          variables: uniqueChapters[i].variables,
+        );
+      }
+      final catalog = ChapterCatalog(
+        bookId: bookId,
+        chapters: uniqueChapters,
+        fetchedAt: DateTime.now(),
+      );
       if (catalog.chapters.isNotEmpty) {
         _cachedCatalog = catalog;
         _cachedCatalogKey = cacheKey;
       }
+      _variablesCache['${bookId}_${sourceId}_$resolvedDetailUrl'] =
+          Map.unmodifiable(variables);
       return catalog;
     } catch (e) {
       // 目录加载失败（网络/解析）：抛错而非静默返空目录，
@@ -112,41 +256,93 @@ class ReaderRepositoryImpl implements ReaderRepository {
   }
 
   @override
+  Future<BookDetail> getBookDetail({
+    required String bookId,
+    required String sourceId,
+    String? detailUrl,
+    Map<String, String> variables = const {},
+  }) async {
+    await getCatalog(
+      bookId: bookId,
+      sourceId: sourceId,
+      detailUrl: detailUrl ?? '',
+      variables: variables,
+    );
+    final key = '${bookId}_${sourceId}_${_resolveUrl(
+      (await _getSource(sourceId))?.bookSourceUrl,
+      detailUrl ?? '',
+    )}';
+    if (_lastBookDetailKey == key && _lastBookDetail != null) {
+      return _lastBookDetail!;
+    }
+    return BookDetail(bookId: bookId);
+  }
+
+  @override
   Future<Chapter> getChapter({
     required String bookId,
     required int chapterIndex,
     required String sourceId,
     String? detailUrl,
+    Map<String, String> variables = const {},
   }) async {
-    // 先检查缓存（key 含 sourceId，避免换源后读到其他书源的内容；
-    // v3 版本前缀：正文 URL 选择逻辑变更后强制旧缓存失效）
+    var effectiveVariables = variables;
+    // 缓存 key 含 sourceId 与规则指纹：换源/改规则后不会读到旧内容。
     final cacheBox = await _chapterBox();
-    final cacheKey = 'v3_${bookId}_${sourceId}_$chapterIndex';
+    final source = await _getSource(sourceId);
+    final cacheKey = _chapterCacheKey(
+      bookId,
+      sourceId,
+      chapterIndex,
+      source,
+      detailUrl: detailUrl,
+      variables: effectiveVariables,
+    );
     final cached = cacheBox.get(cacheKey);
     if (cached != null) {
       return cached.toEntity();
     }
 
-    final source = await _getSource(sourceId);
+    if (sourceId == localSourceId) {
+      // 兼容旧版导入：旧 key 无 v3 前缀且无规则指纹。
+      final legacy = cacheBox.get('${bookId}_${localSourceId}_$chapterIndex');
+      if (legacy != null) return legacy.toEntity();
+      throw const ChapterLoadException('书源不可用或未配置内容规则');
+    }
     if (source == null) {
       throw const ChapterLoadException('书源不可用或未配置内容规则');
     }
 
     try {
+      final resolvedDetailUrl = _resolveUrl(
+        source.bookSourceUrl,
+        RuleVariables.expand(detailUrl ?? '', effectiveVariables),
+      );
       // 获取目录以确定章节 URL 与真实标题。目录加载失败不阻断正文：
       // 退化为正文 URL 模板 / detailUrl 兜底定位正文页。
       var chapterUrl = '';
       var chapterTitle = '';
-      if (detailUrl != null && detailUrl.isNotEmpty) {
+      if (resolvedDetailUrl.isNotEmpty) {
         try {
           final catalog = await getCatalog(
             bookId: bookId,
             sourceId: sourceId,
-            detailUrl: detailUrl,
+            detailUrl: resolvedDetailUrl,
+            variables: effectiveVariables,
           );
+          final mergedVariables = {
+            ...effectiveVariables,
+            ...?_variablesCache[
+                '${bookId}_${sourceId}_$resolvedDetailUrl'],
+          };
+          effectiveVariables = mergedVariables;
           if (chapterIndex < catalog.chapters.length) {
             chapterUrl = catalog.chapters[chapterIndex].url;
             chapterTitle = catalog.chapters[chapterIndex].title;
+            effectiveVariables = {
+              ...effectiveVariables,
+              ...catalog.chapters[chapterIndex].variables,
+            };
           }
         } on ChapterLoadException {
           // 目录加载失败：留空 chapterUrl，靠正文 URL 选择兜底
@@ -160,51 +356,94 @@ class ReaderRepositoryImpl implements ReaderRepository {
       // 3. 目录为空（无 chapterUrl 规则）→ 详情页兜底
       String contentUrl;
       if (source.contentUrl != null && source.contentUrl!.isNotEmpty) {
-        contentUrl = _buildContentUrl(source.contentUrl!, chapterUrl, chapterIndex);
+        contentUrl = RuleVariables.expand(_buildContentUrl(
+          source.contentUrl!,
+          chapterUrl,
+          chapterIndex,
+          resolvedDetailUrl,
+        ), effectiveVariables);
       } else if (chapterUrl.isNotEmpty) {
         if (chapterUrl.startsWith('http')) {
           contentUrl = chapterUrl;
-        } else if (detailUrl != null && detailUrl.isNotEmpty) {
-          contentUrl = Uri.parse(detailUrl).resolve(chapterUrl).toString();
+        } else if (resolvedDetailUrl.isNotEmpty) {
+          contentUrl = _resolveUrl(resolvedDetailUrl, chapterUrl);
         } else {
           // 相对章节 URL 且无详情页可 resolve：无法定位正文页
           throw const ChapterLoadException('无法定位章节');
         }
-      } else if (detailUrl != null && detailUrl.isNotEmpty) {
-        contentUrl = detailUrl;
+      } else if (resolvedDetailUrl.isNotEmpty) {
+        contentUrl = resolvedDetailUrl;
       } else {
         throw const ChapterLoadException('无法定位章节');
       }
-      debugPrint('[reader] contentUrl=$contentUrl chapterUrl=$chapterUrl detail=$detailUrl');
-      final headers = source.requestHeaders;
-      final html = await _client.getString(
+      debugPrint('[reader] contentUrl=$contentUrl chapterUrl=$chapterUrl detail=$resolvedDetailUrl');
+      final headers = await _requestHeaders(source, sourceId);
+      final html = await _getStringWithLoginCheck(
+        source,
+        sourceId,
         contentUrl,
-        headers: headers.isEmpty ? null : headers,
-        sourceId: sourceId,
+        headers,
+        charset: source.responseCharset,
       );
       debugPrint('[reader] html len=${html.length}');
 
-      // 提取正文
-      var content = '';
-      if (source.chapterContentRule != null) {
-        content = RuleEngine.extractText(html, source.chapterContentRule) ?? '';
-        debugPrint('[reader] extractText=${source.chapterContentRule} -> ${content.length}');
+      // 提取正文（支持 nextContentUrl 分页拼接）
+      final contentParts = <String>[];
+      var pageUrl = contentUrl;
+      var pageHtml = html;
+      final visitedPages = <String>{pageUrl};
+      for (var page = 0; page < 20; page++) {
+        final part = await _extractContentPage(
+          source,
+          pageHtml,
+          pageUrl,
+          effectiveVariables,
+        );
+        if (part.isNotEmpty) contentParts.add(part);
+        final nextRule = source.nextContentUrl;
+        if (nextRule == null || nextRule.trim().isEmpty) break;
+        final nextUrl = await _extractNextUrl(
+          nextRule,
+          pageHtml,
+          pageUrl,
+          source,
+          effectiveVariables,
+        );
+        if (nextUrl.isEmpty || !visitedPages.add(nextUrl)) break;
+        pageUrl = nextUrl;
+        pageHtml = await _getStringWithLoginCheck(
+          source,
+          sourceId,
+          pageUrl,
+          headers,
+          charset: source.responseCharset,
+        );
       }
-      if (content.isEmpty) {
-        // 兜底一：智能提取页面正文主体（规则失配/缺失时，跳过导航与杂项）
-        content = _extractMainText(html);
-        debugPrint('[reader] mainText fallback -> ${content.length}');
-      }
+      var content = contentParts.join('\n');
       if (content.isEmpty) {
         // 兜底二：整页净化（含 quickjs JS 规则；iOS 无引擎时跳过 JS 规则）
-        content = await _pipeline.purifyAsync(html);
+        content = html;
       }
+
+      // 无论规则提取还是兜底，统一经过净化管线；否则用户正则/JS 规则
+      // 在成功提取正文时会被绕过。
+      content = await _pipeline.purifyAsync(
+        content,
+        bookName: _lastBookDetail?.name,
+        sourceName: source.name,
+      );
+      content = _removeRepeatedTitle(content, chapterTitle);
 
       if (content.trim().isEmpty) {
         throw const ChapterLoadException('章节内容为空');
       }
 
-      final title = chapterTitle.isEmpty ? '第${chapterIndex + 1}章' : chapterTitle;
+      final rawTitle = chapterTitle.isEmpty ? '第${chapterIndex + 1}章' : chapterTitle;
+      final title = await _pipeline.purifyTitle(
+        rawTitle,
+        bookName: _lastBookDetail?.name,
+        sourceName: source.name,
+      );
       final chapter = Chapter(
         id: cacheKey,
         bookId: bookId,
@@ -225,6 +464,39 @@ class ReaderRepositoryImpl implements ReaderRepository {
     } catch (_) {
       throw const ChapterLoadException('章节加载失败，请检查网络或书源规则');
     }
+  }
+
+  /// 章节缓存 key：本地书使用固定前缀；网络书源包含规则指纹，
+  /// 规则/请求头变化后旧缓存自动失效。
+  static String _chapterCacheKey(
+    String bookId,
+    String sourceId,
+    int chapterIndex,
+    BookSource? source,
+    {
+    String? detailUrl,
+    Map<String, String> variables = const {},
+  }
+  ) {
+    if (sourceId == localSourceId) {
+      return 'v3_${bookId}_${localSourceId}_$chapterIndex';
+    }
+    final fingerprint = source == null
+        ? ''
+        : jsonEncode({
+            'content': source.chapterContentRule,
+            'contentUrl': source.contentUrl,
+            'list': source.chapterListRule,
+            'name': source.chapterNameRule,
+            'url': source.chapterUrlRule,
+            'loginCheckJs': source.loginCheckJs,
+            'headers': source.requestHeaders,
+            'charset': source.responseCharset,
+            'detailUrl': detailUrl,
+            'variables': variables,
+          });
+    final fingerprintHash = md5.convert(utf8.encode(fingerprint)).toString();
+    return 'v3_${bookId}_${sourceId}_${fingerprintHash}_$chapterIndex';
   }
 
   /// 非可见/非正文标签：其文本不应作为正文主体候选（脚本/样式文本可能
@@ -258,39 +530,406 @@ class ReaderRepositoryImpl implements ReaderRepository {
 
   /// 智能正文提取：正文规则失配/缺失时，从页面中找出文本最多的深层
   /// 容器作为正文（跳过导航/推荐/评论等杂项）。规则提取失败时兜底，
-  /// 内容质量优于整页净化。
+  /// 返回原始 HTML 片段，保留段落/标题结构，由净化管线继续处理。
   static String _extractMainText(String html) {
     try {
       final doc = parser.parse(html);
       final body = doc.body;
       if (body == null) return '';
       var best = '';
+      dom.Element? bestElement;
       final stack = <dom.Element>[body];
       while (stack.isNotEmpty) {
         final el = stack.removeLast();
         for (final child in el.children) {
           if (_nonContentTags.contains(child.localName)) continue;
           final text = _visibleText(child).trim();
-          if (text.length >= 200 && text.length > best.length) {
+          if (text.isNotEmpty && text.length > best.length) {
             best = text;
+            bestElement = child;
           }
           stack.add(child);
         }
       }
-      return best;
+      return (bestElement ?? body).innerHtml.trim();
     } catch (_) {
       return '';
     }
   }
 
-  /// 构建内容 URL：支持 {{id}} 和直接 URL 两种方式
-  String _buildContentUrl(String template, String chapterUrl, int index) {
-    if (chapterUrl.startsWith('http')) {
-      return chapterUrl;
+  /// 去除正文开头与章节标题重复的标题行。
+  /// 兼容正文是纯文本或 HTML 片段两种形态；仅当首个可见文本以标题开头时处理。
+  static String _removeRepeatedTitle(String content, String title) {
+    final cleanTitle = title.trim();
+    if (cleanTitle.isEmpty || content.trim().isEmpty) return content;
+    try {
+      final doc = parser.parse(content);
+      final leading = doc.body?.text.trim() ?? '';
+      if (leading.isEmpty || !leading.startsWith(cleanTitle)) return content;
+      final escaped = RegExp.escape(cleanTitle);
+      final match = RegExp(escaped, caseSensitive: false).firstMatch(content);
+      if (match == null) return content;
+      return (content.substring(0, match.start) + content.substring(match.end))
+          .trim();
+    } catch (_) {
+      return content;
     }
-    return template
+  }
+
+  /// 构建内容 URL：支持 {{id}} 和直接 URL 两种方式
+  String _buildContentUrl(
+    String template,
+    String chapterUrl,
+    int index,
+    String baseUrl,
+  ) {
+    final url = template
         .replaceAll('{{id}}', chapterUrl)
         .replaceAll('{{index}}', '$index');
+    return _resolveUrl(baseUrl, url);
+  }
+
+  /// 条目字段提取：完整 JS 规则走 quickjs，模板 JS/CSS/JSONPath 走原路径。
+  Future<String?> _extractField(
+    dynamic item,
+    String? rule, {
+    required String baseUrl,
+    String? charset,
+    Map<String, String>? variables,
+    String? html,
+  }) async {
+    if (rule == null || rule.isEmpty) return null;
+    var normalized = rule;
+    final hadGet = normalized.contains('@get:{');
+    if (variables != null) {
+      normalized = RuleVariables.expand(normalized, variables);
+      if (normalized.contains('@put:')) {
+        normalized = RuleVariables.collectAndStrip(
+          normalized,
+          item,
+          variables,
+        );
+      }
+    }
+    rule = normalized;
+    if (item is Map && hadGet && !rule.contains('{{')) {
+      return rule;
+    }
+    if (item is Map && rule.contains('{{')) {
+      final json = Map<String, dynamic>.from(item);
+      var template = rule;
+      if (template.contains('{{java.')) {
+        template = (await JsRuleExecutor.evalTemplate(
+                  template,
+                  json: json,
+                  html: html,
+                  baseUrl: baseUrl,
+                  charset: charset,
+                )) ??
+                template;
+      }
+      return RuleTemplate.interpolate(
+        template,
+        json: json,
+        html: html,
+        encodeValues: rule.contains('/') || rule.contains('?'),
+      );
+    }
+    if (RuleEngine.isJsRule(rule)) {
+      if (JsTemplateEngine.canHandle(rule)) {
+        if (item is dom.Element) return RuleEngine.getElementText(item, rule);
+        return JsTemplateEngine.extract(jsonEncode(item), rule);
+      }
+      final jsHtml = item is dom.Element ? item.outerHtml : jsonEncode(item);
+      return JsRuleExecutor.execute(
+        jsHtml,
+        rule,
+        baseUrl: baseUrl,
+        charset: charset,
+      );
+    }
+    return RuleEngine.getElementText(item, rule);
+  }
+
+  /// 解析单个目录页为章节列表。
+  Future<List<ChapterItem>> _parseCatalogPage(
+    BookSource source,
+    String html,
+    String baseUrl,
+    Map<String, String> variables,
+  ) async {
+    final listRule = source.chapterListRule;
+    if (listRule == null) return [];
+    final List<dynamic> items;
+    if (RuleEngine.isJsRule(listRule)) {
+      final value = await JsRuleExecutor.execute(
+        html,
+        listRule,
+        baseUrl: baseUrl,
+        charset: source.responseCharset,
+        variables: variables,
+      );
+      items = _decodeJsListItems(value);
+    } else {
+      items = RuleEngine.extractElements(html, listRule);
+    }
+    final chapters = <ChapterItem>[];
+    for (var i = 0; i < items.length; i++) {
+      final item = items[i];
+      if (item == null) continue;
+      final itemVariables = {...variables};
+      final title = await _extractField(
+        item,
+        source.chapterNameRule,
+        baseUrl: baseUrl,
+        charset: source.responseCharset,
+        variables: itemVariables,
+        html: html,
+      );
+      final url = await _extractField(
+        item,
+        source.chapterUrlRule,
+        baseUrl: baseUrl,
+        charset: source.responseCharset,
+        variables: itemVariables,
+        html: html,
+      );
+      if (title == null || title.isEmpty) continue;
+      chapters.add(ChapterItem(
+        title: title,
+        url: url ?? '',
+        index: i,
+        variables: Map.unmodifiable(itemVariables),
+      ));
+    }
+    return chapters;
+  }
+
+  /// 提取单个正文页内容；规则失配时先走智能正文，再允许整页兜底。
+  Future<String> _extractContentPage(
+    BookSource source,
+    String html,
+    String pageUrl,
+    Map<String, String> variables,
+  ) async {
+    var contentRule = source.chapterContentRule;
+    if (contentRule != null) {
+      contentRule = RuleVariables.expand(contentRule, variables);
+    }
+    var content = '';
+    if (contentRule != null) {
+      if (RuleEngine.isJsRule(contentRule)) {
+        content = await JsRuleExecutor.execute(
+          html,
+          contentRule,
+          baseUrl: pageUrl,
+          charset: source.responseCharset,
+          variables: variables,
+        ) ??
+            '';
+      } else {
+        content = RuleEngine.extractText(html, contentRule) ?? '';
+      }
+    }
+    if (content.isEmpty) {
+      content = _extractMainText(html);
+    }
+    return content;
+  }
+
+  /// 提取目录下一页 URL。
+  Future<String> _extractNextUrl(
+    String rule,
+    String html,
+    String baseUrl,
+    BookSource source,
+    Map<String, String> variables,
+  ) async {
+    rule = RuleVariables.expand(rule, variables);
+    final value = await _extractFromPage(
+      rule,
+      html,
+      baseUrl,
+      source.responseCharset,
+      variables: variables,
+    );
+    if (value == null || value.isEmpty) return '';
+    return _resolveUrl(
+      baseUrl,
+      RuleVariables.expand(value.trim(), variables),
+    );
+  }
+
+  /// 完整 JS 列表规则结果通常为 JSON 数组/对象；解析失败时按无结果处理。
+  static List<dynamic> _decodeJsListItems(String? value) {
+    if (value == null || value.trim().isEmpty) return [];
+    try {
+      final decoded = jsonDecode(value);
+      if (decoded is List) return decoded;
+      return [decoded];
+    } catch (_) {
+      // 非 JSON 时按 HTML 片段处理：至少能覆盖 JS 规则直接返回单章 HTML 的场景。
+      final doc = parser.parse(value);
+      final body = doc.body;
+      return body == null ? [] : [body];
+    }
+  }
+
+  /// 解析 Legado ruleBookInfo：先执行 init 切换内容，再读取目录 URL。
+  Future<_ParsedBookInfo> _parseBookInfo(
+    Map<String, dynamic> rules,
+    String html,
+    String baseUrl,
+    BookSource source,
+    Map<String, String> variables,
+  ) async {
+    dynamic jsonContext;
+    try {
+      final decoded = jsonDecode(html);
+      if (decoded is Map || decoded is List) jsonContext = decoded;
+    } catch (_) {}
+
+    var content = html;
+    final initRule = rules['init']?.toString();
+    if (initRule != null && initRule.isNotEmpty) {
+      final elements = RuleEngine.extractElements(html, initRule);
+      if (elements.isNotEmpty && (elements.first is Map || elements.first is List)) {
+        jsonContext = elements.first;
+        content = jsonEncode(jsonContext);
+      } else {
+        final value = await _extractFromPage(
+          initRule,
+          html,
+          baseUrl,
+          source.responseCharset,
+          variables: variables,
+        );
+        if (value != null && value.isNotEmpty) {
+          content = value;
+          try {
+            final decoded = jsonDecode(content);
+            if (decoded is Map || decoded is List) jsonContext = decoded;
+          } catch (_) {}
+        }
+      }
+    }
+
+    Future<String?> read(String key) async {
+      var rule = rules[key]?.toString();
+      if (rule == null || rule.trim().isEmpty) return null;
+      rule = RuleVariables.expand(rule, variables);
+      if (rule.contains('@put:')) {
+        rule = RuleVariables.collectAndStrip(
+          rule,
+          jsonContext ?? content,
+          variables,
+        );
+      }
+      if (rule.contains('{{') && jsonContext is Map) {
+        var template = rule;
+        if (template.contains('{{java.')) {
+          template = (await JsRuleExecutor.evalTemplate(
+                    template,
+                    json: Map<String, dynamic>.from(jsonContext),
+                    html: content,
+                    baseUrl: baseUrl,
+                    charset: source.responseCharset,
+                  )) ??
+                  template;
+        }
+        return RuleTemplate.interpolate(
+          template,
+          json: Map<String, dynamic>.from(jsonContext),
+          html: content,
+          encodeValues: rule.contains('/') || rule.contains('?'),
+        );
+      }
+      if (jsonContext != null) {
+        final value = RuleEngine.getElementText(jsonContext, rule);
+        if (value != null && value.isNotEmpty) return value;
+      }
+      return _extractFromPage(
+        rule,
+        content,
+        baseUrl,
+        source.responseCharset,
+        variables: variables,
+      );
+    }
+
+    final tocUrl = await read('tocUrl');
+    final name = await read('name');
+    final author = await read('author');
+    final coverUrl = await read('coverUrl');
+    final intro = await read('intro');
+    final kind = await read('kind');
+    final lastChapter = await read('lastChapter');
+    final wordCount = await read('wordCount');
+    return _ParsedBookInfo(
+      tocUrl: tocUrl == null ? '' : _resolveUrl(baseUrl, tocUrl),
+      name: name,
+      author: author,
+      coverUrl: coverUrl == null ? null : _resolveUrl(baseUrl, coverUrl),
+      intro: intro,
+      kind: kind,
+      lastChapter: lastChapter,
+      wordCount: wordCount,
+    );
+  }
+
+  BookDetail _toBookDetail({
+    required String bookId,
+    required _ParsedBookInfo info,
+    String? fallbackName,
+  }) {
+    return BookDetail(
+      bookId: bookId,
+      name: info.name ?? fallbackName,
+      author: info.author,
+      coverUrl: info.coverUrl,
+      intro: info.intro,
+      kind: info.kind,
+      lastChapter: info.lastChapter,
+      wordCount: info.wordCount,
+      tocUrl: info.tocUrl.isEmpty ? null : info.tocUrl,
+    );
+  }
+
+  /// 整页级规则提取：完整 JS 走 quickjs，模板 JS/CSS/JSONPath 走原路径。
+  Future<String?> _extractFromPage(
+    String rule,
+    String html,
+    String baseUrl,
+    String? charset,
+    {
+    Map<String, String> variables = const {},
+  }
+  ) async {
+    if (RuleEngine.isJsRule(rule)) {
+      if (JsTemplateEngine.canHandle(rule)) {
+        return RuleEngine.extractText(html, rule);
+      }
+      return JsRuleExecutor.execute(
+        html,
+        rule,
+        baseUrl: baseUrl,
+        charset: charset,
+        variables: variables,
+      );
+    }
+    return RuleEngine.extractText(html, rule);
+  }
+
+  /// 相对路径基于详情页/书源域名 resolve；非 http(s) 或无法解析时原样返回。
+  static String _resolveUrl(String? base, String path) {
+    if (path.isEmpty) return '';
+    if (path.startsWith('http://') || path.startsWith('https://')) return path;
+    if (base == null || base.isEmpty) return path;
+    try {
+      return Uri.parse(base).resolve(path).toString();
+    } catch (_) {
+      return path;
+    }
   }
 
   @override
@@ -309,8 +948,11 @@ class ReaderRepositoryImpl implements ReaderRepository {
   @override
   Future<void> clearBookCache(String bookId) async {
     final box = await _chapterBox();
-    final keys = box.keys
-        .where((k) => (k as String).startsWith('v3_${bookId}_'));
+    final keys = box.keys.where((k) {
+      final key = k as String;
+      return key.startsWith('v3_${bookId}_') ||
+          key.startsWith('${bookId}_${localSourceId}_');
+    });
     await box.deleteAll(keys);
     // 同步失效同书的内存目录缓存：避免换源/清缓存后旧目录残留，
     // 也避免下次目录加载失败时误用上一本书的目录。
@@ -328,6 +970,7 @@ class ReaderRepositoryImpl implements ReaderRepository {
     required int count,
     required String sourceId,
     String? detailUrl,
+    Map<String, String> variables = const {},
   }) async {
     for (int i = 0; i < count; i++) {
       final index = startIndex + i;
@@ -337,6 +980,7 @@ class ReaderRepositoryImpl implements ReaderRepository {
           chapterIndex: index,
           sourceId: sourceId,
           detailUrl: detailUrl,
+          variables: variables,
         );
       } catch (_) {
         // 预加载失败不阻塞当前阅读
@@ -358,6 +1002,29 @@ class ReaderRepositoryImpl implements ReaderRepository {
     final toRemove = entries.take(entries.length - maxEntries).map((e) => e.key);
     await box.deleteAll(toRemove);
   }
+}
+
+/// ruleBookInfo 解析结果（当前只消费目录 URL，后续可扩展书名/简介等）。
+class _ParsedBookInfo {
+  final String tocUrl;
+  final String? name;
+  final String? author;
+  final String? coverUrl;
+  final String? intro;
+  final String? kind;
+  final String? lastChapter;
+  final String? wordCount;
+
+  const _ParsedBookInfo({
+    required this.tocUrl,
+    this.name,
+    this.author,
+    this.coverUrl,
+    this.intro,
+    this.kind,
+    this.lastChapter,
+    this.wordCount,
+  });
 }
 
 /// 空书源仓库（无依赖注入时使用）
