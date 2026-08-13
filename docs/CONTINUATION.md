@@ -77,8 +77,58 @@
 - Android 真机：REDMI K90 Pro Max（66ad1898）；iOS 模拟器：iPhone 16 Pro（5A875797...）
 - NDK：`~/Library/Android/sdk/ndk/28.2.13676358`（本机 ANDROID_HOME 环境变量指向 Java home，hook 已按存在性检查跳过，回退到 macOS 默认路径）
 - native assets 开关：`flutter config --enable-native-assets`（改动 hook 后需 `rm -rf .dart_tool/hooks_runner/easy_quickjs` 清 dill 缓存）
-- 已知陷阱：Dart r-string 里 `\"` 会提前终止字符串；`'$'` 在非 raw 字符串报插值错；测试文件 group 追加需移入 main()；**Dart 3 switch 非空 case 隐式 break 不 fall-through**（reviewer 曾误报）；**Dart RegExp 不支持 lookbehind**（JS 净化规则需 quickjs）；**JS RegExp 字符串构造必须带 `g` flag 否则 exec 死循环**
+- 已知陷阱：Dart r-string 里 `\"` 会提前终止字符串；`'$'` 在非 raw 字符串报插值错；测试文件 group 追加需移入 main()；**Dart 3 switch 非空 case 隐式 break 不 fall-through**（reviewer 曾误报）；**Dart 3.12 起 RegExp 支持 lookbehind**（旧文档"不支持"已过时，JS 净化仍走 quickjs 保证语义一致）；**JS RegExp 字符串构造必须带 `g` flag 否则 exec 死循环**
 
 ## 测试基线
 - `flutter analyze` 0 问题；`flutter test` 166 全过
 - 关键测试：js_rule_executor_test（9，含泄漏/并发）、js_rule_executor_ajax_test（4）、js_rule_executor_setcontent_test（7，记录-重放）、purify_rules_test（6，内置导入/分流/JS 执行）、json_path_test（12）、rule_engine_cascade_test（8+回归）、js_template_test（10+回归）
+
+## 阶段 9（2026-08-07）：全面审查 + 缺陷修复
+
+### 审查基线
+- `flutter analyze` 0 问题；`flutter test` 302 全过（修复后 318 全过）
+- 覆盖 core/network、purification、book_source、search、reader、bookshelf、settings 全模块
+
+### 已修复缺陷
+
+**P1 数据闭环**
+- 书架续读丢失书源 `@put:` 变量：`BookDetailService` 新增 `variablesJson` 持久化，
+  书架打开阅读器/刷新详情/自动更新全部透传变量（`BookDetail.decodeVariables`）
+- 排版/主题/阅读模式不持久化：`reader_settings` 盒新增 fontSize/lineHeight/fontFamily/
+  theme/readingMode，`ReaderNotifier.loadPersistedSettings()` 进入阅读页时恢复，
+  修改时异步落盘（新增 reader_settings_persistence_test）
+- TTS 朗读 HTML 标签/异常卡死：`TtsService.toPlainText()` 转纯文本朗读；
+  ReaderPage 朗读失败 try/finally 复位播放状态（新增 tts_service_test）
+
+**P2 行为/安全**
+- 聚合搜索重复发 `finished:true`：改为收尾只发一次；`SearchBooks.mergeResults`
+  按 sourceId 去重替代源（新增单次 finished + 去重测试）
+- 章节图片只显示占位：`ReaderRepositoryImpl.resolveImageUrls` 把相对 src 解析为
+  绝对 URL，翻页/滚动视图用 `Image.network` 真实渲染（新增 image_url_resolve_test）
+- 翻页模式页内可滚动与 PageView 手势冲突：移除页内 `SingleChildScrollView`
+- 删除书籍残留书签/笔记：`BookmarkService/NoteService.removeAllForBook`，
+  书架批量删除时同步清理（services_test 补断言）
+- WebDAV 恢复无确认：下载前增加覆盖确认弹窗，与本地恢复一致
+- 净化规则"删空重启复活"：`ensureDefaults` 改用 `__defaults_imported` 导入标记
+  （新增删空不复活测试）
+- 登录 Cookie 明文存储：`CookieJarService` 改用 AES 加密盒（复用
+  `openSensitiveBox` 明文迁移），备份/恢复同步走加密打开
+- JS `java.ajax/post/head` 一次性全量并发：限制并发上限 4
+- 调试搜索不走登录流程：`debugSearch` 复用 `_ensureLoginHeaders/_applyLoginCheck`
+
+**P3 细节**
+- 阅读设置面板小屏不可滚动：`ConstrainedBox(0.8h) + SingleChildScrollView`
+- 阅读器顶栏长标题溢出：标题 `Flexible + ellipsis`
+- 章节缓存命中不刷 `cachedAt`：限频（1h）刷新，避免 LRU 误淘汰热章节
+- 章节内搜索文案 0-based 误导：改为 `第 x/N 处`
+- 换源面板恒显示"当前书源"：改为读取真实书源名
+- 规则/书源编辑/导入对话框 `TextEditingController` 泄漏：try/finally 释放
+- 书签/笔记统一管理页只显示 base64 ID：联动书架显示书名
+- `widget_test.dart` 空壳：改为真实书架页 smoke 测试（pump EasyReadApp）
+
+### 仍未处理（低风险/需真机）
+- `Navigator.push` 与 go_router 混用（详情页换源/设置/书源页）：路由栈不受
+  GoRouter 管理，建议后续统一迁移
+- 备份 JSON 明文包含 Cookie 登录态：加密盒已加固本地存储，导出文件仍有提示，
+  后续可做可选加密导出
+- Android/iOS 真机全链路验证依赖外部设备（见未完成清单）

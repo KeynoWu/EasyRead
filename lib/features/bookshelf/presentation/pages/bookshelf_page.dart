@@ -4,7 +4,10 @@ import 'package:go_router/go_router.dart';
 import 'package:hive/hive.dart';
 import '../../../../core/database/hive_init.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../data/services/book_detail_service.dart';
 import '../../../reader/data/models/reading_progress_model.dart';
+import '../../../reader/data/services/bookmark_service.dart';
+import '../../../reader/data/services/note_service.dart';
 import '../../../reader/presentation/providers/reader_provider.dart';
 import '../../domain/entities/book.dart';
 import '../../domain/usecases/import_local_book.dart';
@@ -79,11 +82,13 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     final sourceId = book.sourceId;
     final detailUrl = detail?.detailUrl;
     final alternatives = detail?.alternativesJson;
+    final variables = detail?.variablesJson;
     context.push(
       '/reader/${Uri.encodeComponent(book.id)}'
       '?sourceId=${Uri.encodeComponent(sourceId ?? '')}'
       '&detailUrl=${Uri.encodeComponent(detailUrl ?? '')}'
-      '&alternatives=${Uri.encodeComponent(alternatives ?? '')}',
+      '&alternatives=${Uri.encodeComponent(alternatives ?? '')}'
+      '&variables=${Uri.encodeComponent(variables ?? '')}',
     );
   }
 
@@ -130,6 +135,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
             bookId: book.id,
             sourceId: sourceId,
             detailUrl: detailUrl,
+            variables: BookDetail.decodeVariables(detail?.variablesJson),
           );
       await ref.read(bookshelfRepositoryProvider).save(Book(
         id: book.id,
@@ -232,10 +238,15 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     // 删除书籍时同步清理章节缓存与阅读进度，避免残留数据占用磁盘或错位续读
     final readerRepo = ref.read(readerRepositoryProvider);
     final progressBox = await Hive.openBox<ReadingProgressModel>(HiveBoxes.readingProgress);
+    final bookmarkService = BookmarkService();
+    final noteService = NoteService();
     for (final id in _selectedIds) {
       await detailService.remove(id);
       await readerRepo.clearBookCache(id);
       await progressBox.delete(id);
+      // 同步清理书签与笔记，避免删除书籍后残留孤儿数据
+      await bookmarkService.removeAllForBook(id);
+      await noteService.removeAllForBook(id);
     }
     if (!mounted) return;
     setState(() {

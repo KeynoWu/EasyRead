@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:html/dom.dart' as dom;
+import 'package:html/parser.dart' as parser;
 
 /// TTS 听书服务
 class TtsService {
@@ -29,7 +31,7 @@ class TtsService {
   /// 是否 resolve 挂起的 speak Future。
   Future<void> speak(String text) async {
     if (text.trim().isEmpty) return;
-    final chunks = _chunkText(text);
+    final chunks = chunkText(text);
     if (chunks.isEmpty) return;
     _isSpeaking = true;
     _stopRequested = false;
@@ -75,8 +77,64 @@ class TtsService {
     await stop();
   }
 
+  /// 将净化后的 HTML 正文转为纯文本（跳过脚本/样式，保留段落换行）。
+  /// TTS 朗读使用该文本，避免把标签名读出来。
+  static String toPlainText(String html) {
+    try {
+      final doc = parser.parse(html);
+      final body = doc.body;
+      if (body == null) return html.trim();
+      final buffer = StringBuffer();
+      _collectPlainText(body, buffer);
+      return buffer.toString().trim();
+    } catch (_) {
+      return html.trim();
+    }
+  }
+
+  static void _collectPlainText(dom.Node node, StringBuffer buffer) {
+    if (node is dom.Text) {
+      buffer.write(node.text);
+      return;
+    }
+    if (node is dom.Element) {
+      switch (node.localName) {
+        case 'script':
+        case 'style':
+        case 'noscript':
+        case 'template':
+          return;
+        case 'br':
+          buffer.writeln();
+          return;
+        case 'p':
+        case 'div':
+        case 'section':
+        case 'article':
+        case 'li':
+        case 'blockquote':
+        case 'h1':
+        case 'h2':
+        case 'h3':
+        case 'h4':
+        case 'h5':
+        case 'h6':
+          buffer.writeln();
+          for (final child in node.nodes) {
+            _collectPlainText(child, buffer);
+          }
+          buffer.writeln();
+          return;
+        default:
+          for (final child in node.nodes) {
+            _collectPlainText(child, buffer);
+          }
+      }
+    }
+  }
+
   /// 按不超过 [maxChunkChars] 字符切块，优先在句末标点 / 换行边界断开。
-  List<String> _chunkText(String text) {
+  static List<String> chunkText(String text) {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return const [];
     if (trimmed.length <= maxChunkChars) return [trimmed];

@@ -125,6 +125,35 @@ void main() {
       expect((await service.getBookmarks('book2')).length, 1);
     });
 
+    test('removeAllForBook 删除某本书全部书签', () async {
+      final service = BookmarkService();
+      await service.add(Bookmark(
+        id: 'b1',
+        bookId: 'book1',
+        chapterIndex: 1,
+        pageIndex: 2,
+        createdAt: DateTime(2026, 1, 1),
+      ));
+      await service.add(Bookmark(
+        id: 'b2',
+        bookId: 'book1',
+        chapterIndex: 2,
+        pageIndex: 3,
+        createdAt: DateTime(2026, 1, 2),
+      ));
+      await service.add(Bookmark(
+        id: 'b3',
+        bookId: 'book2',
+        chapterIndex: 1,
+        pageIndex: 1,
+        createdAt: DateTime(2026, 1, 3),
+      ));
+
+      await service.removeAllForBook('book1');
+      expect(await service.getBookmarks('book1'), isEmpty);
+      expect((await service.getBookmarks('book2')).length, 1);
+    });
+
     test('should list all bookmarks and remove by global id', () async {
       final service = BookmarkService();
       await service.add(Bookmark(
@@ -191,6 +220,35 @@ void main() {
       ));
 
       await service.remove('book1', 'same-id');
+      expect(await service.getNotes('book1'), isEmpty);
+      expect((await service.getNotes('book2')).length, 1);
+    });
+
+    test('removeAllForBook 删除某本书全部笔记', () async {
+      final service = NoteService();
+      await service.add(ReadingNote(
+        id: 'n1',
+        bookId: 'book1',
+        chapterIndex: 1,
+        text: '笔记1',
+        createdAt: DateTime(2026, 1, 1),
+      ));
+      await service.add(ReadingNote(
+        id: 'n2',
+        bookId: 'book1',
+        chapterIndex: 2,
+        text: '笔记2',
+        createdAt: DateTime(2026, 1, 2),
+      ));
+      await service.add(ReadingNote(
+        id: 'n3',
+        bookId: 'book2',
+        chapterIndex: 1,
+        text: '笔记3',
+        createdAt: DateTime(2026, 1, 3),
+      ));
+
+      await service.removeAllForBook('book1');
       expect(await service.getNotes('book1'), isEmpty);
       expect((await service.getNotes('book2')).length, 1);
     });

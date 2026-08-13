@@ -518,6 +518,9 @@ class SearchRepositoryImpl implements SearchRepository {
           headers.putIfAbsent('Cookie', () => cookie);
         }
       }
+      // 与真实搜索保持一致：登录/登录校验流程同样作用于调试请求，
+      // 避免"调试成功、实际搜索失败"的误导
+      await _ensureLoginHeaders(source, headers, searchUrl, null);
       final String html;
       if (spec != null && spec.method == 'POST' && spec.body != null) {
         html = await _client.postForm(
@@ -535,14 +538,23 @@ class SearchRepositoryImpl implements SearchRepository {
           charset: charset,
         );
       }
-      final results = await _parseDebugResults(
+      final responseHtml = await _applyLoginCheck(
         source,
         html,
         searchUrl,
         charset,
+        headers,
+      );
+      final results = await _parseDebugResults(
+        source,
+        responseHtml,
+        searchUrl,
+        charset,
       );
       return BookSourceDebugResult(
-        rawHtml: html.length > 8000 ? html.substring(0, 8000) : html,
+        rawHtml: responseHtml.length > 8000
+            ? responseHtml.substring(0, 8000)
+            : responseHtml,
         results: results.take(5).toList(),
       );
     } catch (e) {

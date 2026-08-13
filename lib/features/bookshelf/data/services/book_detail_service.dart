@@ -5,8 +5,28 @@ import 'package:hive/hive.dart';
 class BookDetail {
   final String? detailUrl;
   final String? alternativesJson;
+  final String? variablesJson;
 
-  const BookDetail({this.detailUrl, this.alternativesJson});
+  const BookDetail({
+    this.detailUrl,
+    this.alternativesJson,
+    this.variablesJson,
+  });
+
+  /// 将书源 `@put:` 变量 JSON 解码为变量表（供目录/正文 URL 的 `@get:` 使用）。
+  static Map<String, String> decodeVariables(String? json) {
+    if (json == null || json.isEmpty) return const {};
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is Map) {
+        return {
+          for (final entry in decoded.entries)
+            entry.key.toString(): entry.value?.toString() ?? '',
+        };
+      }
+    } catch (_) {}
+    return const {};
+  }
 }
 
 class BookDetailService {
@@ -21,11 +41,13 @@ class BookDetailService {
     String bookId, {
     String? detailUrl,
     String? alternativesJson,
+    String? variablesJson,
   }) async {
     final box = await _box();
     await box.put(bookId, jsonEncode({
       'detail_url': detailUrl,
       'alternatives_json': alternativesJson,
+      'variables_json': variablesJson,
     }));
   }
 
@@ -38,6 +60,7 @@ class BookDetailService {
       return BookDetail(
         detailUrl: map['detail_url']?.toString(),
         alternativesJson: map['alternatives_json']?.toString(),
+        variablesJson: map['variables_json']?.toString(),
       );
     } catch (_) {
       return null;

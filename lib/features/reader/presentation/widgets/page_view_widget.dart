@@ -160,43 +160,16 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
   Widget _buildPageContent(PageContent page, ReaderState state) {
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: state.layoutConfig.horizontalPadding),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: page.nodes.map((node) {
-            switch (node.type) {
-              case NodeType.paragraph:
-                return Padding(
-                  padding: EdgeInsets.only(bottom: state.layoutConfig.paragraphSpacing),
-                  child: Text(
-                    node.text,
-                    style: TextStyle(
-                      fontSize: state.layoutConfig.fontSize,
-                      height: state.layoutConfig.lineHeight,
-                      color: state.theme.textColor,
-                      fontFamily: state.layoutConfig.fontFamily,
-                      fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
-                    ),
-                  ),
-                );
-              case NodeType.heading:
-                return Padding(
-                  padding: EdgeInsets.only(bottom: state.layoutConfig.paragraphSpacing),
-                  child: Text(
-                    node.text,
-                    style: TextStyle(
-                      fontSize: state.layoutConfig.fontSize + 4,
-                      fontWeight: FontWeight.w700,
-                      color: state.theme.textColor,
-                      fontFamily: state.layoutConfig.fontFamily,
-                      fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
-                    ),
-                  ),
-                );
-              case NodeType.lineBreak:
-                return const SizedBox(height: 8);
-              case NodeType.text:
-                return Text(
+      // 分页引擎已按页高切分内容，页内不再允许滚动：
+      // 否则单页可滚动且翻页后滚动位置不重置，与 PageView 手势冲突
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: page.nodes.map((node) {
+          switch (node.type) {
+            case NodeType.paragraph:
+              return Padding(
+                padding: EdgeInsets.only(bottom: state.layoutConfig.paragraphSpacing),
+                child: Text(
                   node.text,
                   style: TextStyle(
                     fontSize: state.layoutConfig.fontSize,
@@ -205,17 +178,67 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
                     fontFamily: state.layoutConfig.fontFamily,
                     fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
                   ),
-                );
-              case NodeType.image:
-                return Container(
-                  height: 200,
-                  color: state.theme.textColor.withValues(alpha: 0.1),
-                  child: const Center(child: Icon(Icons.image, size: 48)),
-                );
-            }
-          }).toList(),
-        ),
+                ),
+              );
+            case NodeType.heading:
+              return Padding(
+                padding: EdgeInsets.only(bottom: state.layoutConfig.paragraphSpacing),
+                child: Text(
+                  node.text,
+                  style: TextStyle(
+                    fontSize: state.layoutConfig.fontSize + 4,
+                    fontWeight: FontWeight.w700,
+                    color: state.theme.textColor,
+                    fontFamily: state.layoutConfig.fontFamily,
+                    fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
+                  ),
+                ),
+              );
+            case NodeType.lineBreak:
+              return const SizedBox(height: 8);
+            case NodeType.text:
+              return Text(
+                node.text,
+                style: TextStyle(
+                  fontSize: state.layoutConfig.fontSize,
+                  height: state.layoutConfig.lineHeight,
+                  color: state.theme.textColor,
+                  fontFamily: state.layoutConfig.fontFamily,
+                  fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
+                ),
+              );
+            case NodeType.image:
+              return _buildImage(node, state);
+          }
+        }).toList(),
       ),
+    );
+  }
+
+  Widget _buildImage(TextNode node, ReaderState state) {
+    final url = node.imageUrl;
+    return Container(
+      height: 200,
+      width: double.infinity,
+      color: state.theme.textColor.withValues(alpha: 0.1),
+      child: url == null || url.isEmpty
+          ? const Center(child: Icon(Icons.image, size: 48))
+          : Image.network(
+              url,
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) =>
+                  const Center(child: Icon(Icons.image, size: 48)),
+              loadingBuilder: (context, child, progress) =>
+                  progress == null
+                      ? child
+                      : const Center(
+                          child: SizedBox(
+                            width: 28,
+                            height: 28,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ),
+            ),
     );
   }
 }

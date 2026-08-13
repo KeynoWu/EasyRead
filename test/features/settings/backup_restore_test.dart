@@ -11,9 +11,12 @@ import 'package:easy_read/features/book_source/data/models/book_source_model.dar
 import 'package:easy_read/features/book_source/data/repositories/book_source_repository_impl.dart';
 import 'package:easy_read/features/book_source/domain/entities/book_source.dart';
 import 'package:easy_read/features/settings/domain/usecases/backup_restore.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 void main() {
   setUp(() async {
+    // 加密盒密钥存于平台安全存储，测试环境用 mock 保证密钥稳定
+    FlutterSecureStorage.setMockInitialValues({});
     Hive.init(Directory.systemTemp.createTempSync('hive_backup_test').path);
     if (!Hive.isAdapterRegistered(0)) {
       Hive.registerAdapter(BookModelAdapter());

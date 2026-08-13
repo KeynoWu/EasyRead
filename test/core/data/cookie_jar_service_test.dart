@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:easy_read/core/data/cookie_jar_service.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
 
@@ -7,6 +8,8 @@ void main() {
   late Directory tempDir;
 
   setUp(() {
+    // 加密盒密钥存于平台安全存储，测试环境用 mock 保证密钥稳定
+    FlutterSecureStorage.setMockInitialValues({});
     tempDir = Directory.systemTemp.createTempSync('cookie_jar');
     Hive.init(tempDir.path);
   });

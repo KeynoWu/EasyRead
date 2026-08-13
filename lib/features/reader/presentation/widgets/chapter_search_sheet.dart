@@ -87,7 +87,7 @@ class _ChapterSearchSheetState extends ConsumerState<ChapterSearchSheet> {
             child: Text(
               totalMatches == 0
                   ? (_controller.text.isEmpty ? '输入关键词搜索' : '未找到匹配内容')
-                  : '共 $_currentMatchIndex/${totalMatches - 1} 处 · 第 ${_currentMatchIndex + 1}/$totalMatches 处',
+                  : '第 ${_currentMatchIndex + 1}/$totalMatches 处',
               style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
             ),
           ),

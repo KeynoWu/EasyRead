@@ -47,6 +47,7 @@ class BookshelfAutoUpdater {
           bookId: book.id,
           sourceId: sourceId,
           detailUrl: detailUrl,
+          variables: BookDetail.decodeVariables(detail?.variablesJson),
         );
         await bookshelfRepo.save(Book(
           id: book.id,

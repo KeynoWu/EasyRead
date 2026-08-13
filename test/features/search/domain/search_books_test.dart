@@ -227,6 +227,63 @@ void main() {
       expect(completedSeq.last, 2);
     });
 
+    test('finished:true 事件只发出一次（防 UI 重复合并）', () async {
+      mockSourceRepo = MockBookSourceRepository([testSource, secondSource]);
+      useCase = SearchBooks(searchRepo: mockSearchRepo, sourceRepo: mockSourceRepo);
+
+      final progress = <SearchProgress>[];
+      await for (final p in useCase.searchWithProgress('测试')) {
+        progress.add(p);
+      }
+
+      expect(progress.where((p) => p.finished).length, 1);
+      expect(progress.last.finished, isTrue);
+    });
+
+    test('mergeResults 对重复替代源去重', () {
+      SearchResult book(SearchResult existing, SourceOption alt) => SearchResult(
+        bookId: existing.bookId,
+        name: existing.name,
+        author: existing.author,
+        sourceId: existing.sourceId,
+        sourceName: existing.sourceName,
+        alternatives: [...existing.alternatives, alt],
+      );
+
+      const primary = SearchResult(
+        bookId: 'a_1',
+        name: '同一本书',
+        author: '作者',
+        sourceId: 'srcA',
+        sourceName: 'A',
+      );
+      const alt1 = SourceOption(
+        bookId: 'b_1',
+        sourceId: 'srcB',
+        sourceName: 'B',
+      );
+      const alt2 = SourceOption(
+        bookId: 'c_1',
+        sourceId: 'srcC',
+        sourceName: 'C',
+      );
+
+      final current = [book(primary, alt1)];
+      // 模拟重复合并：incoming 与 current 完全相同的批次再合并一次
+      final mergedOnce = SearchBooks.mergeResults(current, current);
+      expect(mergedOnce.single.alternatives.length, 1);
+      // 新批次带来新替代源时正常追加
+      final mergedNew = SearchBooks.mergeResults(
+        mergedOnce,
+        [book(primary, alt2)],
+      );
+      expect(mergedNew.single.alternatives.length, 2);
+      expect(
+        mergedNew.single.alternatives.map((a) => a.sourceId).toSet(),
+        {'srcB', 'srcC'},
+      );
+    });
+
     test('无可用书源立即完成（total=0）', () async {
       mockSourceRepo = MockBookSourceRepository([]);
       useCase = SearchBooks(searchRepo: mockSearchRepo, sourceRepo: mockSourceRepo);

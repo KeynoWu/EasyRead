@@ -43,6 +43,43 @@ void main() {
     expect(rules.any((r) => r.id == 'custom'), isTrue);
   });
 
+  test('用户清空规则后 ensureDefaults 不复活内置规则', () async {
+    final manager = ManagePurificationRules();
+    await manager.ensureDefaults();
+    final box = await Hive.openBox<String>('purification_rules');
+    // 模拟用户删除全部规则：仅保留导入标记，避免重启时误判为"未初始化"
+    final marker = box.get('__defaults_imported');
+    await box.clear();
+    if (marker != null) {
+      await box.put('__defaults_imported', marker);
+    }
+
+    expect(await manager.getAll(), isEmpty);
+    await manager.ensureDefaults();
+    expect(await manager.getAll(), isEmpty);
+  });
+
+  test('ensureDefaults 旧版升级：已有规则无标记时不导入默认规则', () async {
+    final manager = ManagePurificationRules();
+    // 模拟旧版本（isNotEmpty 判断时代）用户：盒内有规则但无导入标记，
+    // 其中含与内置规则同 id 的用户修改
+    await manager.add(const PurificationRule(id: '1', name: '用户改过的内置规则', pattern: 'y'));
+    await manager.add(const PurificationRule(id: 'legacy', name: '旧规则', pattern: 'x'));
+
+    await manager.ensureDefaults();
+
+    final rules = await manager.getAll();
+    // 不追加 20 条内置规则
+    expect(rules.length, 2);
+    // 用户对同 id 内置规则的修改不被默认值覆盖
+    final custom = rules.firstWhere((r) => r.id == '1');
+    expect(custom.name, '用户改过的内置规则');
+    expect(custom.pattern, 'y');
+    // 标记被补写：后续启动不再触发导入
+    final box = await Hive.openBox<String>('purification_rules');
+    expect(box.get('__defaults_imported'), '1');
+  });
+
   test('buildPurifier 分流：Dart 可编译规则进 rules，JS 规则进 jsRules', () async {
     final manager = ManagePurificationRules();
     await manager.ensureDefaults();

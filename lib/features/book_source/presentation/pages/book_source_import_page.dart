@@ -68,9 +68,14 @@ class BookSourceImportPage extends ConsumerWidget {
         uri.host.isNotEmpty;
   }
 
-  void _showUrlDialog(BuildContext context, WidgetRef ref, ImportBookSource useCase) {
+  Future<void> _showUrlDialog(
+    BuildContext context,
+    WidgetRef ref,
+    ImportBookSource useCase,
+  ) async {
     final controller = TextEditingController();
-    showDialog(
+    try {
+      await showDialog(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('输入书源地址'),
@@ -170,7 +175,10 @@ class BookSourceImportPage extends ConsumerWidget {
           ),
         ],
       ),
-    );
+      );
+    } finally {
+      controller.dispose();
+    }
   }
 
   void _handleResult(BuildContext context, WidgetRef ref, dynamic result) {

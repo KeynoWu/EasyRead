@@ -218,8 +218,8 @@ class BackupRestore {
       });
 
       await safe(() async {
-        await _clearBox<String>(CookieJarService.boxName);
-        final cookieBox = await Hive.openBox<String>(CookieJarService.boxName);
+        final cookieBox = await openSensitiveBox<String>(CookieJarService.boxName);
+        await cookieBox.clear();
         for (final entry in cookieJar.entries) {
           if (entry.value.isNotEmpty) {
             await cookieBox.put(entry.key, entry.value);
@@ -327,7 +327,7 @@ class BackupRestore {
 
   /// 读取 CookieJar（String 盒）
   Future<Map<String, dynamic>> _readCookieJarMap() async {
-    final box = await Hive.openBox<String>(CookieJarService.boxName);
+    final box = await openSensitiveBox<String>(CookieJarService.boxName);
     return {for (final key in box.keys) key.toString(): box.get(key)};
   }
 

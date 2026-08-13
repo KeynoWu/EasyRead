@@ -151,6 +151,7 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
         ],
       ),
     );
+    keywordController.dispose();
     if (keyword == null || keyword.isEmpty || !mounted) return;
 
     // 构建测试书源（含完整规则）

@@ -98,6 +98,7 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
             'detailUrl': alt.detailUrl,
           },
       ]),
+      variablesJson: jsonEncode(result.variables),
     );
     if (chapterIndex > 0) {
       await readerRepo.saveProgress(ReadingProgress(

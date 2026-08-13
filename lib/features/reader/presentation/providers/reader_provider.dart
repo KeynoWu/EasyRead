@@ -149,6 +149,8 @@ class ReaderNotifier extends Notifier<ReaderState> {
 
   ChineseConversionMode? _chineseMode;
 
+  static const String _settingsBoxName = 'reader_settings';
+
   @override
   ReaderState build() {
     // 不 watch 会重建本 notifier 的 provider：阅读中的 state（章节/分页/视口）
@@ -298,7 +300,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
   Future<ChineseConversionMode> _loadChineseMode() async {
     final cached = _chineseMode;
     if (cached != null) return cached;
-    final box = await Hive.openBox<int>('reader_settings');
+    final box = await Hive.openBox<dynamic>(_settingsBoxName);
     final index = box.get('chineseMode', defaultValue: 0) ?? 0;
     final mode = ChineseConversionMode.values[
         index.clamp(0, ChineseConversionMode.values.length - 1)];
@@ -306,10 +308,91 @@ class ReaderNotifier extends Notifier<ReaderState> {
     return mode;
   }
 
+  /// 恢复持久化的排版/主题/阅读模式设置（进入阅读页时调用一次）。
+  Future<void> loadPersistedSettings() async {
+    final box = await Hive.openBox<dynamic>(_settingsBoxName);
+    final fontSize = (box.get('fontSize') as num?)?.toDouble();
+    final lineHeight = (box.get('lineHeight') as num?)?.toDouble();
+    final rawFontFamily = box.get('fontFamily') as String?;
+    final fontFamily = (rawFontFamily == null || rawFontFamily.isEmpty)
+        ? null
+        : rawFontFamily;
+    final themeName = box.get('theme') as String?;
+    final modeIndex = (box.get('readingMode') as num?)?.toInt();
+
+    LayoutConfig? layout;
+    if (fontSize != null || lineHeight != null || fontFamily != null) {
+      layout = LayoutConfig(
+        fontSize: fontSize ?? state.layoutConfig.fontSize,
+        lineHeight: lineHeight ?? state.layoutConfig.lineHeight,
+        fontFamily: fontFamily,
+      );
+    }
+    ReaderThemeConfig? theme;
+    if (themeName != null) {
+      for (final candidate in ReaderThemes.themes) {
+        if (candidate.name == themeName) {
+          theme = candidate;
+          break;
+        }
+      }
+    }
+    ReadingMode? mode;
+    if (modeIndex != null &&
+        modeIndex >= 0 &&
+        modeIndex < ReadingMode.values.length) {
+      mode = ReadingMode.values[modeIndex];
+    }
+    if (layout != null || theme != null || mode != null) {
+      state = state.copyWith(
+        layoutConfig: layout ?? state.layoutConfig,
+        theme: theme ?? state.theme,
+        readingMode: mode ?? state.readingMode,
+      );
+    }
+  }
+
+  void _persistLayoutConfig(LayoutConfig config) {
+    unawaited(() async {
+      try {
+        final box = await Hive.openBox<dynamic>(_settingsBoxName);
+        await box.putAll({
+          'fontSize': config.fontSize,
+          'lineHeight': config.lineHeight,
+          'fontFamily': config.fontFamily ?? '',
+        });
+      } catch (_) {
+        // 持久化失败不影响阅读：下次修改时重试
+      }
+    }());
+  }
+
+  void _persistTheme(ReaderThemeConfig theme) {
+    unawaited(() async {
+      try {
+        final box = await Hive.openBox<dynamic>(_settingsBoxName);
+        await box.put('theme', theme.name);
+      } catch (_) {
+        // 持久化失败不影响阅读：下次修改时重试
+      }
+    }());
+  }
+
+  void _persistReadingMode(ReadingMode mode) {
+    unawaited(() async {
+      try {
+        final box = await Hive.openBox<dynamic>(_settingsBoxName);
+        await box.put('readingMode', mode.index);
+      } catch (_) {
+        // 持久化失败不影响阅读：下次修改时重试
+      }
+    }());
+  }
+
   /// 切换简繁转换并立即重新解析当前章节。
   Future<void> setChineseMode(ChineseConversionMode mode) async {
     _chineseMode = mode;
-    final box = await Hive.openBox<int>('reader_settings');
+    final box = await Hive.openBox<dynamic>(_settingsBoxName);
     await box.put('chineseMode', mode.index);
     final chapter = state.currentChapter;
     if (chapter == null) return;
@@ -440,6 +523,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
     final oldPage = state.currentPage;
     final oldLength = state.pages.length;
     state = state.copyWith(layoutConfig: config);
+    _persistLayoutConfig(config);
     final nodes = _currentNodes;
     final chapter = state.currentChapter;
     if (nodes == null || nodes.isEmpty || chapter == null || !_viewportReported) {
@@ -458,6 +542,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
   /// 切换主题
   void switchTheme(ReaderThemeConfig theme) {
     state = state.copyWith(theme: theme);
+    _persistTheme(theme);
   }
 
   /// 切换阅读模式（各模式使用自己的进度维度）
@@ -471,6 +556,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
     } else {
       state = state.copyWith(readingMode: mode, currentPage: 0);
     }
+    _persistReadingMode(mode);
   }
 
   /// 在章节内搜索关键词，返回命中页码列表

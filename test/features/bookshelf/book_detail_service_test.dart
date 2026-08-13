@@ -18,12 +18,23 @@ void main() {
       'book1',
       detailUrl: 'https://example.com/book/1',
       alternativesJson: '[]',
+      variablesJson: '{"token":"abc"}',
     );
 
     final detail = await service.get('book1');
     expect(detail, isNotNull);
     expect(detail!.detailUrl, 'https://example.com/book/1');
     expect(detail.alternativesJson, '[]');
+    expect(detail.variablesJson, '{"token":"abc"}');
+  });
+
+  test('decodeVariables 解析书源变量 JSON', () {
+    expect(
+      BookDetail.decodeVariables('{"token":"abc","page":"2"}'),
+      {'token': 'abc', 'page': '2'},
+    );
+    expect(BookDetail.decodeVariables(null), isEmpty);
+    expect(BookDetail.decodeVariables('not-json'), isEmpty);
   });
 
   test('should remove book details', () async {

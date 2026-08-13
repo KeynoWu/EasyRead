@@ -64,75 +64,89 @@ class _PurificationRulesPageState extends ConsumerState<PurificationRulesPage> {
     var scopeTitle = rule?.scopeTitle ?? true;
     var scopeContent = rule?.scopeContent ?? true;
 
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(rule == null ? '添加规则' : '编辑规则'),
-        content: StatefulBuilder(
-          builder: (context, setDialogState) => Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(controller: nameController, decoration: const InputDecoration(labelText: '规则名称')),
-              const SizedBox(height: 12),
-              TextField(controller: patternController, decoration: const InputDecoration(labelText: '正则表达式'), maxLines: 2),
-              const SizedBox(height: 12),
-              TextField(controller: replacementController, decoration: const InputDecoration(labelText: '替换为'), maxLines: 2),
-              const SizedBox(height: 4),
-              SwitchListTile(
-                title: const Text('作用于标题'),
-                value: scopeTitle,
-                onChanged: (v) => setDialogState(() => scopeTitle = v),
-              ),
-              SwitchListTile(
-                title: const Text('作用于正文'),
-                value: scopeContent,
-                onChanged: (v) => setDialogState(() => scopeContent = v),
-              ),
-            ],
+    final bool? result;
+    // dispose 前捕获文本值：TextEditingController 释放后不得再读取
+    var savedName = '';
+    var savedPattern = '';
+    var savedReplacement = '';
+    try {
+      result = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(rule == null ? '添加规则' : '编辑规则'),
+          content: StatefulBuilder(
+            builder: (context, setDialogState) => Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(controller: nameController, decoration: const InputDecoration(labelText: '规则名称')),
+                const SizedBox(height: 12),
+                TextField(controller: patternController, decoration: const InputDecoration(labelText: '正则表达式'), maxLines: 2),
+                const SizedBox(height: 12),
+                TextField(controller: replacementController, decoration: const InputDecoration(labelText: '替换为'), maxLines: 2),
+                const SizedBox(height: 4),
+                SwitchListTile(
+                  title: const Text('作用于标题'),
+                  value: scopeTitle,
+                  onChanged: (v) => setDialogState(() => scopeTitle = v),
+                ),
+                SwitchListTile(
+                  title: const Text('作用于正文'),
+                  value: scopeContent,
+                  onChanged: (v) => setDialogState(() => scopeContent = v),
+                ),
+              ],
+            ),
           ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
-          FilledButton(
-            onPressed: () {
-              // 保存前校验正则合法性
-              if (patternController.text.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('请输入正则表达式')),
-                );
-                return;
-              }
-              try {
-                RegExp(patternController.text);
-              } catch (_) {
-                if (!_isJsOnlyPattern(patternController.text)) {
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+            FilledButton(
+              onPressed: () {
+                // 保存前校验正则合法性
+                if (patternController.text.isEmpty) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('正则表达式无效，请检查')),
+                    const SnackBar(content: Text('请输入正则表达式')),
                   );
                   return;
                 }
-              }
-              // ReDoS 预检：拒绝嵌套量词等可能灾难性回溯的模式
-              if (PurifyPatternGuard.hasCatastrophicBacktracking(patternController.text)) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('正则存在灾难性回溯风险（如嵌套量词），请简化表达式')),
-                );
-                return;
-              }
-              Navigator.pop(context, true);
-            },
-            child: const Text('保存'),
-          ),
-        ],
-      ),
-    );
+                try {
+                  RegExp(patternController.text);
+                } catch (_) {
+                  if (!_isJsOnlyPattern(patternController.text)) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('正则表达式无效，请检查')),
+                    );
+                    return;
+                  }
+                }
+                // ReDoS 预检：拒绝嵌套量词等可能灾难性回溯的模式
+                if (PurifyPatternGuard.hasCatastrophicBacktracking(patternController.text)) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('正则存在灾难性回溯风险（如嵌套量词），请简化表达式')),
+                  );
+                  return;
+                }
+                Navigator.pop(context, true);
+              },
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      );
+      savedName = nameController.text;
+      savedPattern = patternController.text;
+      savedReplacement = replacementController.text;
+    } finally {
+      nameController.dispose();
+      patternController.dispose();
+      replacementController.dispose();
+    }
 
     if (result == true) {
       final newRule = PurificationRule(
         id: rule?.id ?? DateTime.now().millisecondsSinceEpoch.toString(),
-        name: nameController.text.isEmpty ? '未命名规则' : nameController.text,
-        pattern: patternController.text,
-        replacement: replacementController.text,
+        name: savedName.isEmpty ? '未命名规则' : savedName,
+        pattern: savedPattern,
+        replacement: savedReplacement,
         enabled: rule?.enabled ?? true,
         isRegex: rule?.isRegex ?? true,
         scopeTitle: scopeTitle,

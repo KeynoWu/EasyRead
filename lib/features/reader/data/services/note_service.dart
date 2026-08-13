@@ -113,4 +113,15 @@ class NoteService {
       } catch (_) {}
     }
   }
+
+  /// 删除某本书的全部笔记（书架删除书籍时清理孤儿数据）。
+  Future<void> removeAllForBook(String bookId) async {
+    final box = await _box();
+    final keys = box.keys
+        .where((k) => k.toString().startsWith('$bookId|'))
+        .toList();
+    if (keys.isNotEmpty) {
+      await box.deleteAll(keys);
+    }
+  }
 }

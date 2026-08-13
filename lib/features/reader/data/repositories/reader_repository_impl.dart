@@ -300,6 +300,24 @@ class ReaderRepositoryImpl implements ReaderRepository {
     );
     final cached = cacheBox.get(cacheKey);
     if (cached != null) {
+      // 命中时刷新缓存时间戳（限频），避免 LRU 淘汰把长期阅读的
+      // 热章节误判为最旧条目
+      final cachedAt = cached.cachedAt;
+      if (cachedAt == null ||
+          DateTime.now().difference(cachedAt) > const Duration(hours: 1)) {
+        await cacheBox.put(
+          cacheKey,
+          ChapterModel(
+            id: cached.id,
+            bookId: cached.bookId,
+            title: cached.title,
+            content: cached.content,
+            index: cached.index,
+            sourceId: cached.sourceId,
+            cachedAt: DateTime.now(),
+          ),
+        );
+      }
       return cached.toEntity();
     }
 
@@ -432,6 +450,7 @@ class ReaderRepositoryImpl implements ReaderRepository {
         bookName: _lastBookDetail?.name,
         sourceName: source.name,
       );
+      content = resolveImageUrls(content, contentUrl);
       content = _removeRepeatedTitle(content, chapterTitle);
 
       if (content.trim().isEmpty) {
@@ -573,6 +592,28 @@ class ReaderRepositoryImpl implements ReaderRepository {
           .trim();
     } catch (_) {
       return content;
+    }
+  }
+
+  /// 将正文 HTML 中相对路径的图片 src 解析为绝对 URL，
+  /// 供阅读器图片渲染使用（data:/http(s) 原样保留）。
+  static String resolveImageUrls(String html, String baseUrl) {
+    if (!html.contains('<img')) return html;
+    try {
+      final doc = parser.parse(html);
+      for (final img in doc.querySelectorAll('img')) {
+        final src = img.attributes['src'] ?? '';
+        if (src.isEmpty) continue;
+        if (src.startsWith('http://') ||
+            src.startsWith('https://') ||
+            src.startsWith('data:')) {
+          continue;
+        }
+        img.attributes['src'] = _resolveUrl(baseUrl, src);
+      }
+      return doc.body?.innerHtml ?? html;
+    } catch (_) {
+      return html;
     }
   }
 

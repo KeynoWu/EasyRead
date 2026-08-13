@@ -1,4 +1,5 @@
 import 'package:hive/hive.dart';
+import '../database/hive_init.dart';
 
 /// 书源登录 Cookie 持久化存储，按 sourceId 保存。
 class CookieJarService {
@@ -6,8 +7,9 @@ class CookieJarService {
 
   Box<String>? _cachedBox;
 
+  /// Cookie 属于凭据：与书源规则盒一致，使用 AES 加密盒存储。
   Future<Box<String>> _box() async =>
-      _cachedBox ??= await Hive.openBox<String>(boxName);
+      _cachedBox ??= await openSensitiveBox<String>(boxName);
 
   Future<String?> get(String sourceId) async {
     if (sourceId.isEmpty) return null;

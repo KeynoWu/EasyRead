@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../bookshelf/presentation/providers/bookshelf_provider.dart';
 import '../../data/services/bookmark_service.dart';
 import '../../data/services/note_service.dart';
 import '../../domain/entities/bookmark.dart';
@@ -30,14 +32,14 @@ class BookMarksNotesPage extends StatelessWidget {
   }
 }
 
-class _AllBookmarksTab extends StatefulWidget {
+class _AllBookmarksTab extends ConsumerStatefulWidget {
   const _AllBookmarksTab();
 
   @override
-  State<_AllBookmarksTab> createState() => _AllBookmarksTabState();
+  ConsumerState<_AllBookmarksTab> createState() => _AllBookmarksTabState();
 }
 
-class _AllBookmarksTabState extends State<_AllBookmarksTab> {
+class _AllBookmarksTabState extends ConsumerState<_AllBookmarksTab> {
   final _service = BookmarkService();
   late Future<List<Bookmark>> _future;
 
@@ -53,6 +55,10 @@ class _AllBookmarksTabState extends State<_AllBookmarksTab> {
 
   @override
   Widget build(BuildContext context) {
+    final bookNames = {
+      for (final book in ref.watch(bookshelfListProvider).value ?? const [])
+        book.id: book.name,
+    };
     return FutureBuilder<List<Bookmark>>(
       future: _future,
       builder: (context, snapshot) {
@@ -68,7 +74,7 @@ class _AllBookmarksTabState extends State<_AllBookmarksTab> {
             return ListTile(
               leading: const Icon(Icons.bookmark, color: AppColors.tint),
               title: Text('第 ${item.chapterIndex + 1} 章 · 第 ${item.pageIndex + 1} 页'),
-              subtitle: Text(item.bookId),
+              subtitle: Text(bookNames[item.bookId] ?? item.bookId),
               trailing: IconButton(
                 icon: const Icon(Icons.delete_outline, size: 20),
                 onPressed: () async {
@@ -84,14 +90,14 @@ class _AllBookmarksTabState extends State<_AllBookmarksTab> {
   }
 }
 
-class _AllNotesTab extends StatefulWidget {
+class _AllNotesTab extends ConsumerStatefulWidget {
   const _AllNotesTab();
 
   @override
-  State<_AllNotesTab> createState() => _AllNotesTabState();
+  ConsumerState<_AllNotesTab> createState() => _AllNotesTabState();
 }
 
-class _AllNotesTabState extends State<_AllNotesTab> {
+class _AllNotesTabState extends ConsumerState<_AllNotesTab> {
   final _service = NoteService();
   late Future<List<ReadingNote>> _future;
 
@@ -107,6 +113,10 @@ class _AllNotesTabState extends State<_AllNotesTab> {
 
   @override
   Widget build(BuildContext context) {
+    final bookNames = {
+      for (final book in ref.watch(bookshelfListProvider).value ?? const [])
+        book.id: book.name,
+    };
     return FutureBuilder<List<ReadingNote>>(
       future: _future,
       builder: (context, snapshot) {
@@ -123,7 +133,9 @@ class _AllNotesTabState extends State<_AllNotesTab> {
               child: ListTile(
                 leading: const Icon(Icons.sticky_note_2_outlined, color: AppColors.tint),
                 title: Text(item.text, maxLines: 2, overflow: TextOverflow.ellipsis),
-                subtitle: Text('第 ${item.chapterIndex + 1} 章 · ${item.bookId}'),
+                subtitle: Text(
+                  '第 ${item.chapterIndex + 1} 章 · ${bookNames[item.bookId] ?? item.bookId}',
+                ),
                 trailing: IconButton(
                   icon: const Icon(Icons.delete_outline, size: 20),
                   onPressed: () async {

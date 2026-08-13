@@ -13,6 +13,9 @@ class ManagePurificationRules {
   /// 内置规则集 asset 路径（随 app 分发，首次启动导入）
   static const String defaultRulesAsset = 'assets/purification/rules.json';
 
+  /// 默认规则导入标记：区别于"用户删空"，避免用户清空规则后重启复活内置规则。
+  static const String _defaultsMarkerKey = '__defaults_imported';
+
   /// 获取所有规则
   Future<List<PurificationRule>> getAll() async {
     final box = await Hive.openBox<String>(_boxName);
@@ -28,10 +31,16 @@ class ManagePurificationRules {
   }
 
   /// 首次启动：净化规则库为空时从内置 asset 导入默认规则集。
-  /// 用户已有规则（含删空后重建）时跳过，不覆盖用户数据。
+  /// 以导入标记判断是否初始化过：用户清空规则库后不会再次导入。
   Future<void> ensureDefaults() async {
     final box = await Hive.openBox<String>(_boxName);
-    if (box.isNotEmpty) return;
+    if (box.get(_defaultsMarkerKey) == '1') return;
+    // 旧版本升级用户：盒内已有规则但无导入标记（旧实现按 isNotEmpty 跳过导入）。
+    // 此时视为已初始化，仅补写标记，避免重新导入内置规则覆盖用户数据。
+    if (box.isNotEmpty) {
+      await box.put(_defaultsMarkerKey, '1');
+      return;
+    }
     try {
       final raw = await rootBundle.loadString(defaultRulesAsset);
       final list = jsonDecode(raw) as List;
@@ -56,6 +65,7 @@ class ManagePurificationRules {
         if (rule.pattern.isEmpty) continue;
         await box.put(rule.id, jsonEncode(_toJson(rule)));
       }
+      await box.put(_defaultsMarkerKey, '1');
     } catch (_) {
       // asset 缺失/解析失败：静默跳过，不阻塞启动
     }

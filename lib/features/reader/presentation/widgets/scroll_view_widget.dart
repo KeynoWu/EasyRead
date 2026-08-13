@@ -175,10 +175,30 @@ class _ReaderScrollViewState extends ConsumerState<ReaderScrollView> {
           ),
         );
       case NodeType.image:
+        final url = node.imageUrl;
         return Container(
           height: 200,
           color: state.theme.textColor.withValues(alpha: 0.1),
-          child: const Center(child: Icon(Icons.image, size: 48)),
+          child: url == null || url.isEmpty
+              ? const Center(child: Icon(Icons.image, size: 48))
+              : Image.network(
+                  url,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) =>
+                      const Center(child: Icon(Icons.image, size: 48)),
+                  loadingBuilder: (context, child, progress) =>
+                      progress == null
+                          ? child
+                          : const Center(
+                              child: SizedBox(
+                                width: 28,
+                                height: 28,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            ),
+                ),
         );
     }
   }

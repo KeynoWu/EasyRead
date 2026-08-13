@@ -114,6 +114,26 @@ class SettingsPage extends ConsumerWidget {
               subtitle: const Text('从云端备份恢复数据'),
               trailing: const Icon(Icons.chevron_right, size: 18),
               onTap: () async {
+                // 与本地恢复一致：覆盖全部数据前必须确认，避免误触丢失
+                final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('确认从 WebDAV 恢复'),
+                    content: const Text('恢复将覆盖当前全部数据（书架、书源、进度、规则等），'
+                        '且云端备份包含 Cookie 等敏感信息，请确认来源可信后继续。'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('取消'),
+                      ),
+                      FilledButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        child: const Text('继续恢复'),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirmed != true || !context.mounted) return;
                 final json = await WebDavSync().download();
                 if (!context.mounted) return;
                 if (json == null || json.startsWith('下载失败')) {

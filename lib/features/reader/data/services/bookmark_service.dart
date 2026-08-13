@@ -114,6 +114,17 @@ class BookmarkService {
     }
   }
 
+  /// 删除某本书的全部书签（书架删除书籍时清理孤儿数据）。
+  Future<void> removeAllForBook(String bookId) async {
+    final box = await _box();
+    final keys = box.keys
+        .where((k) => k.toString().startsWith('$bookId|'))
+        .toList();
+    if (keys.isNotEmpty) {
+      await box.deleteAll(keys);
+    }
+  }
+
   /// 检查某位置是否已有书签（仅按该书 key 前缀过滤，避免全表遍历）
   Future<bool> exists(String bookId, int chapterIndex, int pageIndex) async {
     final box = await _box();

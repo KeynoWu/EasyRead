@@ -50,6 +50,55 @@ class SearchBooks {
     return record == null || record.usable;
   }
 
+  /// 合并两批已去重结果（流式/分页追加场景）。
+  /// 同名同作者视为同一本；替代源按 sourceId 去重，避免重复合并
+  /// （如 finished 事件重复或分页边界）导致替代源列表膨胀。
+  static List<SearchResult> mergeResults(
+    List<SearchResult> current,
+    List<SearchResult> incoming,
+  ) {
+    final seen = <String>{};
+    final merged = <SearchResult>[];
+    for (final result in [...current, ...incoming]) {
+      final key =
+          '${result.name.toLowerCase().trim()}|'
+          '${result.author?.toLowerCase().trim() ?? ''}';
+      if (seen.add(key)) {
+        merged.add(result);
+        continue;
+      }
+      final index = merged.indexWhere((item) =>
+          '${item.name.toLowerCase().trim()}|'
+              '${item.author?.toLowerCase().trim() ?? ''}' ==
+          key);
+      if (index < 0 || result.alternatives.isEmpty) continue;
+      final existing = merged[index];
+      final newAlternatives = [
+        for (final alt in result.alternatives)
+          if (alt.sourceId != existing.sourceId &&
+              !existing.alternatives.any((a) => a.sourceId == alt.sourceId))
+            alt,
+      ];
+      if (newAlternatives.isEmpty) continue;
+      merged[index] = SearchResult(
+        bookId: existing.bookId,
+        name: existing.name,
+        author: existing.author,
+        coverUrl: existing.coverUrl,
+        detailUrl: existing.detailUrl,
+        intro: existing.intro,
+        kind: existing.kind,
+        lastChapter: existing.lastChapter,
+        wordCount: existing.wordCount,
+        sourceId: existing.sourceId,
+        sourceName: existing.sourceName,
+        variables: existing.variables,
+        alternatives: [...existing.alternatives, ...newAlternatives],
+      );
+    }
+    return merged;
+  }
+
   /// 加载检测记录（未注入 testStore 时返回空表，等价不过滤检测结果）
   Future<Map<String, BookSourceTestRecord>> _testRecords() async {
     return testStore == null ? const {} : await testStore!.getAll();
@@ -209,7 +258,7 @@ class SearchBooks {
               completed: completed,
               total: sources.length,
               failed: failed,
-              finished: completed >= sources.length,
+              finished: false,
             ));
             continue;
           }
@@ -254,7 +303,7 @@ class SearchBooks {
             completed: completed,
             total: sources.length,
             failed: failed,
-            finished: completed >= sources.length,
+            finished: false,
           ));
         }
       }

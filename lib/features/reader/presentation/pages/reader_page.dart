@@ -112,6 +112,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         detailUrl: widget.detailUrl,
         variables: _variables,
       );
+      // 先恢复持久化的排版/主题/阅读模式，再按进度续读，
+      // 避免首次分页使用默认设置后又被覆盖
+      await ref.read(readerProvider.notifier).loadPersistedSettings();
       // 读取保存的进度，续读到正确章节
       final repo = ref.read(readerRepositoryProvider);
       final progress = await repo.loadProgress(widget.bookId);
@@ -217,13 +220,16 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         enabledAlternatives.add(alt);
       }
     }
+    final currentSource = await repo.getById(
+      chapter.sourceId ?? widget.sourceId ?? '',
+    );
     if (!mounted) return;
 
     final selected = await showModalBottomSheet<SourceOption>(
       context: context,
       builder: (_) => SourceSwitcherSheet(
         currentSourceId: chapter.sourceId ?? widget.sourceId ?? '',
-        currentSourceName: widget.sourceId != null ? '当前书源' : '当前书源',
+        currentSourceName: currentSource?.name ?? '当前书源',
         alternatives: enabledAlternatives,
       ),
     );
@@ -317,13 +323,19 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       await _tts.stop();
       if (mounted) setState(() => _isTtsPlaying = false);
     } else {
-      _tts.onComplete = () {
-        if (mounted) setState(() => _isTtsPlaying = false);
-      };
       // 先置位播放状态再 await：防快速连点重复启动朗读；
       // 播放中再次点击会走上面的停止分支，不会吞掉停止操作
       setState(() => _isTtsPlaying = true);
-      await _tts.speak(state.currentChapter!.content);
+      try {
+        // 朗读净化后的纯文本，避免把 HTML 标签读出来
+        await _tts.speak(
+          TtsService.toPlainText(state.currentChapter!.content),
+        );
+      } catch (_) {
+        // 平台朗读失败不阻塞阅读
+      } finally {
+        if (mounted) setState(() => _isTtsPlaying = false);
+      }
     }
   }
 
@@ -358,9 +370,14 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                       ),
                       const Spacer(),
                       if (state.currentChapter != null)
-                        Text(
-                          state.currentChapter!.title,
-                          style: TextStyle(color: state.theme.textColor, fontSize: 14),
+                        Flexible(
+                          child: Text(
+                            state.currentChapter!.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: state.theme.textColor, fontSize: 14),
+                          ),
                         ),
                       const Spacer(),
                       // TTS 听书按钮

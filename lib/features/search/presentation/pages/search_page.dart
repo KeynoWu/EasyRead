@@ -91,39 +91,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     List<SearchResult> current,
     List<SearchResult> incoming,
   ) {
-    final seen = <String>{};
-    final merged = <SearchResult>[];
-    for (final result in [...current, ...incoming]) {
-      final key =
-          '${result.name.toLowerCase().trim()}|'
-          '${result.author?.toLowerCase().trim() ?? ''}';
-      if (seen.add(key)) {
-        merged.add(result);
-        continue;
-      }
-      final index = merged.indexWhere((item) =>
-          '${item.name.toLowerCase().trim()}|'
-              '${item.author?.toLowerCase().trim() ?? ''}' ==
-          key);
-      if (index < 0 || result.alternatives.isEmpty) continue;
-      final existing = merged[index];
-      merged[index] = SearchResult(
-        bookId: existing.bookId,
-        name: existing.name,
-        author: existing.author,
-        coverUrl: existing.coverUrl,
-        detailUrl: existing.detailUrl,
-        intro: existing.intro,
-        kind: existing.kind,
-        lastChapter: existing.lastChapter,
-        wordCount: existing.wordCount,
-        sourceId: existing.sourceId,
-        sourceName: existing.sourceName,
-        variables: existing.variables,
-        alternatives: [...existing.alternatives, ...result.alternatives],
-      );
-    }
-    return merged;
+    return SearchBooks.mergeResults(current, incoming);
   }
 
   /// 输入变化：仅处理清空（取消在途请求回到空状态）；

@@ -370,6 +370,10 @@ class JsRuleExecutor {
   }
 
   /// 并发请求所有 ajax URL（走 DioClient 或注入 fetcher）
+  /// 并发上限 [_maxConcurrentFetches]，避免恶意/异常规则一次性发起
+  /// 大量请求拖垮内存与网络。
+  static const int _maxConcurrentFetches = 4;
+
   static Future<Map<String, String>> _fetchAll(
     List<String> urls, {
     String baseUrl = '',
@@ -377,19 +381,32 @@ class JsRuleExecutor {
   }) async {
     final results = <String, String>{};
     final client = networkClient ?? DioClient();
-    await Future.wait(urls.map((url) async {
-      try {
-        final resolved = _resolveUrl(baseUrl, url);
-        final html = fetcher != null
-            ? await fetcher!(resolved).timeout(ajaxTimeout)
-            : await client
-                .getString(resolved, charset: charset)
-                .timeout(ajaxTimeout);
-        results[url] = html;
-      } catch (_) {
-        results[url] = '';
+    var nextIndex = 0;
+
+    Future<void> worker() async {
+      while (true) {
+        final index = nextIndex++;
+        if (index >= urls.length) return;
+        final url = urls[index];
+        try {
+          final resolved = _resolveUrl(baseUrl, url);
+          final html = fetcher != null
+              ? await fetcher!(resolved).timeout(ajaxTimeout)
+              : await client
+                  .getString(resolved, charset: charset)
+                  .timeout(ajaxTimeout);
+          results[url] = html;
+        } catch (_) {
+          results[url] = '';
+        }
       }
-    }));
+    }
+
+    final workers = <Future<void>>[
+      for (var i = 0; i < _maxConcurrentFetches && i < urls.length; i++)
+        worker(),
+    ];
+    await Future.wait(workers);
     return results;
   }
 
@@ -436,45 +453,58 @@ class JsRuleExecutor {
   }) async {
     final results = <String, Map<String, dynamic>>{};
     final client = networkClient ?? DioClient();
-    await Future.wait(ops.map((op) async {
-      try {
-        final resolved = _resolveUrl(baseUrl, op.url);
-        final headers = op.headers;
-        final Map<String, List<String>> responseHeaders;
-        if (op.kind == 'post') {
-          responseHeaders = await client.postFormHeaders(
-            resolved,
-            headers: headers.isEmpty ? null : headers,
-            body: op.body,
-          );
-        } else {
-          responseHeaders = await client.getResponseHeaders(
-            resolved,
-            headers: headers.isEmpty ? null : headers,
-          );
-        }
-        final flattened = <String, String>{};
-        final setCookies = <String>[];
-        for (final entry in responseHeaders.entries) {
-          final key = entry.key.toLowerCase();
-          flattened[key] = entry.value.join('; ');
-          if (key == 'set-cookie') {
-            setCookies.addAll(entry.value);
+    var nextIndex = 0;
+
+    Future<void> worker() async {
+      while (true) {
+        final index = nextIndex++;
+        if (index >= ops.length) return;
+        final op = ops[index];
+        try {
+          final resolved = _resolveUrl(baseUrl, op.url);
+          final headers = op.headers;
+          final Map<String, List<String>> responseHeaders;
+          if (op.kind == 'post') {
+            responseHeaders = await client.postFormHeaders(
+              resolved,
+              headers: headers.isEmpty ? null : headers,
+              body: op.body,
+            );
+          } else {
+            responseHeaders = await client.getResponseHeaders(
+              resolved,
+              headers: headers.isEmpty ? null : headers,
+            );
           }
+          final flattened = <String, String>{};
+          final setCookies = <String>[];
+          for (final entry in responseHeaders.entries) {
+            final key = entry.key.toLowerCase();
+            flattened[key] = entry.value.join('; ');
+            if (key == 'set-cookie') {
+              setCookies.addAll(entry.value);
+            }
+          }
+          results[op.key] = {
+            'headers': flattened,
+            'cookies': setCookies.map((v) => v.split(';').first).join('; '),
+            'body': '',
+          };
+        } catch (_) {
+          results[op.key] = {
+            'headers': <String, String>{},
+            'cookies': '',
+            'body': '',
+          };
         }
-        results[op.key] = {
-          'headers': flattened,
-          'cookies': setCookies.map((v) => v.split(';').first).join('; '),
-          'body': '',
-        };
-      } catch (_) {
-        results[op.key] = {
-          'headers': <String, String>{},
-          'cookies': '',
-          'body': '',
-        };
       }
-    }));
+    }
+
+    final workers = <Future<void>>[
+      for (var i = 0; i < _maxConcurrentFetches && i < ops.length; i++)
+        worker(),
+    ];
+    await Future.wait(workers);
     return results;
   }
 
