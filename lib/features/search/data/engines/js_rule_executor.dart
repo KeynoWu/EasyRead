@@ -306,6 +306,67 @@ class JsRuleExecutor {
     }
   }
 
+  /// 执行 ruleToc.formatJs / ruleToc.isVolume 的 item 作用域 JS。
+  ///
+  /// legado 语义：脚本内 `item` 变量为 {title, url}，脚本可修改后返回
+  /// item（或返回新对象/布尔值）。兼容两种写法：
+  /// 1. 函数/return 风格：`item.title = ...; return item;`、IIFE、
+  ///    `item.title = ...; item`（修改 item 后以其结尾）——函数包裹执行，
+  ///    完成值取最终 item 序列化结果（脚本返回 undefined/null 时取 item）。
+  /// 2. 裸表达式风格：`item.title.includes('卷')` 等直接以表达式结果为值
+  ///    ——第一遍结果等于原 item（脚本未修改/未返回）时，再按裸表达式
+  ///    求值取完成值。
+  /// 失败/无引擎/超时返回 null，由调用方按原值兜底（iOS 降级一致）。
+  static Future<String?> evalItemScript(
+    String rawRule,
+    Map<String, String> item, {
+    String? baseUrl,
+    String? charset,
+  }) async {
+    final body = _scriptBody(rawRule);
+    if (body == null || body.trim().isEmpty) return null;
+    // 第一遍：函数包裹（支持顶层 return / IIFE / 语句序列以 item 结尾）
+    final functionWrapped = '<js>'
+        'var item = JSON.parse(result);\n'
+        'var __ret = (function () {\n$body\n})();\n'
+        'var __out = (__ret === undefined || __ret === null) ? item : __ret;\n'
+        'JSON.stringify(__out);'
+        '</js>';
+    final first = await execute(
+      jsonEncode(item),
+      functionWrapped,
+      baseUrl: baseUrl,
+      charset: charset,
+    );
+    // 执行失败/无引擎：直接失败，不重复执行
+    if (first == null) return null;
+    // 脚本有实际返回或修改（结果不再是原 item）→ 直接采用
+    if (!_isOriginalItemJson(first, item)) return first;
+    // 裸表达式风格：以规则体完成值作为结果
+    final bareWrapped = '<js>'
+        'var item = JSON.parse(result);\n'
+        'JSON.stringify($body);'
+        '</js>';
+    final second = await execute(
+      jsonEncode(item),
+      bareWrapped,
+      baseUrl: baseUrl,
+      charset: charset,
+    );
+    return second ?? first;
+  }
+
+  /// 判断 JS 结果是否仍等于原 item（脚本未修改/未返回时的兜底结果）。
+  static bool _isOriginalItemJson(String value, Map<String, String> item) {
+    try {
+      final decoded = jsonDecode(value);
+      if (decoded is! Map) return false;
+      return jsonEncode(decoded) == jsonEncode(item);
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// 读取记录遍的调用序列（['get'|'setContent', 参数..., docIndex]）
   static Future<List<List<dynamic>>> _readOps(JsEngine engine) async {
     final json = (await engine.eval('JSON.stringify(__ops)')).value;

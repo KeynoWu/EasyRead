@@ -33,8 +33,21 @@ Future<void> _build(BuildInput input, BuildOutputBuilder output) async {
   Map<String, String> env;
   switch (os) {
     case OS.iOS:
-      env = await _iosBuildEnv();
-      makeArgs.addAll(['OBJDIR=.obj-ios', _repoLibName]);
+      env = await _iosBuildEnv(input);
+      final ios = input.config.code.iOS;
+      // make 命令行变量优先级高于 Makefile 的 CC=$(CROSS_PREFIX)clang 赋值
+      makeArgs.addAll([
+        'CC=xcrun --sdk ${ios.targetSdk.type} clang',
+        'OBJDIR=.obj-ios-${ios.targetSdk.type}',
+        _repoLibName,
+      ]);
+    case OS.macOS:
+      // macOS 宿主编译：显式部署目标，避免 SDK 默认 minos 泄漏
+      env = {
+        'CFLAGS':
+            '-mmacosx-version-min=${input.config.code.macOS.targetVersion}',
+      };
+      makeArgs.add(_repoLibName);
     case OS.android:
       env = await _androidBuildEnv(input);
       final arch = input.config.code.targetArchitecture;
@@ -85,15 +98,28 @@ Future<void> _build(BuildInput input, BuildOutputBuilder output) async {
   ]);
 }
 
-/// iOS 交叉编译环境：使用 iphonesimulator SDK 的 clang
-Future<Map<String, String>> _iosBuildEnv() async {
+/// iOS 交叉编译环境：按 hook 配置的目标 SDK（真机/模拟器）、最低系统版本与
+/// 目标架构构造 clang 参数。修复历史缺陷：硬编码 iphonesimulator、缺部署
+/// 目标 flag（minos 泄漏 SDK 默认值）、OBJDIR 跨 SDK 串档。
+Future<Map<String, String>> _iosBuildEnv(BuildInput input) async {
+  final ios = input.config.code.iOS;
+  final sdkType = ios.targetSdk.type; // 'iphoneos' | 'iphonesimulator'
   final sdk = (await Process.run(
     'xcrun',
-    ['--sdk', 'iphonesimulator', '--show-sdk-path'],
+    ['--sdk', sdkType, '--show-sdk-path'],
   )).stdout.toString().trim();
+  // Architecture.x64.name 为 'x64'，iOS clang 需要 'x86_64'
+  final arch = switch (input.config.code.targetArchitecture) {
+    Architecture.arm64 => 'arm64',
+    Architecture.x64 => 'x86_64',
+    final other => other.name,
+  };
+  final minFlag = sdkType == 'iphoneos'
+      ? 'miphoneos-version-min'
+      : 'miphonesimulator-version-min';
   return {
-    'CC': 'xcrun --sdk iphonesimulator clang',
-    'CFLAGS': '-isysroot $sdk -arch arm64 -fPIC',
+    'CFLAGS':
+        '-isysroot $sdk -arch $arch -fPIC -$minFlag=${ios.targetVersion}',
   };
 }
 

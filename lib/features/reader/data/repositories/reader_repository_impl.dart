@@ -147,11 +147,18 @@ class ReaderRepositoryImpl implements ReaderRepository {
 
     final expandedDetailUrl = RuleVariables.expand(detailUrl, variables);
     final resolvedDetailUrl = _resolveUrl(source.bookSourceUrl, expandedDetailUrl);
+    // bookUrlPattern 最小接线：不匹配仅告警，不阻塞流程
+    if (!matchesBookUrlPattern(source.bookUrlPattern, resolvedDetailUrl)) {
+      debugPrint('[reader] bookUrlPattern 不匹配: '
+          'pattern=${source.bookUrlPattern} url=$resolvedDetailUrl，继续默认流程');
+    }
     final cacheKey =
         '${bookId}_${sourceId}_$resolvedDetailUrl|'
         '${source.chapterListRule}|${source.chapterNameRule}|'
         '${source.chapterUrlRule}|${source.loginCheckJs}|'
         '${jsonEncode(source.bookInfoRules)}|${source.nextTocUrl}|'
+        '${source.tocFormatJs}|${source.tocIsVolumeRule}|'
+        '${source.bookUrlPattern}|'
         '${jsonEncode(source.requestHeaders)}|${source.responseCharset}|'
         '${jsonEncode(variables)}';
     if (_cachedCatalogKey == cacheKey && _cachedCatalog != null) {
@@ -234,6 +241,7 @@ class ReaderRepositoryImpl implements ReaderRepository {
           url: uniqueChapters[i].url,
           index: i,
           variables: uniqueChapters[i].variables,
+          isVolume: uniqueChapters[i].isVolume,
         );
       }
       final catalog = ChapterCatalog(
@@ -443,6 +451,28 @@ class ReaderRepositoryImpl implements ReaderRepository {
         content = html;
       }
 
+      // ruleContent.replaceRegex：对提取的正文做正则替换。
+      // 兼容 legado 格式：JSON 数组字符串 ["pattern","replacement"] 优先，
+      // 否则 || 分隔（pattern||replacement）；格式非法/正则失败时跳过不报错。
+      content = _applyContentReplaceRegex(source.contentReplaceRegex, content);
+
+      // ruleContent.title：正文标题规则。先提取正文页标题，非空才覆盖
+      // 章节标题（目录标题为空或与正文不一致时以此为准）。
+      var effectiveTitle = chapterTitle;
+      final contentTitleRule = source.contentTitleRule;
+      if (contentTitleRule != null && contentTitleRule.trim().isNotEmpty) {
+        final extractedTitle = await _extractFromPage(
+          contentTitleRule,
+          html,
+          contentUrl,
+          source.responseCharset,
+          variables: effectiveVariables,
+        );
+        if (extractedTitle != null && extractedTitle.trim().isNotEmpty) {
+          effectiveTitle = extractedTitle.trim();
+        }
+      }
+
       // 无论规则提取还是兜底，统一经过净化管线；否则用户正则/JS 规则
       // 在成功提取正文时会被绕过。
       content = await _pipeline.purifyAsync(
@@ -451,13 +481,13 @@ class ReaderRepositoryImpl implements ReaderRepository {
         sourceName: source.name,
       );
       content = resolveImageUrls(content, contentUrl);
-      content = _removeRepeatedTitle(content, chapterTitle);
+      content = _removeRepeatedTitle(content, effectiveTitle);
 
       if (content.trim().isEmpty) {
         throw const ChapterLoadException('章节内容为空');
       }
 
-      final rawTitle = chapterTitle.isEmpty ? '第${chapterIndex + 1}章' : chapterTitle;
+      final rawTitle = effectiveTitle.isEmpty ? '第${chapterIndex + 1}章' : effectiveTitle;
       final title = await _pipeline.purifyTitle(
         rawTitle,
         bookName: _lastBookDetail?.name,
@@ -508,6 +538,9 @@ class ReaderRepositoryImpl implements ReaderRepository {
             'list': source.chapterListRule,
             'name': source.chapterNameRule,
             'url': source.chapterUrlRule,
+            'titleRule': source.contentTitleRule,
+            'subContent': source.contentSubContentRule,
+            'replaceRegex': source.contentReplaceRegex,
             'loginCheckJs': source.loginCheckJs,
             'headers': source.requestHeaders,
             'charset': source.responseCharset,
@@ -592,6 +625,17 @@ class ReaderRepositoryImpl implements ReaderRepository {
           .trim();
     } catch (_) {
       return content;
+    }
+  }
+
+  /// 书源 bookUrlPattern 匹配判断（RegExp 语义）：不匹配仅告警、不阻塞
+  /// 流程。pattern 为空或非法正则时返回 true（放行）。
+  static bool matchesBookUrlPattern(String? pattern, String url) {
+    if (pattern == null || pattern.trim().isEmpty) return true;
+    try {
+      return RegExp(pattern).hasMatch(url);
+    } catch (_) {
+      return true;
     }
   }
 
@@ -736,11 +780,47 @@ class ReaderRepositoryImpl implements ReaderRepository {
         html: html,
       );
       if (title == null || title.isEmpty) continue;
+      var finalTitle = title;
+      var finalUrl = url ?? '';
+      // ruleToc.formatJs：脚本内 item 含 {title, url}，可修改后返回 item。
+      // 执行失败/无引擎（iOS 降级）/结果非法时按原值兜底。
+      final formatJs = source.tocFormatJs;
+      if (formatJs != null && formatJs.trim().isNotEmpty) {
+        final formatted = await _formatTocItem(
+          formatJs,
+          {'title': finalTitle, 'url': finalUrl},
+          baseUrl: baseUrl,
+          charset: source.responseCharset,
+        );
+        if (formatted != null) {
+          final newTitle = formatted['title'];
+          final newUrl = formatted['url'];
+          if (newTitle != null && newTitle.isNotEmpty) finalTitle = newTitle;
+          if (newUrl != null) finalUrl = newUrl;
+        }
+      }
+      // ruleToc.isVolume：目录项求值为真则标记卷节点。
+      // CSS 规则走 rule_engine 对条目元素求值（非空为真）；
+      // JS 规则走 item 作用域脚本（同 formatJs 机制），结果真值标记卷头。
+      // 无规则时为 null（与旧行为一致）；有规则但求值为假时为 false。
+      var isVolume = false;
+      final hasIsVolumeRule = source.tocIsVolumeRule != null &&
+          source.tocIsVolumeRule!.trim().isNotEmpty;
+      if (hasIsVolumeRule) {
+        isVolume = await _isVolumeItem(
+          item,
+          source.tocIsVolumeRule!,
+          {'title': finalTitle, 'url': finalUrl},
+          baseUrl: baseUrl,
+          charset: source.responseCharset,
+        );
+      }
       chapters.add(ChapterItem(
-        title: title,
-        url: url ?? '',
+        title: finalTitle,
+        url: finalUrl,
         index: i,
         variables: Map.unmodifiable(itemVariables),
+        isVolume: hasIsVolumeRule ? isVolume : null,
       ));
     }
     return chapters;
@@ -775,7 +855,143 @@ class ReaderRepositoryImpl implements ReaderRepository {
     if (content.isEmpty) {
       content = _extractMainText(html);
     }
+    // ruleContent.subContent：主正文之后按顺序追加每个匹配子元素（HTML 片段）。
+    // 无 subContent 规则或页面无匹配时行为不变。
+    final subRule = source.contentSubContentRule;
+    if (content.isNotEmpty &&
+        subRule != null &&
+        subRule.trim().isNotEmpty) {
+      final subs = RuleEngine.extractElements(html, subRule);
+      if (subs.isNotEmpty) {
+        final buffer = StringBuffer(content);
+        for (final sub in subs) {
+          if (sub is dom.Element) {
+            buffer.write(sub.outerHtml);
+          } else if (sub is String) {
+            buffer.write(sub);
+          } else {
+            buffer.write(jsonEncode(sub));
+          }
+        }
+        content = buffer.toString();
+      }
+    }
     return content;
+  }
+
+  /// 执行 ruleToc.formatJs：脚本内 item 含 {title, url}，返回修改后的
+  /// {title, url}；执行失败/无引擎/结果非对象时返回 null（按原值兜底）。
+  Future<Map<String, String>?> _formatTocItem(
+    String rule,
+    Map<String, String> item, {
+    required String baseUrl,
+    String? charset,
+  }) async {
+    final value = await JsRuleExecutor.evalItemScript(
+      rule,
+      item,
+      baseUrl: baseUrl,
+      charset: charset,
+    );
+    if (value == null) return null;
+    try {
+      final decoded = jsonDecode(value);
+      if (decoded is! Map) return null;
+      return {
+        for (final entry in decoded.entries)
+          entry.key.toString(): entry.value?.toString() ?? '',
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// ruleToc.isVolume 求值：CSS 规则用 rule_engine 对目录条目求值
+  /// （非空为真）；JS 规则走 item 作用域脚本（同 formatJs 机制）。
+  Future<bool> _isVolumeItem(
+    dynamic item,
+    String rule,
+    Map<String, String> itemValues, {
+    required String baseUrl,
+    String? charset,
+  }) async {
+    if (RuleEngine.isJsRule(rule)) {
+      final value = await JsRuleExecutor.evalItemScript(
+        rule,
+        itemValues,
+        baseUrl: baseUrl,
+        charset: charset,
+      );
+      return _jsTruthy(value);
+    }
+    final value = RuleEngine.getElementText(item, rule);
+    return value != null && value.trim().isNotEmpty;
+  }
+
+  /// JS 求值结果真值判断（legado 布尔规则语义：非空且非 false/0/null）。
+  static bool _jsTruthy(String? value) {
+    if (value == null) return false;
+    final t = value.trim();
+    if (t.isEmpty) return false;
+    final lower = t.toLowerCase();
+    if (lower == 'false' ||
+        lower == '0' ||
+        lower == 'null' ||
+        lower == 'undefined' ||
+        t == '""') {
+      return false;
+    }
+    return true;
+  }
+
+  /// ruleContent.replaceRegex 解析与执行：
+  /// JSON 数组字符串（["pattern","replacement"]）优先；
+  /// 否则按 `||` 分隔（pattern||replacement）。对正文做 RegExp 全替换，
+  /// 格式非法/正则失败时跳过不报错。
+  static String _applyContentReplaceRegex(String? rule, String content) {
+    if (rule == null || rule.trim().isEmpty) return content;
+    final trimmed = rule.trim();
+    if (trimmed.startsWith('[')) {
+      try {
+        final decoded = jsonDecode(trimmed);
+        if (decoded is List && decoded.length >= 2) {
+          final pattern = decoded[0]?.toString() ?? '';
+          final replacement = decoded[1]?.toString() ?? '';
+          return _replaceAllSafe(pattern, replacement, content) ?? content;
+        }
+      } catch (_) {
+        // 非法 JSON：降级按 || 分隔处理
+      }
+    }
+    final sep = trimmed.indexOf('||');
+    if (sep > 0) {
+      final pattern = trimmed.substring(0, sep).trim();
+      final replacement = trimmed.substring(sep + 2).trim();
+      return _replaceAllSafe(pattern, replacement, content) ?? content;
+    }
+    return content;
+  }
+
+  /// RegExp allMatches 全替换（支持 `$1` 捕获组引用与 `$$` 转义）；
+  /// 正则非法时返回 null，由调用方跳过。
+  static String? _replaceAllSafe(
+    String pattern,
+    String replacement,
+    String content,
+  ) {
+    try {
+      final regex = RegExp(pattern);
+      final groupRef = RegExp(r'\$\$|\$\d+');
+      return content.replaceAllMapped(regex, (match) {
+        return replacement.replaceAllMapped(groupRef, (group) {
+          if (group.group(0) == r'$$') return r'$';
+          final index = int.parse(group.group(0)!.substring(1));
+          return index <= match.groupCount ? (match.group(index) ?? '') : '';
+        });
+      });
+    } catch (_) {
+      return null;
+    }
   }
 
   /// 提取目录下一页 URL。

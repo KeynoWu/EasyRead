@@ -4,12 +4,15 @@ import 'package:go_router/go_router.dart';
 import 'package:hive/hive.dart';
 import '../../../../core/database/hive_init.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../features/book_source/presentation/providers/book_source_provider.dart';
 import '../../data/services/book_detail_service.dart';
 import '../../../reader/data/models/reading_progress_model.dart';
 import '../../../reader/data/services/bookmark_service.dart';
 import '../../../reader/data/services/note_service.dart';
 import '../../../reader/presentation/providers/reader_provider.dart';
 import '../../domain/entities/book.dart';
+import '../../domain/usecases/export_booklist.dart';
+import '../../domain/usecases/import_booklist.dart';
 import '../../domain/usecases/import_local_book.dart';
 import '../../domain/usecases/manage_book_group.dart';
 import '../providers/bookshelf_provider.dart';
@@ -73,6 +76,61 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   Future<void> _refreshBookshelf() async {
     ref.invalidate(bookshelfListProvider);
     await ref.read(bookshelfListProvider.future);
+  }
+
+  /// 导出书单：默认导出当前筛选结果（排序/分组/搜索过滤后的列表）
+  Future<void> _exportBooklist() async {
+    final useCase = ExportBooklist(
+      sourceRepository: ref.read(bookSourceRepositoryProvider),
+      detailService: ref.read(bookDetailServiceProvider),
+    );
+    final json = await useCase.buildJson(_cachedFiltered ?? const []);
+    final message = await useCase.saveToFile(json);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  /// 导入书单：选择 .json 文件 → 解析 → 批量入书架 → 刷新书架列表
+  Future<void> _importBooklist() async {
+    if (_importing) return;
+    setState(() => _importing = true);
+    try {
+      final useCase = ImportBooklist(
+        bookshelfRepository: ref.read(bookshelfRepositoryProvider),
+        sourceRepository: ref.read(bookSourceRepositoryProvider),
+        detailService: ref.read(bookDetailServiceProvider),
+      );
+      final result = await useCase.fromFile();
+      if (!mounted) return;
+      if (result.canceled) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已取消导入')),
+        );
+        return;
+      }
+      if (result.error != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(result.error!)),
+        );
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '导入完成：成功 ${result.imported} 本，'
+            '跳过 ${result.skipped} 本，未匹配书源 ${result.unmatchedSource} 本',
+          ),
+        ),
+      );
+      if (result.imported > 0) {
+        // 导入后自动刷新书架列表（复用既有刷新逻辑）
+        await _refreshBookshelf();
+      }
+    } finally {
+      if (mounted) setState(() => _importing = false);
+    }
   }
 
   /// 打开书籍阅读（续读上次进度）
@@ -344,6 +402,22 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
               icon: const Icon(Icons.file_upload_outlined),
               onPressed: _importLocalBook,
               tooltip: '导入本地书籍',
+            ),
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert),
+              tooltip: '更多',
+              onSelected: (value) {
+                switch (value) {
+                  case 'export':
+                    _exportBooklist();
+                  case 'import':
+                    _importBooklist();
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(value: 'export', child: Text('导出书单')),
+                PopupMenuItem(value: 'import', child: Text('导入书单')),
+              ],
             ),
             PopupMenuButton<String>(
               icon: const Icon(Icons.sort),

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -6,6 +7,8 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../features/bookshelf/domain/entities/book.dart';
 import '../../../../features/bookshelf/presentation/providers/bookshelf_provider.dart';
 import '../../../../features/search/domain/entities/search_result.dart';
+import '../../data/services/book_cache_service.dart';
+import '../../data/services/book_exporter.dart';
 import '../../domain/entities/book_detail.dart';
 import '../../domain/entities/chapter_catalog.dart';
 import '../../domain/entities/reading_progress.dart';
@@ -26,7 +29,9 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
   ChapterCatalog? _catalog;
   bool _loading = true;
   bool _caching = false;
+  bool _exporting = false;
   int _cachedCount = 0;
+  CancelToken? _cacheCancelToken;
   String? _error;
 
   SearchResult get result => widget.result;
@@ -186,29 +191,152 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
 
   Future<void> _cacheAll() async {
     final catalog = _catalog;
-    if (_caching || catalog == null || catalog.chapters.isEmpty) return;
+    if (_caching || _exporting || catalog == null || catalog.chapters.isEmpty) {
+      return;
+    }
     setState(() {
       _caching = true;
       _cachedCount = 0;
     });
-    final repo = ref.read(readerRepositoryProvider);
-    for (final chapter in catalog.chapters) {
-      try {
-        await repo.getChapter(
+    final cancelToken = CancelToken();
+    _cacheCancelToken = cancelToken;
+    try {
+      final service =
+          BookCacheService(repository: ref.read(readerRepositoryProvider));
+      final cacheResult = await service.cacheBook(
+        bookId: result.bookId,
+        sourceId: result.sourceId,
+        detailUrl: result.detailUrl ?? '',
+        chapters: catalog.chapters,
+        variables: result.variables,
+        cancelToken: cancelToken,
+        onProgress: (done, total, title) {
+          if (!mounted) return;
+          setState(() => _cachedCount = done);
+        },
+      );
+      if (!mounted) return;
+      final message = cacheResult.cancelled
+          ? '已取消缓存（已缓存 ${cacheResult.cached + cacheResult.hit} 章）'
+          : cacheResult.failed > 0
+              ? '缓存完成：新增 ${cacheResult.cached} 章，命中 ${cacheResult.hit} 章，失败 ${cacheResult.failed} 章'
+              : '缓存完成：新增 ${cacheResult.cached} 章，命中 ${cacheResult.hit} 章';
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('缓存失败：$e')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _caching = false;
+          _cacheCancelToken = null;
+        });
+      }
+    }
+  }
+
+  /// 缓存进行中再次点击按钮：取消本次缓存
+  void _cancelCache() {
+    _cacheCancelToken?.cancel();
+  }
+
+  /// 导出 TXT / EPUB：先校验缓存书源，未缓存/不完整时先缓存再导出
+  /// （复用同一进度通道），最后走系统保存对话框。
+  Future<void> _exportBook(String format) async {
+    final catalog = _catalog;
+    final detail = _detail;
+    if (_caching || _exporting || catalog == null || catalog.chapters.isEmpty) {
+      return;
+    }
+    setState(() => _exporting = true);
+    try {
+      final repo = ref.read(readerRepositoryProvider);
+      final cacheService = BookCacheService(repository: repo);
+      // 校验缓存书源：不一致提示重新缓存，不自动覆盖
+      final meta = await cacheService.meta(result.bookId);
+      if (!mounted) return;
+      if (meta != null && meta['sourceId'] != result.sourceId) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('书源已变化，请先重新缓存再导出')),
+        );
+        return;
+      }
+      // 未缓存或缓存不完整：先补全缓存（已缓存章节自动跳过）
+      if (await cacheService.countCached(result.bookId) <
+          catalog.chapters.length) {
+        final cancelToken = CancelToken();
+        _cacheCancelToken = cancelToken;
+        setState(() {
+          _caching = true;
+          _cachedCount = 0;
+        });
+        final cacheResult = await cacheService.cacheBook(
           bookId: result.bookId,
-          chapterIndex: chapter.index,
           sourceId: result.sourceId,
           detailUrl: result.detailUrl ?? '',
+          chapters: catalog.chapters,
           variables: result.variables,
+          cancelToken: cancelToken,
+          onProgress: (done, total, title) {
+            if (!mounted) return;
+            setState(() => _cachedCount = done);
+          },
         );
-      } catch (_) {
-        // 单章失败不中断整本缓存
+        if (cacheResult.cancelled) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('已取消导出')));
+          return;
+        }
       }
+      final exporter = BookExporter();
+      final bookName = detail?.name ?? result.name;
+      final ExportResult exportResult = format == 'txt'
+          ? await exporter.exportTxt(
+              bookId: result.bookId,
+              sourceId: result.sourceId,
+              bookName: bookName,
+              author: detail?.author ?? result.author,
+              chapters: catalog.chapters,
+            )
+          : await exporter.exportEpub(
+              bookId: result.bookId,
+              sourceId: result.sourceId,
+              bookName: bookName,
+              author: detail?.author ?? result.author,
+              chapters: catalog.chapters,
+            );
       if (!mounted) return;
-      setState(() => _cachedCount++);
+      if (exportResult.path == null) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('已取消保存')));
+        return;
+      }
+      final skipped =
+          exportResult.skipped > 0 ? '（跳过未缓存 ${exportResult.skipped} 章）' : '';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('已导出 $format 文件$skipped：'
+            '${exportResult.path!.split('/').last}'),
+      ));
+    } on ExportSourceMismatchException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('导出失败：$e')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _exporting = false;
+          _caching = false;
+          _cacheCancelToken = null;
+        });
+      }
     }
-    if (!mounted) return;
-    setState(() => _caching = false);
   }
 
   @override
@@ -302,8 +430,11 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
                                   const SizedBox(width: 8),
                                   Expanded(
                                     child: OutlinedButton.icon(
-                                      onPressed:
-                                          _caching || _catalog == null || _catalog!.chapters.isEmpty
+                                      onPressed: _caching
+                                          ? _cancelCache
+                                          : _exporting ||
+                                                  _catalog == null ||
+                                                  _catalog!.chapters.isEmpty
                                               ? null
                                               : _cacheAll,
                                       icon: _caching
@@ -318,6 +449,34 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
                                             ? '$_cachedCount/${_catalog?.chapters.length ?? 0}'
                                             : '缓存全书',
                                       ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: OutlinedButton.icon(
+                                      onPressed:
+                                          _caching || _exporting || _catalog == null || _catalog!.chapters.isEmpty
+                                              ? null
+                                              : () => _exportBook('txt'),
+                                      icon: const Icon(Icons.text_snippet_outlined, size: 18),
+                                      label: Text(
+                                          _exporting ? '导出中…' : '导出 TXT'),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: OutlinedButton.icon(
+                                      onPressed:
+                                          _caching || _exporting || _catalog == null || _catalog!.chapters.isEmpty
+                                              ? null
+                                              : () => _exportBook('epub'),
+                                      icon: const Icon(Icons.menu_book_outlined, size: 18),
+                                      label: Text(
+                                          _exporting ? '导出中…' : '导出 EPUB'),
                                     ),
                                   ),
                                 ],

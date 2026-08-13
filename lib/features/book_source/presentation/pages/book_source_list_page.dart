@@ -12,6 +12,7 @@ import '../widgets/book_source_card.dart';
 import 'book_source_edit_page.dart';
 import 'book_source_login_page.dart';
 import 'book_source_test_page.dart';
+import 'rule_tester_page.dart';
 import 'subscription_page.dart';
 
 /// 书源筛选维度
@@ -107,6 +108,12 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
                 onTap: () => Navigator.pop(context, 'login'),
               ),
             ListTile(
+              leading: const Icon(Icons.science_outlined),
+              title: const Text('规则测试'),
+              subtitle: const Text('实时调试 CSS/JSONPath/JS/模板规则'),
+              onTap: () => Navigator.pop(context, 'ruleTester'),
+            ),
+            ListTile(
               leading: const Icon(Icons.checklist),
               title: const Text('进入多选'),
               onTap: () => Navigator.pop(context, 'select'),
@@ -144,6 +151,11 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
             const SnackBar(content: Text('登录 Cookie 已保存')),
           );
         }
+      case 'ruleTester':
+        await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => RuleTesterPage(source: source)),
+        );
     }
   }
 
@@ -402,6 +414,14 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
                             repository: ref.read(bookSourceRepositoryProvider))),
                   ),
                   tooltip: '书源订阅',
+                ),
+                IconButton(
+                  icon: const Icon(Icons.science_outlined),
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const RuleTesterPage()),
+                  ),
+                  tooltip: '规则测试',
                 ),
                 IconButton(
                   icon: const Icon(Icons.edit_outlined),

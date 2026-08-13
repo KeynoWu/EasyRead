@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/pagination/phonetic_annotator.dart';
 import '../../core/parser/node_tree.dart';
 import '../providers/reader_provider.dart';
 
@@ -23,10 +24,18 @@ class _ReaderScrollViewState extends ConsumerState<ReaderScrollView> {
     super.initState();
     _controller = ScrollController();
     _controller!.addListener(_onScroll);
+    // 注音开关：异步从独立 Hive 盒加载 + 监听变更，切换实时生效
+    PhoneticSettings.ensureLoaded();
+    PhoneticSettings.enabled.addListener(_onPhoneticChanged);
+  }
+
+  void _onPhoneticChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    PhoneticSettings.enabled.removeListener(_onPhoneticChanged);
     _controller?.removeListener(_onScroll);
     _controller?.dispose();
     super.dispose();
@@ -131,48 +140,65 @@ class _ReaderScrollViewState extends ConsumerState<ReaderScrollView> {
     );
   }
 
+  /// 正文文本渲染：注音开关开启时用 Text.rich 给生僻字加小字拼音，
+  /// 关闭时原样 Text（默认路径零开销）。开关值来自 PhoneticSettings
+  /// （initState 异步加载 + 盒变更监听实时刷新）。
+  Widget _buildNodeText(String text, TextStyle style, ReaderState state) {
+    if (!PhoneticSettings.enabled.value) {
+      return Text(text, style: style);
+    }
+    return PhoneticAnnotator.annotatedText(
+      text,
+      style: style,
+      annotationColor: state.theme.textColor.withValues(alpha: 0.45),
+    );
+  }
+
   Widget _buildNode(TextNode node, ReaderState state) {
     switch (node.type) {
       case NodeType.paragraph:
         return Padding(
           padding: EdgeInsets.only(bottom: state.layoutConfig.paragraphSpacing),
-          child: Text(
+          child: _buildNodeText(
             node.text,
-            style: TextStyle(
+            TextStyle(
               fontSize: state.layoutConfig.fontSize,
               height: state.layoutConfig.lineHeight,
               color: state.theme.textColor,
               fontFamily: state.layoutConfig.fontFamily,
               fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
             ),
+            state,
           ),
         );
       case NodeType.heading:
         return Padding(
           padding: EdgeInsets.only(bottom: state.layoutConfig.paragraphSpacing),
-          child: Text(
+          child: _buildNodeText(
             node.text,
-            style: TextStyle(
+            TextStyle(
               fontSize: state.layoutConfig.fontSize + 4,
               fontWeight: FontWeight.w700,
               color: state.theme.textColor,
               fontFamily: state.layoutConfig.fontFamily,
               fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
             ),
+            state,
           ),
         );
       case NodeType.lineBreak:
         return const SizedBox(height: 8);
       case NodeType.text:
-        return Text(
+        return _buildNodeText(
           node.text,
-          style: TextStyle(
+          TextStyle(
             fontSize: state.layoutConfig.fontSize,
             height: state.layoutConfig.lineHeight,
             color: state.theme.textColor,
             fontFamily: state.layoutConfig.fontFamily,
             fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
           ),
+          state,
         );
       case NodeType.image:
         final url = node.imageUrl;

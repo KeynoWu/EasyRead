@@ -7,6 +7,9 @@ import '../../features/search/presentation/pages/search_page.dart';
 import '../../features/settings/presentation/pages/settings_page.dart';
 import '../../features/discover/presentation/pages/discover_page.dart';
 import '../../features/shell/presentation/pages/main_shell.dart';
+import '../../features/subscription_source/presentation/pages/rss_entries_page.dart';
+import '../../features/subscription_source/presentation/pages/rss_entry_detail_page.dart';
+import '../../features/subscription_source/presentation/pages/subscription_sources_page.dart';
 
 class AppRouter {
   static final GoRouter router = GoRouter(
@@ -58,6 +61,28 @@ class AppRouter {
         path: '/book-source/import',
         name: 'bookSourceImport',
         builder: (context, state) => const BookSourceImportPage(),
+      ),
+      // 订阅源（RSS/Atom）
+      GoRoute(
+        path: '/subscriptions',
+        name: 'subscriptions',
+        builder: (context, state) => const SubscriptionSourcesPage(),
+      ),
+      GoRoute(
+        path: '/subscriptions/:id/entries',
+        name: 'subscriptionEntries',
+        builder: (context, state) => RssEntriesPage(
+          sourceId: state.pathParameters['id'] ?? '',
+        ),
+      ),
+      // 条目链接经 query 传递（链接含斜杠等字符，不适合作 path 段）
+      GoRoute(
+        path: '/subscriptions/entry',
+        name: 'subscriptionEntryDetail',
+        builder: (context, state) => RssEntryDetailPage(
+          url: state.uri.queryParameters['url'] ?? '',
+          title: state.uri.queryParameters['title'] ?? '',
+        ),
       ),
       GoRoute(
         path: '/reader/:bookId',

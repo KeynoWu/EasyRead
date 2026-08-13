@@ -1,8 +1,10 @@
 import 'dart:convert';
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
 import 'package:hive/hive.dart';
 import 'package:path_provider/path_provider.dart';
-import 'dart:io';
 
 import '../../../../core/database/hive_init.dart';
 import '../../../../core/data/cookie_jar_service.dart';
@@ -16,6 +18,7 @@ import '../../../bookshelf/domain/entities/book.dart';
 import '../../../bookshelf/domain/repositories/bookshelf_repository.dart';
 import '../../../reader/data/models/reading_progress_model.dart';
 import '../../../reader/domain/entities/reading_progress.dart';
+import 'backup_encryption.dart';
 
 /// 备份与恢复 — 覆盖书架、书源、阅读进度、书签、笔记、净化规则、阅读统计、订阅
 class BackupRestore {
@@ -240,25 +243,53 @@ class BackupRestore {
 
   static int _toInt(Object? value) => value is num ? value.toInt() : 0;
 
-  /// 导出备份到文件
-  Future<String?> exportBackup() async {
+  /// 导出备份到文件。
+  ///
+  /// [encrypted] 为 true 时走口令加密流程：弹口令对话框（输入+确认两次，
+  /// 少于 4 个字符拒绝）→ AES-GCM 加密 → 保存为 .erbackup 文件；
+  /// 明文保持 .json。口令仅本次导出使用，绝不落盘。
+  /// 返回文件路径（成功）或 null（取消 / 失败）。
+  Future<String?> exportBackup({
+    bool encrypted = false,
+    BuildContext? context,
+  }) async {
     try {
       final json = await buildBackupJson();
       final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/easyread_backup_${DateTime.now().millisecondsSinceEpoch}.json');
-      await file.writeAsString(json);
+
+      if (!encrypted) {
+        final file = File(
+          '${dir.path}/easyread_backup_${DateTime.now().millisecondsSinceEpoch}.json',
+        );
+        await file.writeAsString(json);
+        return file.path;
+      }
+
+      // 对话框 await 前守卫：context 可能已失效（页面退出/重建）
+      if (context != null && !context.mounted) return null;
+      final password = await _promptPassword(context, requireConfirm: true);
+      if (password == null) return null; // 用户取消
+      if (password.length < 4) return null; // 防御：对话框已拦截短口令
+      final bytes = encryptBackup(json, password);
+      final fileName =
+          '备份_${DateTime.now().toIso8601String().split('T').first}.erbackup';
+      final file = File('${dir.path}/$fileName');
+      await file.writeAsBytes(bytes);
       return file.path;
     } catch (e) {
       return null;
     }
   }
 
-  /// 从文件恢复备份
-  Future<String?> restoreBackup() async {
+  /// 从文件恢复备份。
+  ///
+  /// 自动识别加密备份（magic 头）：加密文件弹口令输入，解密成功才恢复；
+  /// 口令错误仅提示，绝不回退明文解析（防降级攻击）。明文 JSON 直接走原路径。
+  Future<String?> restoreBackup({BuildContext? context}) async {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['json'],
+        allowedExtensions: ['json', 'erbackup'],
         allowMultiple: false,
         // 必需：IO 平台默认不读取文件内容，缺省时 file.bytes 恒为 null
         withData: true,
@@ -267,6 +298,21 @@ class BackupRestore {
 
       final bytes = result.files.first.bytes;
       if (bytes == null) return '读取文件失败';
+
+      if (isEncryptedBackup(bytes)) {
+        // 对话框 await 前守卫：context 可能已失效（页面退出/重建）
+        if (context != null && !context.mounted) return '已取消恢复';
+        final password = await _promptPassword(context, requireConfirm: false);
+        if (password == null) return '已取消恢复';
+        try {
+          final json = decryptBackup(bytes, password);
+          return await restoreFromJson(json);
+        } on BackupWrongPasswordException {
+          return '口令错误，无法解密备份';
+        } on BackupFormatException catch (e) {
+          return '备份文件格式非法: ${e.message}';
+        }
+      }
 
       final content = utf8.decode(bytes, allowMalformed: true);
       return await restoreFromJson(content);
@@ -339,6 +385,84 @@ class BackupRestore {
     for (final entry in map.entries) {
       final value = entry.value;
       await box.put(entry.key.toString(), value is String ? value : jsonEncode(value));
+    }
+  }
+
+  /// 弹出口令输入对话框。
+  ///
+  /// [requireConfirm] 为 true 时要求输入+确认两次（导出用），否则单次输入（恢复用）。
+  /// 少于 4 个字符或两次不一致就地提示不提交。返回口令字符串；取消返回 null。
+  Future<String?> _promptPassword(
+    BuildContext? context, {
+    required bool requireConfirm,
+  }) async {
+    if (context == null) return null;
+    final first = TextEditingController();
+    final second = requireConfirm ? TextEditingController() : null;
+    var errorText = '';
+    try {
+      return await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (dialogContext, setState) {
+            void submit() {
+              final password = first.text;
+              if (password.length < 4) {
+                setState(() => errorText = '口令至少 4 个字符');
+                return;
+              }
+              if (requireConfirm && password != second!.text) {
+                setState(() => errorText = '两次输入不一致');
+                return;
+              }
+              Navigator.pop(dialogContext, password);
+            }
+
+            return AlertDialog(
+              title: Text(requireConfirm ? '设置备份口令' : '输入备份口令'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: first,
+                    obscureText: true,
+                    autofocus: true,
+                    decoration: const InputDecoration(labelText: '口令'),
+                  ),
+                  if (requireConfirm) ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: second,
+                      obscureText: true,
+                      decoration: const InputDecoration(labelText: '确认口令'),
+                    ),
+                  ],
+                  if (errorText.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      errorText,
+                      style: TextStyle(
+                        color: Theme.of(dialogContext).colorScheme.error,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('取消'),
+                ),
+                FilledButton(onPressed: submit, child: const Text('确定')),
+              ],
+            );
+          },
+        ),
+      );
+    } finally {
+      first.dispose();
+      second?.dispose();
     }
   }
 }

@@ -9,6 +9,7 @@ import '../../data/services/bookmark_service.dart';
 import '../../data/services/note_service.dart';
 import '../../domain/entities/bookmark.dart';
 import '../../domain/entities/reading_note.dart';
+import '../../domain/usecases/auto_switch_source.dart';
 import '../../data/services/tts_service.dart';
 import '../../../settings/domain/usecases/reading_stats_service.dart';
 import '../providers/reader_provider.dart';
@@ -21,6 +22,7 @@ import '../../../book_source/presentation/providers/book_source_provider.dart';
 import '../widgets/chapter_catalog_sheet.dart';
 import '../widgets/reader_settings_panel.dart';
 import '../widgets/source_switcher_sheet.dart';
+import '../widgets/image_reader_widget.dart';
 
 class ReaderPage extends ConsumerStatefulWidget {
   final String bookId;
@@ -86,6 +88,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     return const {};
   }
   bool _isTtsPlaying = false;
+  /// 本页会话是否已自动换源过：单次失败只自动换一次（防循环），
+  /// 后续失败需用户手动换源或重新进入阅读页后才会再次触发
+  bool _autoSwitchAttempted = false;
   DateTime? _pageOpenTime;
   /// 进入阅读页时的应用亮度，退出时恢复（阅读页存活期间亮度才生效）
   double? _entryBrightness;
@@ -202,6 +207,86 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('书签已添加')),
+    );
+  }
+
+  /// 章节加载失败 → 自动换源：设置开启且有可用替代源时，
+  /// 尝试一次自动换源；成功后切换书源并重新加载章节。
+  Future<void> _maybeAutoSwitchSource() async {
+    if (_autoSwitchAttempted || !mounted) return;
+    final enabled = await AutoSwitchSetting.load();
+    if (!enabled || !mounted) return;
+    final currentSourceId = widget.sourceId ?? '';
+    // 存在未尝试的替代源（跳过当前源）才触发
+    final hasUntried = _alternatives.any(
+      (a) => a.sourceId.isNotEmpty && a.sourceId != currentSourceId,
+    );
+    if (!hasUntried) return;
+    _autoSwitchAttempted = true;
+
+    // 当前源名称用于提示"xx 失效"；查询失败不阻塞自动换源
+    var currentName = '当前书源';
+    try {
+      final currentSource =
+          await ref.read(bookSourceRepositoryProvider).getById(currentSourceId);
+      if (currentSource != null && currentSource.name.isNotEmpty) {
+        currentName = currentSource.name;
+      }
+    } catch (_) {
+      // 忽略：名称查询失败时使用兜底文案
+    }
+    if (!mounted) return;
+
+    // 与手动换源一致：仅尝试当前启用（且未被删除）的替代源
+    List<SourceOption> usableAlternatives = _alternatives;
+    try {
+      final enabledSources =
+          await ref.read(bookSourceRepositoryProvider).getEnabled();
+      final enabledIds = {for (final s in enabledSources) s.id};
+      usableAlternatives = [
+        for (final a in _alternatives)
+          if (a.sourceId.isEmpty || enabledIds.contains(a.sourceId)) a,
+      ];
+    } catch (_) {
+      // 查询失败按全部可用处理（自动换源属尽力而为）
+    }
+    if (!mounted) return;
+
+    final result = await AutoSwitchSource(
+      repository: ref.read(readerRepositoryProvider),
+    ).execute(
+      bookId: widget.bookId,
+      currentSourceId: currentSourceId,
+      currentDetailUrl: widget.detailUrl,
+      alternatives: usableAlternatives,
+      variables: _variables,
+    );
+    if (!mounted) return;
+
+    if (result == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('当前书源不可用，自动换源失败，请手动切换书源')),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('源 $currentName 失效，已自动切换到 ${result.sourceName}')),
+    );
+    // 经 provider 更新源信息：loadChapter 会更新 notifier 的
+    // _lastSourceId/_lastDetailUrl/widgetDetailUrl，后续切章沿用新书源。
+    // 从已保存进度续读（与手动换源/重新进入阅读页的语义一致），
+    // 目录会随章节加载成功后自动拉取。
+    final repo = ref.read(readerRepositoryProvider);
+    final progress = await repo.loadProgress(widget.bookId);
+    if (!mounted) return;
+    final startChapter = progress?.chapterIndex ?? 0;
+    ref.read(readerProvider.notifier).loadChapter(
+      bookId: widget.bookId,
+      chapterIndex: startChapter,
+      sourceId: result.sourceId,
+      detailUrl: result.detailUrl,
+      variables: _variables,
     );
   }
 
@@ -351,6 +436,22 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         if (mounted) setState(() => _isTtsPlaying = false);
       }
     });
+    // 章节加载失败（错误态出现）→ 自动换源。
+    // _maybeAutoSwitchSource 内部有防循环标记：单次失败只自动换一次，
+    // 自动换源后的再次失败（含手动重试）不再触发，需手动换源或重新进入。
+    ref.listen<ReaderState>(readerProvider, (previous, next) {
+      if (previous?.errorMessage == null && next.errorMessage != null) {
+        unawaited(_maybeAutoSwitchSource());
+      }
+    });
+
+    // 图片/漫画章节渲染分流：加载完成且判定为图片章节时（翻页/滚动
+    // 模式均适用，图片章节无滚动语义）走 ImageReaderWidget 逐图阅读，
+    // 不再进入文本分页/滚动渲染；加载中/错误态仍由 ReaderPageView 处理
+    final showImageReader = state.currentChapter != null &&
+        state.isImageChapter &&
+        !state.isLoading &&
+        state.errorMessage == null;
 
     return Scaffold(
       backgroundColor: state.theme.backgroundColor,
@@ -475,15 +576,19 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                     ],
                   ),
                 ),
-                const Expanded(child: ReaderPageView()),
+                Expanded(
+                  child: showImageReader
+                      ? const ImageReaderWidget()
+                      : const ReaderPageView(),
+                ),
               ],
             ),
             if (state.showSettings)
-              const Positioned(
+              Positioned(
                 bottom: 0,
                 left: 0,
                 right: 0,
-                child: ReaderSettingsPanel(),
+                child: ReaderSettingsPanel(ttsService: _tts),
               ),
           ],
         ),

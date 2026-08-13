@@ -6,8 +6,11 @@ import 'purification_rules_page.dart';
 import 'reading_stats_page.dart';
 import 'webdav_config_page.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../reader/core/pagination/phonetic_annotator.dart';
 import '../../../reader/data/models/chapter_model.dart';
+import '../../../reader/domain/usecases/auto_switch_source.dart';
 import '../../../reader/presentation/pages/book_marks_notes_page.dart';
+import '../../data/services/webdav_backup_scheduler.dart';
 import '../../domain/usecases/backup_restore.dart';
 import '../../domain/usecases/webdav_sync.dart';
 import '../providers/purify_pipeline_provider.dart';
@@ -54,17 +57,37 @@ class SettingsPage extends ConsumerWidget {
             ),
             const _Divider(),
             ListTile(
+              leading: const Icon(Icons.lock_outline),
+              title: const Text('导出加密备份'),
+              subtitle: const Text('口令 AES-GCM 加密，备份含 Cookie 也不怕泄露'),
+              trailing: const Icon(Icons.chevron_right, size: 18),
+              onTap: () async {
+                final path = await backupRestore
+                    .exportBackup(encrypted: true, context: context);
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      path != null ? '加密备份已保存: $path' : '备份未保存',
+                    ),
+                  ),
+                );
+              },
+            ),
+            const _Divider(),
+            ListTile(
               leading: const Icon(Icons.restore_outlined),
               title: const Text('从备份恢复'),
-              subtitle: const Text('从 JSON 备份文件恢复数据'),
+              subtitle: const Text('支持明文 JSON 与口令加密（.erbackup）备份'),
               trailing: const Icon(Icons.chevron_right, size: 18),
               onTap: () async {
                 final confirmed = await showDialog<bool>(
                   context: context,
                   builder: (context) => AlertDialog(
                     title: const Text('确认恢复备份'),
-                    content: const Text('恢复将覆盖当前全部数据（书架、书源、进度、规则等），'
-                        '且备份文件中包含 Cookie 等敏感信息，请确认来源可信后继续。'),
+                    content: const Text('恢复将覆盖当前全部数据（书架、书源、进度、规则等）。'
+                        '明文备份含 Cookie 等敏感信息，加密备份需口令验证，'
+                        '请确认来源可信后继续。'),
                     actions: [
                       TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
                       FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('继续恢复')),
@@ -72,7 +95,7 @@ class SettingsPage extends ConsumerWidget {
                   ),
                 );
                 if (confirmed != true || !context.mounted) return;
-                final result = await backupRestore.restoreBackup();
+                final result = await backupRestore.restoreBackup(context: context);
                 if (!context.mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(content: Text(result ?? '操作完成')),
@@ -153,6 +176,8 @@ class SettingsPage extends ConsumerWidget {
               },
             ),
             const _Divider(),
+            _AutoBackupTile(backupRestore: backupRestore),
+            const _Divider(),
             ListTile(
               leading: const Icon(Icons.sync_outlined),
               title: const Text('更新全部书源订阅'),
@@ -209,7 +234,11 @@ class SettingsPage extends ConsumerWidget {
 
           const _SectionHeader(title: '阅读'),
           _GroupCard(children: [
+            const _AutoSwitchTile(),
+            const _Divider(),
             _AutoRefreshTile(updater: autoUpdater),
+            const _Divider(),
+            const _PhoneticTile(),
             const _Divider(),
             ListTile(
               leading: const Icon(Icons.cleaning_services_outlined),
@@ -262,6 +291,83 @@ class SettingsPage extends ConsumerWidget {
           const SizedBox(height: 24),
         ],
       ),
+    );
+  }
+}
+
+/// 自动换源开关：章节加载失败时自动尝试替代书源
+class _AutoSwitchTile extends StatefulWidget {
+  const _AutoSwitchTile();
+
+  @override
+  State<_AutoSwitchTile> createState() => _AutoSwitchTileState();
+}
+
+class _AutoSwitchTileState extends State<_AutoSwitchTile> {
+  bool _enabled = true;
+
+  @override
+  void initState() {
+    super.initState();
+    AutoSwitchSetting.load().then((value) {
+      if (mounted) setState(() => _enabled = value);
+    });
+  }
+
+  Future<void> _toggle(bool value) async {
+    await AutoSwitchSetting.save(value);
+    if (mounted) setState(() => _enabled = value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SwitchListTile(
+      secondary: const Icon(Icons.swap_horiz),
+      title: const Text('自动换源'),
+      subtitle: const Text('章节加载失败时自动切换可用书源'),
+      value: _enabled,
+      onChanged: _toggle,
+    );
+  }
+}
+
+/// 生僻字注音开关：正文中生僻字显示小字拼音，持久化到独立
+/// Hive 盒 phonetic_setting（key enabled，默认 false），切换实时生效。
+class _PhoneticTile extends StatefulWidget {
+  const _PhoneticTile();
+
+  @override
+  State<_PhoneticTile> createState() => _PhoneticTileState();
+}
+
+class _PhoneticTileState extends State<_PhoneticTile> {
+  @override
+  void initState() {
+    super.initState();
+    PhoneticSettings.ensureLoaded().then((_) {
+      if (mounted) setState(() {});
+    });
+    PhoneticSettings.enabled.addListener(_onChanged);
+  }
+
+  void _onChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    PhoneticSettings.enabled.removeListener(_onChanged);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SwitchListTile(
+      secondary: const Icon(Icons.font_download_outlined),
+      title: const Text('生僻字注音'),
+      subtitle: const Text('正文中生僻字显示拼音'),
+      value: PhoneticSettings.enabled.value,
+      onChanged: (value) => PhoneticSettings.setEnabled(value),
     );
   }
 }
@@ -325,6 +431,85 @@ class _AutoRefreshTileState extends State<_AutoRefreshTile> {
       subtitle: Text(_hours <= 0 ? '关闭' : '每 $_hours 小时更新全部书籍详情'),
       trailing: const Icon(Icons.chevron_right, size: 18),
       onTap: _pick,
+    );
+  }
+}
+
+/// 自动备份设置：开关 + 间隔选择（每天/每周），变更后重启调度器。
+class _AutoBackupTile extends StatefulWidget {
+  final BackupRestore backupRestore;
+
+  const _AutoBackupTile({required this.backupRestore});
+
+  @override
+  State<_AutoBackupTile> createState() => _AutoBackupTileState();
+}
+
+class _AutoBackupTileState extends State<_AutoBackupTile> {
+  bool _enabled = false;
+  int _intervalHours = WebDavBackupSettings.dailyHours;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final enabled = await WebDavBackupSettings.isEnabled();
+    final intervalHours = await WebDavBackupSettings.intervalHours();
+    if (!mounted) return;
+    setState(() {
+      _enabled = enabled;
+      _intervalHours = intervalHours;
+    });
+  }
+
+  Future<void> _apply({required bool enabled, required int intervalHours}) async {
+    await WebDavBackupSettings.save(
+      enabled: enabled,
+      intervalHours: intervalHours,
+    );
+    await WebDavBackupScheduler.start(backupRestore: widget.backupRestore);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        SwitchListTile(
+          secondary: const Icon(Icons.cloud_sync_outlined),
+          title: const Text('自动备份'),
+          subtitle: const Text('按间隔自动上传备份到 WebDAV'),
+          value: _enabled,
+          onChanged: (value) {
+            setState(() => _enabled = value);
+            _apply(enabled: value, intervalHours: _intervalHours);
+          },
+        ),
+        if (_enabled)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: SegmentedButton<int>(
+              segments: const [
+                ButtonSegment(
+                  value: WebDavBackupSettings.dailyHours,
+                  label: Text('每天'),
+                ),
+                ButtonSegment(
+                  value: WebDavBackupSettings.weeklyHours,
+                  label: Text('每周'),
+                ),
+              ],
+              selected: {_intervalHours},
+              onSelectionChanged: (selection) {
+                final hours = selection.first;
+                setState(() => _intervalHours = hours);
+                _apply(enabled: _enabled, intervalHours: hours);
+              },
+            ),
+          ),
+      ],
     );
   }
 }

@@ -9,6 +9,12 @@ import '../../domain/usecases/search_books.dart';
 import '../providers/search_provider.dart';
 import '../widgets/search_result_item.dart';
 
+/// 热门搜索引导词：仅通用类别词，不内置具体书名（避免版权/侵权内容），
+/// 供空态下点击直接发起搜索。
+const List<String> hotSearchWords = [
+  '玄幻', '都市', '科幻', '悬疑', '言情', '历史', '完本', '连载', '排行榜', '免费',
+];
+
 class SearchPage extends ConsumerStatefulWidget {
   const SearchPage({super.key});
 
@@ -377,45 +383,62 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       future: _historyFuture,
       builder: (context, snapshot) {
         final history = snapshot.data ?? [];
-        if (history.isEmpty) {
-          return const Center(
-            child: Text('输入关键词搜索书籍', style: TextStyle(color: AppColors.textSecondary)),
-          );
-        }
         final isDark = Theme.of(context).brightness == Brightness.dark;
         return ListView(
           padding: const EdgeInsets.symmetric(horizontal: 20),
           children: [
-            Padding(
-              padding: const EdgeInsets.only(top: 8, bottom: 12),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('搜索历史', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                  TextButton.icon(
-                    onPressed: _clearHistory,
-                    icon: const Icon(Icons.delete_sweep_outlined, size: 16),
-                    label: const Text('清空', style: TextStyle(fontSize: 12)),
-                  ),
-                ],
+            // 有历史时历史在上，热门搜索在下，两区块互不冲突
+            if (history.isNotEmpty) ...[
+              Padding(
+                padding: const EdgeInsets.only(top: 8, bottom: 12),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('搜索历史', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                    TextButton.icon(
+                      onPressed: _clearHistory,
+                      icon: const Icon(Icons.delete_sweep_outlined, size: 16),
+                      label: const Text('清空', style: TextStyle(fontSize: 12)),
+                    ),
+                  ],
+                ),
               ),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: history
+                    .map((keyword) => InputChip(
+                          avatar: const Icon(Icons.history, size: 16, color: AppColors.tint),
+                          label: Text(keyword, style: const TextStyle(fontSize: 13)),
+                          backgroundColor: isDark ? AppColors.darkSurface : Colors.white,
+                          side: const BorderSide(color: AppColors.separator),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                          deleteIcon: Icon(Icons.close, size: 14, color: AppColors.textSecondary.withValues(alpha: 0.6)),
+                          onDeleted: () => _removeHistory(keyword),
+                          onPressed: () {
+                            _searchController.text = keyword;
+                            _search(keyword);
+                          },
+                        ))
+                    .toList(),
+              ),
+              const SizedBox(height: 16),
+            ],
+            // 热门搜索引导词：点击复用 _search 触发真实搜索
+            const Padding(
+              padding: EdgeInsets.only(top: 8, bottom: 12),
+              child: Text('热门搜索', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
             ),
             Wrap(
               spacing: 8,
               runSpacing: 8,
-              children: history
-                  .map((keyword) => InputChip(
-                        avatar: const Icon(Icons.history, size: 16, color: AppColors.tint),
-                        label: Text(keyword, style: const TextStyle(fontSize: 13)),
+              children: hotSearchWords
+                  .map((word) => ActionChip(
+                        label: Text(word, style: const TextStyle(fontSize: 13)),
                         backgroundColor: isDark ? AppColors.darkSurface : Colors.white,
                         side: const BorderSide(color: AppColors.separator),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                        deleteIcon: Icon(Icons.close, size: 14, color: AppColors.textSecondary.withValues(alpha: 0.6)),
-                        onDeleted: () => _removeHistory(keyword),
-                        onPressed: () {
-                          _searchController.text = keyword;
-                          _search(keyword);
-                        },
+                        onPressed: () => _search(word),
                       ))
                   .toList(),
             ),
