@@ -14,19 +14,14 @@ class RssParser {
     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
   ];
 
-  /// 解析 RSS 2.0（channel.item）或 Atom（feed.entry）XML，返回条目列表。
-  /// 文档无法识别/解析失败时返回空列表（不抛异常）。
-  static List<RssEntry> parseRss(String xml, {String sourceName = ''}) {
-    return tryParse(xml, sourceName: sourceName) ?? const [];
-  }
-
-  /// 同 [parseRss]，但无法识别为 RSS/Atom 文档时返回 null
-  /// （供调用方区分「解析失败」与「合法但无条目」）。
-  static List<RssEntry>? tryParse(String xml, {String sourceName = ''}) {
+  /// 解析 RSS 2.0（channel.item）或 Atom（feed.entry）XML。
+  /// 无法识别为 RSS/Atom 文档时返回 null（供调用方区分
+  /// 「解析失败」与「合法但无条目」）。
+  static List<RssEntry>? tryParse(String xml) {
     try {
       final root = XmlDocument.parse(xml).rootElement;
-      if (root.localName == 'rss') return _parseRss2(root, sourceName);
-      if (root.localName == 'feed') return _parseAtom(root, sourceName);
+      if (root.localName == 'rss') return _parseRss2(root);
+      if (root.localName == 'feed') return _parseAtom(root);
       return null;
     } catch (_) {
       // 坏 XML（XmlParserException 等）一律按解析失败处理
@@ -36,7 +31,7 @@ class RssParser {
 
   // ---- RSS 2.0 ----
 
-  static List<RssEntry> _parseRss2(XmlElement root, String sourceName) {
+  static List<RssEntry> _parseRss2(XmlElement root) {
     final channels = root.findElements('channel', namespaceUri: '*');
     if (channels.isEmpty) return const [];
     final channel = channels.first;
@@ -50,14 +45,13 @@ class RssParser {
           // content:encoded 为完整内容，优先于 description
           description:
               _childText(item, 'encoded') ?? _childText(item, 'description'),
-          sourceName: sourceName,
         ),
     ];
   }
 
   // ---- Atom ----
 
-  static List<RssEntry> _parseAtom(XmlElement root, String sourceName) {
+  static List<RssEntry> _parseAtom(XmlElement root) {
     return [
       for (final entry in root.findElements('entry', namespaceUri: '*'))
         RssEntry(
@@ -70,7 +64,6 @@ class RssParser {
           // summary 为摘要；缺失时回退 content（常含正文 HTML）
           description:
               _childText(entry, 'summary') ?? _childText(entry, 'content'),
-          sourceName: sourceName,
         ),
     ];
   }

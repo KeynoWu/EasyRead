@@ -34,7 +34,6 @@ class BookSource {
   String? get bookUrlPattern => rules['bookUrlPattern'] as String?;
   bool get enabledExplore => parseBool(rules['enabledExplore']) ?? false;
   bool get enabledCookieJar => parseBool(rules['enabledCookieJar']) ?? false;
-  int? get customOrder => parseWeight(rules['customOrder']);
   Map<String, dynamic>? get bookInfoRules {
     final nested = rules['ruleBookInfo'];
     return nested is Map ? Map<String, dynamic>.from(nested) : null;

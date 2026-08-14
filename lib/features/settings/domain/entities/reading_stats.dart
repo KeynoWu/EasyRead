@@ -33,10 +33,4 @@ class ReadingStatsSummary {
     this.recentDays = const [],
   });
 
-  String get totalHoursLabel {
-    final hours = totalSeconds / 3600;
-    return hours >= 1 ? hours.toStringAsFixed(1) : totalSeconds.toString();
-  }
-
-  String get totalUnitLabel => totalSeconds >= 3600 ? '小时' : '分钟';
 }

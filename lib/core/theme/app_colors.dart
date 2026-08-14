@@ -20,7 +20,6 @@ class AppColors {
   static const Color darkTextSecondary = Color(0xFFA8A29E);
   static const Color darkSeparator = Color(0xFF2A2A2A);
   static const Color darkTint = Color(0xFFF59E0B);         // 亮琥珀
-  static const Color darkTintSoft = Color(0xFF2A2118);
 
   // ---- 阅读主题（纸感色系）----
   static const Color readDay = Color(0xFFF5F0E8);          // 米纸

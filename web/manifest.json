@@ -1,11 +1,11 @@
 {
-    "name": "easy_read",
-    "short_name": "easy_read",
+    "name": "易读 EasyRead",
+    "short_name": "易读",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#D97706",
+    "theme_color": "#D97706",
+    "description": "开源免费的多源小说阅读器",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

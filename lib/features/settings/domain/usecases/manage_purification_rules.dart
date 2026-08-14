@@ -208,12 +208,6 @@ class ManagePurificationRules {
     return RegexPurifier(rules: enabled, jsRules: jsRules);
   }
 
-  /// 批量替换文本
-  Future<String> applyRules(String text) async {
-    final purifier = await buildPurifier();
-    return purifier.purify(text);
-  }
-
   static PurificationRule _fromJson(Map<String, dynamic> map) {
     return PurificationRule(
       id: map['id']?.toString() ?? '',

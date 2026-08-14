@@ -58,7 +58,7 @@ class SubscriptionRepository {
       return const SubscriptionFetchResult.failure('网络请求失败');
     }
 
-    final entries = RssParser.tryParse(xml, sourceName: source.name);
+    final entries = RssParser.tryParse(xml);
     if (entries == null) {
       return const SubscriptionFetchResult.failure('订阅源解析失败：不是有效的 RSS/Atom 文档');
     }

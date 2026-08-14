@@ -8,7 +8,6 @@ class RssEntry {
   final DateTime? pubDate;
   final String? author;
   final String? description;
-  final String sourceName;
 
   const RssEntry({
     required this.title,
@@ -16,6 +15,5 @@ class RssEntry {
     this.pubDate,
     this.author,
     this.description,
-    required this.sourceName,
   });
 }

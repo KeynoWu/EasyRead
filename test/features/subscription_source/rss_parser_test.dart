@@ -25,14 +25,13 @@ void main() {
         </channel>
       </rss>
       ''';
-      final entries = RssParser.parseRss(xml, sourceName: '测试源');
+      final entries = RssParser.tryParse(xml)!;
       expect(entries, hasLength(2));
       expect(entries[0].title, '第一条');
       expect(entries[0].link, 'https://example.com/1');
       expect(entries[0].pubDate, DateTime.utc(1994, 11, 6, 8, 49, 37));
       expect(entries[0].author, '作者甲');
       expect(entries[0].description, '描述一');
-      expect(entries[0].sourceName, '测试源');
       // +0800 → UTC 前移 8 小时
       expect(entries[1].pubDate, DateTime.utc(1994, 11, 7, 1, 0, 0));
       // CDATA 内容可解析
@@ -52,7 +51,7 @@ void main() {
         </channel>
       </rss>
       ''';
-      final entries = RssParser.parseRss(xml);
+      final entries = RssParser.tryParse(xml)!;
       expect(entries, hasLength(1));
       expect(entries.single.description, '完整正文内容');
     });
@@ -67,7 +66,7 @@ void main() {
         </channel>
       </rss>
       ''';
-      final entries = RssParser.parseRss(xml);
+      final entries = RssParser.tryParse(xml)!;
       expect(entries, hasLength(1));
       expect(entries.single.title, isEmpty);
       expect(entries.single.link, isEmpty);
@@ -93,14 +92,13 @@ void main() {
         </entry>
       </feed>
       ''';
-      final entries = RssParser.parseRss(xml, sourceName: '示例 Feed');
+      final entries = RssParser.tryParse(xml)!;
       expect(entries, hasLength(1));
       expect(entries.single.title, 'Atom 条目');
       expect(entries.single.link, 'https://example.com/atom/1');
       expect(entries.single.pubDate, DateTime.utc(2024, 3, 15, 10, 30));
       expect(entries.single.author, '作者乙');
       expect(entries.single.description, 'Atom 摘要');
-      expect(entries.single.sourceName, '示例 Feed');
     });
 
     test('无 alternate 链接时回退第一个带 href 的 link', () {
@@ -113,7 +111,7 @@ void main() {
         </entry>
       </feed>
       ''';
-      final entries = RssParser.parseRss(xml);
+      final entries = RssParser.tryParse(xml)!;
       expect(entries.single.link, 'https://example.com/enclosure');
       expect(entries.single.description, isNull);
     });
@@ -128,27 +126,27 @@ void main() {
         </entry>
       </feed>
       ''';
-      final entries = RssParser.parseRss(xml);
+      final entries = RssParser.tryParse(xml)!;
       expect(entries.single.pubDate, DateTime.utc(2023, 6, 1, 0, 0));
     });
   });
 
   group('RssParser 容错', () {
-    test('坏 XML 返回空列表不抛', () {
-      expect(RssParser.parseRss('<rss><channel>'), isEmpty);
-      expect(RssParser.parseRss('这不是 XML'), isEmpty);
-      expect(RssParser.parseRss(''), isEmpty);
-      expect(RssParser.parseRss('<feed><entry></feed>'), isEmpty);
+    test('坏 XML 返回 null 不抛', () {
+      expect(RssParser.tryParse('<rss><channel>'), isNull);
+      expect(RssParser.tryParse('这不是 XML'), isNull);
+      expect(RssParser.tryParse(''), isNull);
+      expect(RssParser.tryParse('<feed><entry></feed>'), isNull);
     });
 
     test('空 feed（无条目）返回空列表', () {
       expect(
-        RssParser.parseRss(
+        RssParser.tryParse(
             '<rss version="2.0"><channel><title>t</title></channel></rss>'),
         isEmpty,
       );
       expect(
-        RssParser.parseRss(
+        RssParser.tryParse(
             '<feed xmlns="http://www.w3.org/2005/Atom"><title>t</title></feed>'),
         isEmpty,
       );
