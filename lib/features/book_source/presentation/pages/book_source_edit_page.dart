@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../domain/entities/book_source.dart';
 import '../../domain/repositories/book_source_repository.dart';
 import '../../domain/usecases/test_book_source.dart';
-import 'book_source_debug_page.dart';
 
 /// 可视化书源编辑器
 class BookSourceEditPage extends StatefulWidget {
@@ -211,10 +211,7 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
           : _controllers['group']!.text.trim(),
       rules: _buildRules(),
     );
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => BookSourceDebugPage(source: source)),
-    );
+    await context.push('/book-source/debug', extra: source);
   }
 
   Future<void> _save() async {

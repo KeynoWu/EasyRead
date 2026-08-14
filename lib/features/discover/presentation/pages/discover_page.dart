@@ -5,7 +5,6 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../book_source/domain/entities/book_source.dart';
 import '../../../book_source/presentation/providers/book_source_provider.dart';
-import 'explore_books_page.dart';
 
 class DiscoverCategory {
   final BookSource source;
@@ -71,12 +70,7 @@ class DiscoverPage extends ConsumerWidget {
                   subtitle: Text(category.source.name),
                   trailing: const Icon(Icons.chevron_right, size: 18),
                   onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ExploreBooksPage(category: category),
-                      ),
-                    );
+                    context.push('/discover/explore', extra: category);
                   },
                 ),
               );

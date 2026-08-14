@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../../core/theme/app_colors.dart';
-import '../../../reader/presentation/pages/book_detail_page.dart';
 import '../../domain/entities/search_result.dart';
 
 class SearchResultItem extends ConsumerStatefulWidget {
@@ -39,12 +39,7 @@ class _SearchResultItemState extends ConsumerState<SearchResultItem> {
           );
     try {
       if (!mounted) return;
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => BookDetailPage(result: detailResult),
-        ),
-      );
+      await context.push('/book-detail', extra: detailResult);
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

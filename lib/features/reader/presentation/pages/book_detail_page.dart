@@ -183,10 +183,7 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
       wordCount: current.wordCount,
       alternatives: current.alternatives,
     );
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => BookDetailPage(result: next)),
-    );
+    context.pushReplacement('/book-detail', extra: next);
   }
 
   Future<void> _cacheAll() async {

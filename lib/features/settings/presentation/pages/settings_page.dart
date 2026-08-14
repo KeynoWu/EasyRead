@@ -1,15 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:hive/hive.dart';
 import '../../../../core/database/hive_init.dart';
-import 'purification_rules_page.dart';
-import 'reading_stats_page.dart';
-import 'webdav_config_page.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../reader/core/pagination/phonetic_annotator.dart';
 import '../../../reader/data/models/chapter_model.dart';
 import '../../../reader/domain/usecases/auto_switch_source.dart';
-import '../../../reader/presentation/pages/book_marks_notes_page.dart';
 import '../../data/services/webdav_backup_scheduler.dart';
 import '../../domain/usecases/backup_restore.dart';
 import '../../domain/usecases/webdav_sync.dart';
@@ -112,7 +109,7 @@ class SettingsPage extends ConsumerWidget {
               subtitle: const Text('配置服务器，云端备份与恢复'),
               trailing: const Icon(Icons.chevron_right, size: 18),
               onTap: () async {
-                await Navigator.push(context, MaterialPageRoute(builder: (_) => const WebDavConfigPage()));
+                await context.push('/settings/webdav');
               },
             ),
             const _Divider(),
@@ -246,7 +243,7 @@ class SettingsPage extends ConsumerWidget {
               subtitle: const Text('自定义文本替换规则（正则）'),
               trailing: const Icon(Icons.chevron_right, size: 18),
               onTap: () async {
-                await Navigator.push(context, MaterialPageRoute(builder: (_) => const PurificationRulesPage()));
+                await context.push('/settings/purification');
               },
             ),
             const _Divider(),
@@ -256,7 +253,7 @@ class SettingsPage extends ConsumerWidget {
               subtitle: const Text('查看阅读时长和记录'),
               trailing: const Icon(Icons.chevron_right, size: 18),
               onTap: () async {
-                await Navigator.push(context, MaterialPageRoute(builder: (_) => const ReadingStatsPage()));
+                await context.push('/settings/stats');
               },
             ),
             const _Divider(),
@@ -266,10 +263,7 @@ class SettingsPage extends ConsumerWidget {
               subtitle: const Text('跨书查看和管理全部书签、笔记'),
               trailing: const Icon(Icons.chevron_right, size: 18),
               onTap: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const BookMarksNotesPage()),
-                );
+                await context.push('/settings/bookmarks-notes');
               },
             ),
           ]),

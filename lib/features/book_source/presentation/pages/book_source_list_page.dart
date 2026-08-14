@@ -9,11 +9,6 @@ import '../../domain/entities/book_source.dart';
 import '../../domain/entities/book_source_test_record.dart';
 import '../providers/book_source_provider.dart';
 import '../widgets/book_source_card.dart';
-import 'book_source_edit_page.dart';
-import 'book_source_login_page.dart';
-import 'book_source_test_page.dart';
-import 'rule_tester_page.dart';
-import 'subscription_page.dart';
 
 /// 书源筛选维度
 enum SourceFilter {
@@ -71,12 +66,7 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
     final repo = ref.read(bookSourceRepositoryProvider);
     final source = sourceId != null ? await repo.getById(sourceId) : null;
     if (!mounted) return;
-    final changed = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => BookSourceEditPage(repository: repo, source: source),
-      ),
-    );
+    final changed = await context.push<bool>('/book-source/edit', extra: source);
     if (changed == true) {
       // 书源规则可能已修改，旧检测结果失效，清除待重测
       if (sourceId != null) {
@@ -140,22 +130,14 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
       case 'select':
         _enterSelection(source);
       case 'login':
-        final success = await Navigator.push<bool>(
-          context,
-          MaterialPageRoute(
-            builder: (_) => BookSourceLoginPage(source: source),
-          ),
-        );
+        final success = await context.push<bool>('/book-source/login', extra: source);
         if (success == true && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('登录 Cookie 已保存')),
           );
         }
       case 'ruleTester':
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => RuleTesterPage(source: source)),
-        );
+        await context.push('/book-source/rule-tester', extra: source);
     }
   }
 
@@ -298,10 +280,7 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
 
   /// 打开批量检测页，返回后刷新检测结果
   Future<void> _openTestPage() async {
-    await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(builder: (_) => const BookSourceTestPage()),
-    );
+    await context.push<bool>('/book-source/test');
     if (mounted) {
       ref.invalidate(bookSourceTestRecordsProvider);
     }
@@ -407,20 +386,12 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
                 ),
                 IconButton(
                   icon: const Icon(Icons.rss_feed),
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) => SubscriptionPage(
-                            repository: ref.read(bookSourceRepositoryProvider))),
-                  ),
+                  onPressed: () => context.push('/book-source/subscription'),
                   tooltip: '书源订阅',
                 ),
                 IconButton(
                   icon: const Icon(Icons.science_outlined),
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const RuleTesterPage()),
-                  ),
+                  onPressed: () => context.push('/book-source/rule-tester'),
                   tooltip: '规则测试',
                 ),
                 IconButton(
