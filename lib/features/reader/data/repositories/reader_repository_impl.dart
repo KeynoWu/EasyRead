@@ -276,9 +276,12 @@ class ReaderRepositoryImpl implements ReaderRepository {
       detailUrl: detailUrl ?? '',
       variables: variables,
     );
+    // key 必须与 getCatalog 内部的写入一致（expand 变量后再 resolve base）：
+    // 否则带 @put 变量的详情/目录链路中 key 永远不匹配，缓存恒 miss，
+    // 返回空 BookDetail 导致详情页空白。
     final key = '${bookId}_${sourceId}_${_resolveUrl(
       (await _getSource(sourceId))?.bookSourceUrl,
-      detailUrl ?? '',
+      RuleVariables.expand(detailUrl ?? '', variables),
     )}';
     if (_lastBookDetailKey == key && _lastBookDetail != null) {
       return _lastBookDetail!;

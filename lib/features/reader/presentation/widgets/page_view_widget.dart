@@ -60,10 +60,16 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
       _controller = PageController(initialPage: page);
       return;
     }
-    // 外部页码变化（如布局调整重置为 0）时同步
+    // 外部页码变化（如布局调整重置为 0）时同步。
+    // 帧末执行：build 期间 jumpToPage 会触发 PageController 通知
+    // （markNeedsBuild during build 断言风险），移到 postFrame。
     final current = _controller!.page?.round() ?? page;
     if (current != page) {
-      _controller!.jumpToPage(page);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _controller?.hasClients == true) {
+          _controller!.jumpToPage(page);
+        }
+      });
     }
   }
 

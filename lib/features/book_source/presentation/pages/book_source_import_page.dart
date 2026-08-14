@@ -177,7 +177,11 @@ class BookSourceImportPage extends ConsumerWidget {
       ),
       );
     } finally {
-      controller.dispose();
+      // 对话框 pop 后 TextField 元素仍在路由退出动画中（~300ms），
+      // 立即 dispose 会让下一帧 didUpdateWidget 对已释放 controller
+      // 加监听而触发 debugAssertNotDisposed 崩溃。延迟到动画结束后释放；
+      // 局部短生命周期对象，延迟无副作用。
+      Future.delayed(const Duration(milliseconds: 500), controller.dispose);
     }
   }
 

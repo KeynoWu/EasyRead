@@ -443,7 +443,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
           Expanded(
             child: booksAsync.when(
               data: (books) {
-                final viewKey = '${identityHashCode(books)}|$_sortMode|$_selectedGroup';
+                final viewKey = '${identityHashCode(books)}|$_sortMode|$_selectedGroup|$_searchQuery';
                 List<Book> sorted;
                 List<Book> filtered;
                 if (_cachedViewKey == viewKey) {

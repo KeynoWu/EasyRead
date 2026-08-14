@@ -51,6 +51,9 @@ class RegexPurifier {
 
   /// 编译结果缓存（key: 大小写标志 + pattern），避免每章净化时重复编译
   static final Map<String, RegExp> _regexCache = {};
+  /// 缓存上限：恶意/异常导入大量不同 pattern 时防止无界膨胀。
+  /// 超过上限整体清空（净化规则数量级远小于该值，清空代价可忽略）。
+  static const int _regexCacheMax = 256;
 
   const RegexPurifier({this.rules = const [], this.jsRules = const []});
 
@@ -93,7 +96,14 @@ class RegexPurifier {
   String purify(String input) {
     var result = input;
     for (final rule in rules) {
-      result = result.replaceAll(_compiled(rule), rule.replacement);
+      result = result.replaceAllMapped(
+        _compiled(rule),
+        // 字面替换语义：与 JS 路径（js_purifier._expandCaptures）保持一致。
+        // Dart 的 replaceAll 会把 replacement 中的 $ 当模板语法解析
+        // （$1/$&/$$ 会抛错或错误替换），而 Legado 净化规则的
+        // replacement 是纯文本（可含金额等字面 $），必须逐匹配字面替换。
+        (_) => rule.replacement,
+      );
     }
     return result;
   }
@@ -113,6 +123,9 @@ class RegexPurifier {
 
   static RegExp _compiled(PurifyRule rule) {
     final key = '${rule.caseSensitive ? 1 : 0}:${rule.pattern}';
+    if (_regexCache.length >= _regexCacheMax && !_regexCache.containsKey(key)) {
+      _regexCache.clear();
+    }
     return _regexCache.putIfAbsent(
       key,
       () => RegExp(rule.pattern, caseSensitive: rule.caseSensitive),

@@ -10,6 +10,9 @@ class TtsService {
   bool _isSpeaking = false;
   bool _stopRequested = false;
   Completer<void>? _stopCompleter;
+  /// 朗读会话序号：每次 speak 递增。stop/新 speak 使旧会话失效，
+  /// 防止快速 speak/stop 下旧循环继续推进或重复触发 onComplete。
+  int _sessionToken = 0;
 
   /// 当前语速（0.2-1.0，默认 0.5；持久化由调用方负责）
   double _speechRate = 0.5;
@@ -91,10 +94,12 @@ class TtsService {
     _isSpeaking = true;
     _stopRequested = false;
     _sleepTimerFired = false;
+    final token = ++_sessionToken;
     final stopCompleter = Completer<void>();
     _stopCompleter = stopCompleter;
     for (final chunk in chunks) {
-      if (_stopRequested) break;
+      // 被 stop/新会话取代后立即退出，不再推进剩余段落
+      if (_stopRequested || token != _sessionToken) break;
       try {
         await Future.any([
           _tts.speak(chunk),
@@ -106,6 +111,8 @@ class TtsService {
       }
     }
     _isSpeaking = false;
+    // 被新会话取代：本次朗读被中断，不触发回调（新会话负责收尾）
+    if (token != _sessionToken) return;
     // 定时停止到点已回调过 onComplete，避免重复回调
     if (!_sleepTimerFired) {
       onComplete?.call();
@@ -122,6 +129,7 @@ class TtsService {
     // 停止同时取消定时停止倒计时
     _cancelSleepTimer();
     _stopRequested = true;
+    _sessionToken++; // 使在途 speak 会话失效（即使平台 stop 未 resolve）
     _isSpeaking = false;
     _stopCompleter?.complete();
     _stopCompleter = null;

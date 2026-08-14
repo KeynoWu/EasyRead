@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../core/parser/node_tree.dart';
 import '../providers/reader_provider.dart';
 
 /// 图片/漫画阅读视图 — 横向 PageView 逐图阅读（对齐 legado 图片阅读）。
@@ -35,14 +34,6 @@ class _ImageReaderWidgetState extends ConsumerState<ImageReaderWidget> {
     super.dispose();
   }
 
-  /// 提取图片 URL 列表（过滤空值）：图片章节的"页"即一张图
-  List<String> _imageUrls(ReaderState state) => [
-        for (final node in state.nodes)
-          if (node.type == NodeType.image &&
-              node.imageUrl != null &&
-              node.imageUrl!.isNotEmpty)
-            node.imageUrl!,
-      ];
 
   /// 确保控制器存在并与当前图片索引同步（外部跳页/恢复进度时校正）
   void _ensureController(ReaderState state, List<String> urls) {
@@ -54,7 +45,13 @@ class _ImageReaderWidgetState extends ConsumerState<ImageReaderWidget> {
     }
     final current = _controller!.page?.round() ?? page;
     if (current != page) {
-      _controller!.jumpToPage(page);
+      // 帧末同步：build 期间 jumpToPage 触发控制器通知有
+      // markNeedsBuild during build 断言风险。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _controller?.hasClients == true) {
+          _controller!.jumpToPage(page);
+        }
+      });
     }
   }
 
@@ -69,7 +66,7 @@ class _ImageReaderWidgetState extends ConsumerState<ImageReaderWidget> {
   Widget build(BuildContext context) {
     final state = ref.watch(readerProvider);
     final notifier = ref.read(readerProvider.notifier);
-    final urls = _imageUrls(state);
+    final urls = state.imageUrls;
 
     // 章节切换：清空上一章的缩放状态与控制器（重建于 _ensureController）
     final chapterId = state.currentChapter?.id;
