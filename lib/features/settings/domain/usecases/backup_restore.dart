@@ -85,6 +85,12 @@ class BackupRestore {
       if (version != null && version is! num) {
         return '恢复失败: 备份文件版本字段无效';
       }
+      // 拒绝版本过新的备份：字段结构可能已变更，按当前结构解析
+      // 会静默按空恢复造成数据丢失；提示升级应用而非盲目恢复。
+      // 旧版本（< 2）按兼容解析（各字段已有缺失兜底）。
+      if (version != null && version > 2) {
+        return '恢复失败: 备份文件版本过新（v$version），请先升级应用后再恢复';
+      }
 
       // === 第一阶段：内存中完整解析与校验（不触碰现有数据） ===
       final books = <Book>[];

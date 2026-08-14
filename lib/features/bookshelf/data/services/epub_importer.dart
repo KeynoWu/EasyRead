@@ -13,13 +13,21 @@ class EpubImporter {
   static const int _maxChapterBytes = 10 * 1024 * 1024;
   /// 解压后总大小上限（1GB）
   static const int _maxTotalBytes = 1024 * 1024 * 1024;
+  /// zip 条目数上限（防海量小条目 zip：单文件 200MB 可含百万条记录，
+  /// 遍历头信息本身也消耗内存）
+  static const int _maxEntryCount = 50000;
 
   /// 解析 EPUB 文件，返回 (书名, 章节列表[(章节名, 内容)])
   static (String, List<(String, String)>) parseEpub(Uint8List bytes) {
     try {
       if (bytes.length > _maxInputBytes) return ('未命名书籍', []);
+      // archive 4.x 的 decodeBytes 为惰性解压：仅解析中央目录，
+      // ArchiveFile.content 首次访问时才 inflate。因此下面的声明大小
+      // 预检（f.size 来自 zip 头，不需解压）先于任何内容解压执行，
+      // 能挡住 zip bomb 的"逐文件解压"路径。
       final archive = ZipDecoder().decodeBytes(bytes);
       if (archive.isEmpty) return ('未命名书籍', []);
+      if (archive.files.length > _maxEntryCount) return ('未命名书籍', []);
 
       // zip bomb 防护：先按 zip 头声明的解压后大小拒绝，避免触发逐文件解压
       var totalBytes = 0;
@@ -188,6 +196,12 @@ class EpubImporter {
     }
     if (node is dom.Element) {
       switch (node.localName) {
+        case 'script':
+        case 'style':
+        case 'noscript':
+        case 'template':
+          // 脚本/样式内容不是正文，跳过其文本子节点
+          return;
         case 'br':
           buffer.writeln();
           return;

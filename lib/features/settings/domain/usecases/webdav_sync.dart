@@ -61,7 +61,8 @@ class WebDavSync {
   }
 
   Dio _dio(WebDavConfig config) {
-    return Dio(BaseOptions(
+    final baseUri = Uri.parse(config.url);
+    final dio = Dio(BaseOptions(
       // 无尾斜杠的 baseUrl 拼接相对路径会丢失最后一段（https://host/dav + file → https://host/file）
       baseUrl: _normalizeBaseUrl(config.url),
       connectTimeout: const Duration(seconds: 15),
@@ -70,6 +71,19 @@ class WebDavSync {
         'Authorization': 'Basic ${base64Encode(utf8.encode('${config.username}:${config.password}'))}',
       },
     ));
+    // 重定向防护：Dio 跟随跨域 3xx 时会带着 Basic Authorization 头到新域，
+    // 造成凭据泄露。onRequest 在每次重定向跳转时都会重新触发，
+    // 此处对离开 baseUrl 所在域的目标清除 Authorization（与主网络层
+    // DioClient._sanitizeRedirectHeaders 的策略一致）。
+    dio.interceptors.add(InterceptorsWrapper(onRequest: (options, handler) {
+      final reqHost = options.uri.host.toLowerCase();
+      final baseHost = baseUri.host.toLowerCase();
+      if (reqHost != baseHost) {
+        options.headers.remove('Authorization');
+      }
+      handler.next(options);
+    }));
+    return dio;
   }
 
   /// 规范化 baseUrl：确保以 / 结尾，避免相对路径拼接丢失路径段
@@ -109,11 +123,6 @@ class WebDavSync {
     } catch (e) {
       return '下载失败: ${_friendlyError(e)}';
     }
-  }
-
-  /// 测试连接（使用已保存配置）
-  Future<String?> testConnection() async {
-    return testConnectionWith(await loadConfig());
   }
 
   /// 用指定配置测试连接（表单未保存时也能测试当前输入）

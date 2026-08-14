@@ -90,6 +90,9 @@ class WebDavBackupScheduler {
 
   Timer? _timer;
 
+  /// 备份进行中标记：备份耗时超过周期时防止 periodic 并发触发上传
+  bool _backupInProgress = false;
+
   static WebDavBackupScheduler? _instance;
 
   /// 启动代次：start/stop 递增；_start 在各 await 后校验代次，
@@ -166,6 +169,18 @@ class WebDavBackupScheduler {
 
   /// 执行一次备份；任何失败都静默记录，不抛出、不更新 lastBackupAt。
   Future<void> _runBackup() async {
+    // 重叠防护：上一轮备份尚未完成（耗时超过周期）时跳过本轮，
+    // 避免并发上传互相覆盖 lastBackupAt 或重复推送同一份数据。
+    if (_backupInProgress) return;
+    _backupInProgress = true;
+    try {
+      await _doBackup();
+    } finally {
+      _backupInProgress = false;
+    }
+  }
+
+  Future<void> _doBackup() async {
     final backupRestore = this.backupRestore;
     if (backupRestore == null) {
       debugPrint('[WebDavBackupScheduler] 缺少 BackupRestore，跳过本次备份');

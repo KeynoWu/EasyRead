@@ -17,7 +17,6 @@ class HiveBoxes {
   static const String chapters = 'chapters';
   static const String readingProgress = 'reading_progress';
   static const String sourceSubscriptions = 'source_subscriptions';
-  static const String bookDetails = 'book_details';
 }
 
 /// 加密盒密钥在平台安全存储（iOS Keychain / Android Keystore）中的 key。
@@ -33,9 +32,16 @@ Future<List<int>> _getOrCreateCipherKey() async {
     if (existing != null) {
       final bytes = base64Decode(existing);
       if (bytes.length == 32) return bytes;
+      // 已存密钥损坏：绝不生成新密钥覆盖旧值——那会让全部加密盒
+      // 以新密钥打开失败、旧数据永久不可读。抛出明确错误终止启动，
+      // 由上层提示用户（数据问题可定位，而非静默丢失）。
+      throw StateError('Hive 加密密钥损坏（长度异常），拒绝覆盖；请检查安全存储或恢复备份');
     }
+  } on StateError {
+    rethrow;
   } catch (_) {
-    // 安全存储不可用时回退到新密钥（数据将无法解密读取，属极端降级）
+    // 安全存储不可用（读失败）时回退到新密钥：本会话数据仍可加密写入，
+    // 旧数据将无法解密读取（极端降级，但不会覆盖已存密钥）。
   }
   final key = Hive.generateSecureKey();
   try {

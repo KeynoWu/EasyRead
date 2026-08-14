@@ -8,7 +8,8 @@ class BookSourceRepositoryImpl implements BookSourceRepository {
   Box<BookSourceModel>? _cachedBox;
 
   Future<Box<BookSourceModel>> _box() async {
-    return _cachedBox ??= await Hive.openBox<BookSourceModel>(HiveBoxes.bookSources);
+    // 书源盒含 Cookie 等凭据：必须走加密打开（initHive 已打开实例会复用）
+    return _cachedBox ??= await openSensitiveBox<BookSourceModel>(HiveBoxes.bookSources);
   }
 
   @override

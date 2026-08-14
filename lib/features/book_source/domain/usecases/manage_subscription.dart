@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:hive/hive.dart';
+import '../../../../core/database/hive_init.dart';
 import '../../../../core/network/dio_client.dart';
 import '../entities/source_subscription.dart';
 import '../entities/book_source.dart';
@@ -51,7 +52,8 @@ class ManageSubscription {
   Box<SourceSubscriptionModel>? _cachedBox;
 
   Future<Box<SourceSubscriptionModel>> _box() async =>
-      _cachedBox ??= await Hive.openBox<SourceSubscriptionModel>(_boxName);
+      // 订阅盒含凭据：必须走加密打开（initHive 已打开实例会复用）
+    _cachedBox ??= await openSensitiveBox<SourceSubscriptionModel>(_boxName);
 
   Future<List<SourceSubscription>> getAll() async {
     final box = await _box();
@@ -98,6 +100,21 @@ class ManageSubscription {
       await box.put(subscription.id, model);
 
       return sources.length;
+    } on DioException catch (e) {
+      // 用户主动取消：不落库失败状态（保留原有 lastUpdateResult），
+      // 否则 UI 会显示"更新失败: 已取消"，用户视角像真的失败。
+      if (e.type == DioExceptionType.cancel &&
+          (cancelToken?.isCancelled ?? false)) {
+        return 0;
+      }
+      final box = await _box();
+      final model = SourceSubscriptionModel.fromEntity(
+        subscription.copyWith(
+          lastUpdateResult: '更新失败: ${_friendlyError(e)}',
+        ),
+      );
+      await box.put(subscription.id, model);
+      return 0;
     } catch (e) {
       final box = await _box();
       final model = SourceSubscriptionModel.fromEntity(
