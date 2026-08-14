@@ -208,7 +208,7 @@ class SearchBooks {
 
     Future<void> run() async {
       if (keyword.trim().isEmpty) {
-        controller.add(SearchProgress.empty);
+        _emit(controller, SearchProgress.empty);
         await controller.close();
         return;
       }
@@ -253,7 +253,7 @@ class SearchBooks {
             if (cancelToken?.isCancelled ?? false) return;
             failed++;
             completed++;
-            controller.add(SearchProgress(
+            _emit(controller, SearchProgress(
               results: [for (final k in order) groups[k]!],
               completed: completed,
               total: sources.length,
@@ -298,7 +298,7 @@ class SearchBooks {
           }
 
           completed++;
-          controller.add(SearchProgress(
+          _emit(controller, SearchProgress(
             results: [for (final k in order) groups[k]!],
             completed: completed,
             total: sources.length,
@@ -319,7 +319,7 @@ class SearchBooks {
           await controller.close();
           return;
         }
-        controller.add(SearchProgress(
+        _emit(controller, SearchProgress(
           results: [for (final k in order) groups[k]!],
           completed: completed,
           total: sources.length,
@@ -337,5 +337,13 @@ class SearchBooks {
       }
     });
     return controller.stream;
+  }
+
+  /// 流安全发送：订阅被取消（换词/页面销毁）后 controller 已 close，
+  /// 再 add 会抛 StateError（被 catchError 静默吞掉），这里显式守卫。
+  static void _emit(StreamController<SearchProgress> controller, SearchProgress p) {
+    if (!controller.isClosed) {
+      controller.add(p);
+    }
   }
 }

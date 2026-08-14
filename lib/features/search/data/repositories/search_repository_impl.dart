@@ -154,42 +154,13 @@ class SearchRepositoryImpl implements SearchRepository {
         );
       }
 
-      var responseHtml = html;
-      final loginCheckJs = source.loginCheckJs;
-      if (loginCheckJs != null && loginCheckJs.isNotEmpty) {
-        final cookieStore = <String, String>{};
-        final storedCookie = headers['Cookie'];
-        if (storedCookie != null && storedCookie.isNotEmpty) {
-          cookieStore[source.id] = storedCookie;
-          cookieStore[source.bookSourceUrl ?? ''] = storedCookie;
-          cookieStore[searchUrl] = storedCookie;
-        }
-        final loginValue = await JsRuleExecutor.execute(
-          responseHtml,
-          loginCheckJs,
-          baseUrl: searchUrl,
-          charset: charset,
-          cookies: cookieStore,
-        );
-        final updatedCookie = cookieStore[source.id] ??
-            cookieStore[source.bookSourceUrl ?? ''] ??
-            cookieStore[searchUrl] ??
-            '';
-        if (updatedCookie.isNotEmpty) {
-          headers['Cookie'] = updatedCookie;
-          _cookieCache[source.id] = _CookieSession(updatedCookie);
-          await _cookieJar.set(source.id, updatedCookie);
-        } else if (cookieStore.containsKey(source.id) ||
-            cookieStore.containsKey(source.bookSourceUrl ?? '') ||
-            cookieStore.containsKey(searchUrl)) {
-          headers.remove('Cookie');
-          _cookieCache.remove(source.id);
-          await _cookieJar.remove(source.id);
-        }
-        if (loginValue != null && loginValue.isNotEmpty) {
-          responseHtml = loginValue;
-        }
-      }
+      var responseHtml = await _applyLoginCheck(
+        source,
+        html,
+        searchUrl,
+        charset,
+        headers,
+      );
 
       final List<dynamic> items;
       final pageVariables = <String, String>{};

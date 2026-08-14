@@ -4,7 +4,7 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as encrypt;
-import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:easy_quickjs/quickjs.dart';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as parser;
@@ -92,12 +92,14 @@ class JsRuleExecutor {
     try {
       final m = await JsEngineManager.create().timeout(_initTimeout);
       _manager = m;
+      debugPrint('[quickjs] 引擎初始化成功，平台 JS 规则可用');
       return m;
-    } catch (_) {
+    } catch (e) {
       // 平台无 quickjs 原生库（如 iOS native assets 不可用）→ 降级；
       // 清除 init 锁，短时缓存失败避免反复超时
       _managerInit = null;
       _lastFailTime = DateTime.now();
+      debugPrint('[quickjs] 引擎初始化失败（5 分钟内降级）: $e');
       return null;
     }
   }
@@ -154,7 +156,7 @@ class JsRuleExecutor {
             getStringListCache: getStringListCache,
             cookies: cookies,
           ),
-        );
+        ).timeout(evalTimeout);
 
         if (hasAjax || hasCrypto || hasPost || hasHead) {
           // 第一遍：执行收集 ajax URL（占位 ajax 返回空可能引发 JS 异常，
@@ -164,7 +166,7 @@ class JsRuleExecutor {
               .timeout(evalTimeout);
           if (hasAjax) {
             final urls = _parseUrls(
-                (await engine.eval('JSON.stringify(__ajaxUrls)')).value);
+                (await engine.eval('JSON.stringify(__ajaxUrls)').timeout(evalTimeout)).value);
             if (urls.isNotEmpty) {
               final results = await _fetchAll(
                 urls,
@@ -172,10 +174,10 @@ class JsRuleExecutor {
                 charset: charset,
               );
               await engine.eval(
-                  'globalThis.__ajaxCache = ${jsonEncode(results)};');
+                  'globalThis.__ajaxCache = ${jsonEncode(results)};').timeout(evalTimeout);
             }
             // 切换为真实 ajax 桥
-            await engine.eval(_ajaxRealBridge);
+            await engine.eval(_ajaxRealBridge).timeout(evalTimeout);
           }
           if (hasPost || hasHead) {
             final networkOps = await _readNetworkOps(engine);
@@ -188,15 +190,15 @@ class JsRuleExecutor {
               await engine.eval(
                 'globalThis.__postCache = ${jsonEncode(results)};'
                 'globalThis.__headCache = ${jsonEncode(results)};',
-              );
+              ).timeout(evalTimeout);
             }
-            await engine.eval(_networkRealBridge);
+            await engine.eval(_networkRealBridge).timeout(evalTimeout);
           }
         }
 
         if (hasCrypto) {
           final crypto = await _JsCryptoCaches.fromEngine(engine);
-          await engine.eval(crypto.realBridge);
+          await engine.eval(crypto.realBridge).timeout(evalTimeout);
         }
 
         // 第二遍：执行取最终值
@@ -216,14 +218,14 @@ class JsRuleExecutor {
           getStringListCache: _extractGetStringListCache(html, body),
           cookies: cookies,
         ),
-      );
+      ).timeout(evalTimeout);
       await engine.eval('try { $body } catch (e) {}').timeout(evalTimeout);
       var ops = await _readOps(engine);
 
       if (hasAjax || hasPost || hasHead) {
         if (hasAjax) {
           final urls = _parseUrls(
-              (await engine.eval('JSON.stringify(__ajaxUrls)')).value);
+              (await engine.eval('JSON.stringify(__ajaxUrls)').timeout(evalTimeout)).value);
           if (urls.isNotEmpty) {
             final results = await _fetchAll(
               urls,
@@ -231,9 +233,9 @@ class JsRuleExecutor {
               charset: charset,
             );
             await engine.eval(
-                'globalThis.__ajaxCache = ${jsonEncode(results)};');
+                'globalThis.__ajaxCache = ${jsonEncode(results)};').timeout(evalTimeout);
           }
-          await engine.eval(_ajaxRealBridge);
+          await engine.eval(_ajaxRealBridge).timeout(evalTimeout);
         }
         if (hasPost || hasHead) {
           final networkOps = await _readNetworkOps(engine);
@@ -246,9 +248,9 @@ class JsRuleExecutor {
             await engine.eval(
               'globalThis.__postCache = ${jsonEncode(results)};'
               'globalThis.__headCache = ${jsonEncode(results)};',
-            );
+            ).timeout(evalTimeout);
           }
-          await engine.eval(_networkRealBridge);
+          await engine.eval(_networkRealBridge).timeout(evalTimeout);
         }
         // setContent 参数依赖 ajax/post 结果（第一遍记录为空）时，
         // 用真实结果重新记录一遍（此时 setContent 拿到真实 html）
@@ -267,17 +269,17 @@ class JsRuleExecutor {
       // Dart 重放 doc 流 → 与记录顺序一致的提取值表/元素快照 → 注入
       final replay = _replayOps(html, ops);
       final getValues = replay.getValues;
-      await engine.eval('globalThis.__getValues = ${jsonEncode(getValues)};');
+      await engine.eval('globalThis.__getValues = ${jsonEncode(getValues)};').timeout(evalTimeout);
       await engine.eval(
         'globalThis.__elementCaches = ${jsonEncode(replay.elementCaches)};'
         'globalThis.__getElementsIdx = 0;',
-      );
-      await engine.eval(_finalPrelude);
-      await engine.eval(_networkRealBridge);
-      await engine.eval(_cookieBridge(cookies ?? const {}, seed: false));
+      ).timeout(evalTimeout);
+      await engine.eval(_finalPrelude).timeout(evalTimeout);
+      await engine.eval(_networkRealBridge).timeout(evalTimeout);
+      await engine.eval(_cookieBridge(cookies ?? const {}, seed: false)).timeout(evalTimeout);
       if (hasCrypto) {
         final crypto = await _JsCryptoCaches.fromEngine(engine);
-        await engine.eval(crypto.realBridge);
+        await engine.eval(crypto.realBridge).timeout(evalTimeout);
       }
 
       // 最终遍：执行取最终值
@@ -369,7 +371,7 @@ class JsRuleExecutor {
 
   /// 读取记录遍的调用序列（['get'|'setContent', 参数..., docIndex]）
   static Future<List<List<dynamic>>> _readOps(JsEngine engine) async {
-    final json = (await engine.eval('JSON.stringify(__ops)')).value;
+    final json = (await engine.eval('JSON.stringify(__ops)').timeout(evalTimeout)).value;
     try {
       return (jsonDecode(json) as List).cast<List<dynamic>>();
     } catch (_) {
@@ -434,12 +436,18 @@ class JsRuleExecutor {
   /// 并发上限 [_maxConcurrentFetches]，避免恶意/异常规则一次性发起
   /// 大量请求拖垮内存与网络。
   static const int _maxConcurrentFetches = 4;
+  /// 单次执行最多拉取的 URL 总数：超限直接丢弃多余 URL，
+  /// 防止 java.ajax 无界推入导致 N/4×8s 的总时长失控与后台请求泄漏。
+  static const int _maxFetchUrls = 50;
 
   static Future<Map<String, String>> _fetchAll(
     List<String> urls, {
     String baseUrl = '',
     String? charset,
   }) async {
+    if (urls.length > _maxFetchUrls) {
+      urls = urls.sublist(0, _maxFetchUrls);
+    }
     final results = <String, String>{};
     final client = networkClient ?? DioClient();
     var nextIndex = 0;
@@ -474,10 +482,10 @@ class JsRuleExecutor {
   static Future<List<_NetworkOp>> _readNetworkOps(JsEngine engine) async {
     try {
       final posts = jsonDecode(
-        (await engine.eval('JSON.stringify(__postOps)')).value,
+        (await engine.eval('JSON.stringify(__postOps)').timeout(evalTimeout)).value,
       ) as List;
       final heads = jsonDecode(
-        (await engine.eval('JSON.stringify(__headOps)')).value,
+        (await engine.eval('JSON.stringify(__headOps)').timeout(evalTimeout)).value,
       ) as List;
       return [
         for (final raw in posts)
@@ -628,7 +636,7 @@ class JsRuleExecutor {
         baseUrl ?? '',
         page,
       );
-      await engine.eval(recordPrelude);
+      await engine.eval(recordPrelude).timeout(evalTimeout);
       await engine.eval('try { $body } catch (e) { "[]" }').timeout(evalTimeout);
 
       var caches = await _readTemplateCaches(engine, json, html);
@@ -654,7 +662,7 @@ class JsRuleExecutor {
           caches.putCache,
           caches.timeCache,
           collect: true,
-        ));
+        )).timeout(evalTimeout);
         await engine.eval('try { $body } catch (e) { "[]" }')
             .timeout(evalTimeout);
         final next = await _readTemplateCaches(engine, json, html);
@@ -684,7 +692,7 @@ class JsRuleExecutor {
         caches.uuidCache,
         caches.putCache,
         caches.timeCache,
-      ));
+      )).timeout(evalTimeout);
 
       final result = await engine.eval(body).timeout(evalTimeout);
       final decoded = jsonDecode(result.value);
@@ -744,6 +752,7 @@ globalThis.__hexEncode = [];
 globalThis.__hexDecode = [];
 globalThis.__uri = [];
 globalThis.__t2s = [];
+globalThis.__s2t = [];
 globalThis.__s2t = [];
 globalThis.__uuidCount = 0;
 globalThis.__putMap = {};
@@ -828,6 +837,7 @@ globalThis.__hexEncodeCache = ${jsonEncode(hexEncodeCache)};
 globalThis.__hexDecodeCache = ${jsonEncode(hexDecodeCache)};
 globalThis.__uriCache = ${jsonEncode(uriCache)};
 globalThis.__t2sCache = ${jsonEncode(t2sCache)};
+globalThis.__s2tCache = ${jsonEncode(s2tCache)};
 globalThis.__s2tCache = ${jsonEncode(s2tCache)};
 globalThis.__uuidCache = ${jsonEncode(uuidCache)};
 globalThis.__uuidIdx = 0;
@@ -974,7 +984,7 @@ globalThis.java = {
   ) async {
     try {
       final decoded =
-          jsonDecode((await engine.eval('JSON.stringify($name)')).value);
+          jsonDecode((await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value);
       return (decoded as List).map((e) => e.toString()).toList();
     } catch (_) {
       return [];
@@ -983,7 +993,7 @@ globalThis.java = {
 
   static Future<int> _readInt(JsEngine engine, String name) async {
     try {
-      return int.tryParse((await engine.eval('JSON.stringify($name)')).value) ??
+      return int.tryParse((await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value) ??
           0;
     } catch (_) {
       return 0;
@@ -993,7 +1003,7 @@ globalThis.java = {
   static Future<Map<String, String>> _readPutMap(JsEngine engine) async {
     try {
       final decoded =
-          jsonDecode((await engine.eval('JSON.stringify(__putMap)')).value);
+          jsonDecode((await engine.eval('JSON.stringify(__putMap)').timeout(evalTimeout)).value);
       return {
         if (decoded is Map)
           for (final entry in decoded.entries)
@@ -1023,7 +1033,7 @@ globalThis.java = {
     if (cookies == null) return;
     try {
       final decoded =
-          jsonDecode((await engine.eval('JSON.stringify(__cookieStore)')).value);
+          jsonDecode((await engine.eval('JSON.stringify(__cookieStore)').timeout(evalTimeout)).value);
       if (decoded is Map) {
         for (final entry in decoded.entries) {
           cookies[entry.key.toString()] = entry.value?.toString() ?? '';
@@ -1051,7 +1061,7 @@ globalThis.java = {
   static Future<List<_TimeArg>> _readTimeArgs(JsEngine engine) async {
     try {
       final decoded =
-          jsonDecode((await engine.eval('JSON.stringify(__time)')).value);
+          jsonDecode((await engine.eval('JSON.stringify(__time)').timeout(evalTimeout)).value);
       return [
         for (final raw in decoded as List)
           _TimeArg(
@@ -1071,7 +1081,7 @@ globalThis.java = {
   ) async {
     try {
       final decoded =
-          jsonDecode((await engine.eval('JSON.stringify($name)')).value);
+          jsonDecode((await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value);
       return [
         for (final raw in decoded as List)
           _HmacArg(
@@ -1092,7 +1102,7 @@ globalThis.java = {
   ) async {
     try {
       final decoded =
-          jsonDecode((await engine.eval('JSON.stringify($name)')).value);
+          jsonDecode((await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value);
       return [
         for (final raw in decoded as List)
           _AesArg(
@@ -1149,7 +1159,7 @@ globalThis.java = {
   ) async {
     try {
       final decoded =
-          jsonDecode((await engine.eval('JSON.stringify($name)')).value);
+          jsonDecode((await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value);
       return [
         for (final raw in decoded as List)
           _DigestArg(
@@ -1256,7 +1266,7 @@ globalThis.java = {
   ) async {
     try {
       final decoded =
-          jsonDecode((await engine.eval('JSON.stringify($name)')).value);
+          jsonDecode((await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value);
       return [
         for (final raw in decoded as List)
           _SymmetricArg(
@@ -1280,7 +1290,7 @@ globalThis.java = {
   ) async {
     try {
       final decoded =
-          jsonDecode((await engine.eval('JSON.stringify($name)')).value);
+          jsonDecode((await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value);
       return [
         for (final raw in decoded as List)
           _SymmetricOp(
@@ -1490,6 +1500,7 @@ globalThis.java = {
     final cache = <String, String>{};
     final re = RegExp(
         "java\\.(get|getElement)\\(\\s*('([^']*)'|\"([^\"]*)\")(?:,\\s*('([^']*)'|\"([^\"]*)\"))?\\s*\\)");
+    final doc = parser.parse(html);
     for (final m in re.allMatches(body)) {
       final sel = m.group(3) ?? m.group(4) ?? '';
       if (sel.isEmpty) continue;
@@ -1501,7 +1512,7 @@ globalThis.java = {
         cache[key] = baseUrl;
         continue;
       }
-      final elements = RuleEngine.queryIn(parser.parse(html), sel);
+      final elements = RuleEngine.queryIn(doc, sel);
       final value = elements.isEmpty
           ? ''
           : (RuleEngine.valueOf(elements.first, attr) ?? '');
@@ -1826,6 +1837,7 @@ globalThis.java.hexEncodeToString = (str) => { __hexEncode.push(String(str)); re
 globalThis.java.hexDecodeToString = (hex) => { __hexDecode.push(String(hex)); return ''; };
 globalThis.java.encodeURI = (str) => { __uri.push(String(str)); return ''; };
 globalThis.java.t2s = (str) => { __t2s.push(String(str)); return ''; };
+globalThis.java.s2t = (str) => { __s2t.push(String(str)); return ''; };
 globalThis.java.randomUUID = () => { __uuidCount++; return ''; };
 globalThis.java.timeFormat = (time, format) => { __time.push([String(time), format || '', 0]); return ''; };
 globalThis.java.timeFormatUTC = (time, format, shift) => { __time.push([String(time), format || '', shift || 0]); return ''; };
@@ -1989,6 +2001,7 @@ globalThis.java.htmlFormat = (s) => {
     'java.hex',
     'java.encodeURI',
     'java.t2s',
+    'java.s2t',
     'java.randomUUID',
     'java.HMac',
     'java.digestHex',
@@ -2181,6 +2194,7 @@ class _JsCryptoCaches {
   final Map<String, String> hexDecodeCache;
   final Map<String, String> uriCache;
   final Map<String, String> t2sCache;
+  final Map<String, String> s2tCache;
   final List<String> uuidCache;
   final Map<String, String> timeCache;
   final Map<String, String> symmetricDecryptStrCache;
@@ -2204,6 +2218,7 @@ class _JsCryptoCaches {
     required this.hexDecodeCache,
     required this.uriCache,
     required this.t2sCache,
+    required this.s2tCache,
     required this.uuidCache,
     required this.timeCache,
     required this.symmetricDecryptStrCache,
@@ -2237,6 +2252,7 @@ class _JsCryptoCaches {
         await JsRuleExecutor._readStringList(engine, '__hexDecode');
     final uriArgs = await JsRuleExecutor._readStringList(engine, '__uri');
     final t2sArgs = await JsRuleExecutor._readStringList(engine, '__t2s');
+    final s2tArgs = await JsRuleExecutor._readStringList(engine, '__s2t');
     final uuidCount = await JsRuleExecutor._readInt(engine, '__uuidCount');
     final timeArgs = await JsRuleExecutor._readTimeArgs(engine);
     final symmetricArgs =
@@ -2343,6 +2359,13 @@ class _JsCryptoCaches {
             ChineseConversionMode.simplified,
           ),
       },
+      s2tCache: {
+        for (final arg in s2tArgs)
+          arg: ChineseConversion.convert(
+            arg,
+            ChineseConversionMode.traditional,
+          ),
+      },
       uuidCache: List.generate(uuidCount, (_) => JsRuleExecutor._uuid4()),
       timeCache: {
         for (final arg in timeArgs)
@@ -2417,6 +2440,7 @@ globalThis.java.hexEncodeToString = (str) => __hexEncodeCache[String(str)] || ''
 globalThis.java.hexDecodeToString = (hex) => __hexDecodeCache[String(hex)] || '';
 globalThis.java.encodeURI = (str) => __uriCache[String(str)] || '';
 globalThis.java.t2s = (str) => __t2sCache[String(str)] || '';
+globalThis.java.s2t = (str) => __s2tCache[String(str)] || '';
 globalThis.java.randomUUID = () => __uuidCache[__uuidIdx++] || '';
 globalThis.java.timeFormat = (time, format) => __timeCache[String(time) + '|' + (format || '') + '|0'] || '';
 globalThis.java.timeFormatUTC = (time, format, shift) => __timeCache[String(time) + '|' + (format || '') + '|' + (shift || 0)] || '';

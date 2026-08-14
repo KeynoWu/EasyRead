@@ -233,9 +233,14 @@ class ImportBookSource {
       try {
         final list = (jsonDecode(text) as List);
         final sources = <BookSource>[];
+        final seen = <String>{};
         for (final item in list) {
           final parsed = parser.execute(jsonEncode(item));
-          parsed.fold((l) => null, (r) => sources.add(r));
+          parsed.fold((l) => null, (r) {
+            // 按 URL 去重：同一书源重复导入不累积（无 URL 时按稳定 id）
+            final key = r.bookSourceUrl?.trim().toLowerCase() ?? r.id;
+            if (seen.add(key)) sources.add(r);
+          });
         }
         if (sources.isEmpty) return const Left('未解析到有效书源');
         return Right(sources);

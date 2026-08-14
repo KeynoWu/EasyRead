@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:html/parser.dart' as parser;
+import '../../../../core/purification/purify_pattern_guard.dart';
 import 'package:html/dom.dart' as dom;
 import 'js_template.dart';
 import 'json_path.dart';
@@ -122,29 +123,6 @@ class RuleEngine {
         .where((t) => t != null && t.isNotEmpty)
         .cast<String>()
         .toList();
-  }
-
-  static String? extractAttr(String html, String? rule) {
-    if (rule == null || rule.isEmpty) return null;
-    final replace = _replaceSuffixOf(rule);
-    if (replace != null) {
-      final base = extractAttr(html, replace.baseRule);
-      return base == null ? null : _applyReplaceSuffixToValue(base, replace);
-    }
-    final multi = _multiRuleType(rule);
-    if (multi == '||') {
-      for (final alt in _splitRule(rule, '||')) {
-        final value = extractAttr(html, alt);
-        if (value != null && value.isNotEmpty) return value;
-      }
-      return null;
-    }
-    if (multi != null) {
-      final list = extractTextList(html, rule);
-      return list.isEmpty ? null : list.join('\n');
-    }
-    final doc = parser.parse(html);
-    return _extractTextFromDoc(doc, rule);
   }
 
   static List<dynamic> extractElements(String html, String? rule) {
@@ -313,15 +291,20 @@ class RuleEngine {
 
   /// 执行 AllInOne 正则链：前面的正则逐级缩小范围，最后一个正则的每次
   /// 匹配生成一个捕获组列表（group0 为整段匹配，group1..n 为捕获组）。
+  /// 正则来自用户导入的书源，为同步执行（主 isolate 无超时），
+  /// 对灾难性回溯模式（ReDoS）直接拒绝，避免冻结 UI。
   static List<dynamic> _regexElements(String html, String rule) {
     final patterns = _splitRule(rule, '&&')
         .map((p) => p.trim())
         .where((p) => p.isNotEmpty)
         .toList();
     if (patterns.isEmpty) return [];
+    // 链长度上限：恶意超长链（数万条正则）本身即 DoS 载体
+    if (patterns.length > 32) return [];
 
     var source = html;
     for (var i = 0; i < patterns.length; i++) {
+      if (PurifyPatternGuard.hasCatastrophicBacktracking(patterns[i])) return [];
       final RegExp regex;
       try {
         regex = RegExp(patterns[i]);
@@ -666,6 +649,10 @@ class RuleEngine {
     String value,
     _ReplaceSuffix suffix,
   ) {
+    // 同步执行用户正则：灾难性回溯模式直接放弃替换（返回原值）
+    if (PurifyPatternGuard.hasCatastrophicBacktracking(suffix.pattern)) {
+      return value;
+    }
     try {
       final regex = RegExp(suffix.pattern);
       if (suffix.replaceFirst) {
@@ -1036,13 +1023,24 @@ class _RuleParts {
     final cached = _cascadeCache[selector];
     if (cached != null) return cached.isEmpty ? null : cached;
     final steps = _parseCascade(selector);
-    _cascadeCache[selector] = steps;
+    _putCascadeCache(selector, steps);
     return steps.isEmpty ? null : steps;
   }
 }
 
-/// 级联解析缓存（规则字符串有限，防每次查询重复解析）
+/// 级联解析缓存（规则字符串有限，防每次查询重复解析）。
+/// 上限 [_cascadeCacheMax]：导入大量不同选择器时防止无界增长（超限清空，
+/// 解析代价远低于内存失控）。
 final Map<String, List<_CascadeStep>> _cascadeCache = {};
+const int _cascadeCacheMax = 512;
+
+void _putCascadeCache(String selector, List<_CascadeStep> steps) {
+  if (_cascadeCache.length >= _cascadeCacheMax &&
+      !_cascadeCache.containsKey(selector)) {
+    _cascadeCache.clear();
+  }
+  _cascadeCache[selector] = steps;
+}
 
 class _CascadeStep {
   final String css;
@@ -1219,16 +1217,27 @@ _CascadeStep? _parseStep(String segment) {
 }
 
 /// 解析旧式索引串：`.0` / `.0:2` / `!0` / `!-1:2`。
+/// 冒号分隔按**范围**语义解析（与 `[]` 语法的 [_IndexRange] 一致），
+/// 修复旧实现把 `.0:2` 当作离散索引 {0, 2}（丢 1）与 Legado 语义相悖的问题。
 (List<Object>, bool)? _parseLegacyIndexes(String suffix) {
   if (suffix.isEmpty) return null;
   final separator = suffix[0];
   if (separator != '.' && separator != '!') return null;
   final indexBody = suffix.substring(1);
   if (!RegExp(r'^-?\d+(?::-?\d+)*$').hasMatch(indexBody)) return null;
-  return (
-    [for (final part in indexBody.split(':')) int.parse(part)],
-    separator == '!',
-  );
+  final parts = indexBody.split(':').map(int.parse).toList();
+  if (parts.length == 1) {
+    return ([parts[0]], separator == '!');
+  }
+  final step = parts.length > 2 ? parts[2] : 1;
+  return ([
+    _IndexRange(
+      start: parts[0],
+      end: parts[1],
+      step: step,
+      reverse: parts[0] == -1 && parts[1] == 0 && step == 1,
+    ),
+  ], separator == '!');
 }
 
 /// 解析 `[]` 索引集合：数字、`start:end`、`start:end:step`、`-1:0` 反向。
@@ -1248,6 +1257,9 @@ List<Object>? _parseIndexSet(String body) {
       final start = int.parse(range.group(1)!);
       final end = int.parse(range.group(2)!);
       final step = range.group(3) == null ? 1 : int.parse(range.group(3)!);
+      // step=0 会在 _expandIndexes 中形成 "i += 0" 死循环冻结主 isolate
+      // （[5:0:0] 这类用户可控规则），直接拒绝该索引集（按无索引处理）。
+      if (step == 0) return null;
       result.add(_IndexRange(
         start: start,
         end: end,

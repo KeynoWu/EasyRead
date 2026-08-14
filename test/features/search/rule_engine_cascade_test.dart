@@ -42,7 +42,6 @@ void main() {
 
     test('attr 提取与单步 CSS 不回归', () {
       const html = '<a class="d" href="http://x.com/1">详情</a>';
-      expect(RuleEngine.extractAttr(html, 'a.d@href'), 'http://x.com/1');
       expect(RuleEngine.extractText(html, 'a.d'), '详情');
     });
 
@@ -130,9 +129,10 @@ void main() {
           <span>a</span><span>b</span><span>c</span><span>d</span>
         </div>
       ''';
+      // 冒号分隔为范围语义（0 到 2 含端点），与 [0:2] 一致
       expect(
         RuleEngine.extractTextList(html, 'class.list@tag.span.0:2@text'),
-        ['a', 'c'],
+        ['a', 'b', 'c'],
       );
       expect(
         RuleEngine.extractTextList(html, 'class.list@tag.span!1@text'),

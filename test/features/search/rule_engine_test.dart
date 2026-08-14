@@ -25,11 +25,6 @@ void main() {
       expect(result, '书籍A');
     });
 
-    test('extractAttr should get attribute by selector@attr', () {
-      final result = RuleEngine.extractAttr(sampleHtml, 'img.cover@src');
-      expect(result, 'http://example.com/a.jpg');
-    });
-
     test('extractTextList should get all texts', () {
       final results = RuleEngine.extractTextList(sampleHtml, 'h3.title');
       expect(results.length, 2);
