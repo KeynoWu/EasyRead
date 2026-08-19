@@ -65,7 +65,7 @@ class BookModelAdapter extends TypeAdapter<BookModel> {
 
   @override
   BookModel read(BinaryReader reader) {
-    return BookModel(
+    final model = BookModel(
       id: reader.readString(),
       name: reader.readString(),
       author: reader.readBool() ? reader.readString() : null,
@@ -76,6 +76,12 @@ class BookModelAdapter extends TypeAdapter<BookModel> {
       lastReadAt: DateTime.fromMillisecondsSinceEpoch(reader.readInt()),
       group: reader.readBool() ? reader.readString() : null,
     );
+    // schema 版本标记（写入末尾）：旧数据无该字节（availableBytes==0）则跳过，
+    // 向后兼容；新增字段时据此做版本迁移。
+    if (reader.availableBytes > 0) {
+      reader.readInt();
+    }
+    return model;
   }
 
   @override
@@ -94,5 +100,10 @@ class BookModelAdapter extends TypeAdapter<BookModel> {
     writer.writeInt(obj.lastReadAt.millisecondsSinceEpoch);
     writer.writeBool(obj.group != null);
     if (obj.group != null) writer.writeString(obj.group!);
+    // 当前 schema 版本
+    writer.writeInt(kBookModelSchemaVersion);
   }
 }
+
+/// BookModelAdapter 写入的 schema 版本。
+const int kBookModelSchemaVersion = 1;

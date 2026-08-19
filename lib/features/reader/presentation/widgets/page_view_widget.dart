@@ -1,8 +1,9 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/pagination/page_layout.dart';
-import '../../core/pagination/phonetic_annotator.dart';
 import '../../core/parser/node_tree.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../providers/reader_provider.dart';
@@ -20,22 +21,22 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
   PageController? _controller;
   /// 上次上报的视口尺寸：仅尺寸变化时才注册 postFrame，避免每次 build 都上报
   Size? _lastReportedSize;
+  /// 底部栏时间显示：每分钟刷新
+  DateTime _now = DateTime.now();
+  Timer? _clockTimer;
 
   @override
   void initState() {
     super.initState();
-    // 注音开关：异步从独立 Hive 盒加载 + 监听变更，切换实时生效
-    PhoneticSettings.ensureLoaded();
-    PhoneticSettings.enabled.addListener(_onPhoneticChanged);
-  }
-
-  void _onPhoneticChanged() {
-    if (mounted) setState(() {});
+    // 底部时间每分钟刷新
+    _clockTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() => _now = DateTime.now());
+    });
   }
 
   @override
   void dispose() {
-    PhoneticSettings.enabled.removeListener(_onPhoneticChanged);
+    _clockTimer?.cancel();
     _controller?.dispose();
     super.dispose();
   }
@@ -51,18 +52,19 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
 
   /// 确保控制器存在并与当前页码同步。
   /// 双栏时 PageView 索引是屏幕序号（= 页码 ~/ 2），竖屏时索引即页码。
+  /// 控制器只在 build 首次需要时创建一次（无 dispose 副作用）；后续页码
+  /// 同步移到 postFrame（build 里 jumpToPage 会触发 markNeedsBuild during
+  /// build 断言）。
   void _ensureController(ReaderState state) {
     final page = _isDualColumn(state)
         ? state.currentPage ~/ 2
         : state.currentPage;
-    if (_controller == null || !_controller!.hasClients) {
-      _controller?.dispose();
+    if (_controller == null) {
       _controller = PageController(initialPage: page);
       return;
     }
     // 外部页码变化（如布局调整重置为 0）时同步。
-    // 帧末执行：build 期间 jumpToPage 会触发 PageController 通知
-    // （markNeedsBuild during build 断言风险），移到 postFrame。
+    if (!_controller!.hasClients) return; // 首次布局前无需同步
     final current = _controller!.page?.round() ?? page;
     if (current != page) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -73,12 +75,44 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
     }
   }
 
+  /// 正文三区点击：左侧上一页（首屏切上一章）、右侧下一页（末屏切下一章）、
+  /// 中间呼出菜单。双栏时以"屏"为单位判断边界（当前页=左栏页）。
+  void _handleTap(
+    double x,
+    double width,
+    ReaderState state,
+    ReaderNotifier notifier,
+  ) {
+    // 原生触感：点击翻页/切章轻震动，增强"实体书"手感
+    HapticFeedback.lightImpact();
+    if (x < width / 3) {
+      final atStart = state.currentPage <= 0;
+      if (atStart) {
+        notifier.prevChapter();
+      } else {
+        notifier.prevPage();
+      }
+    } else if (x > width * 2 / 3) {
+      final pageCount = state.pages.length;
+      final atEnd = pageCount <= 0 || state.currentPage >= pageCount - 1;
+      if (atEnd) {
+        notifier.nextChapter();
+      } else {
+        notifier.nextPage();
+      }
+    } else {
+      notifier.toggleSettings();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(readerProvider);
     final notifier = ref.read(readerProvider.notifier);
 
-    if (state.isLoading) {
+    // 首次加载（无既有内容）居中转圈；切章加载保留旧内容，
+    // 由下方 Stack 叠加顶部细进度条，避免整屏替换转圈打断阅读。
+    if (state.isLoading && state.currentChapter == null) {
       return const Center(child: CircularProgressIndicator());
     }
 
@@ -114,7 +148,9 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
       return const ReaderScrollView();
     }
 
-    return Container(
+    return Stack(
+      children: [
+        Container(
       color: state.theme.backgroundColor,
       child: Column(
         children: [
@@ -144,19 +180,47 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
 
               _ensureController(state);
 
-              return GestureDetector(
-                onTap: notifier.toggleSettings,
-                child: PageView.builder(
-                  controller: _controller,
-                  itemCount: _screenCount(state),
-                  onPageChanged: (index) {
-                    // 双栏：屏幕序号 → 左栏页码（每屏两页）；竖屏：索引即页码
-                    final page = _isDualColumn(state) ? index * 2 : index;
-                    if (page != state.currentPage) {
-                      notifier.jumpToPage(page);
-                    }
-                  },
-                  itemBuilder: (context, index) => _buildScreen(state, index),
+              // 末页右滑 / 首页左滑（iOS 回弹或 Android 辉光）触发切章；
+              // 点击三区：左=上一页（首屏切上一章）、右=下一页（末屏切下一章）、
+              // 中间=呼出菜单。加载中不响应，避免切章后残留手势连锁触发。
+              return NotificationListener<OverscrollNotification>(
+                onNotification: (notification) {
+                  if (state.isLoading) return false;
+                  final pageCount = state.pages.length;
+                  final atEnd =
+                      pageCount <= 0 || state.currentPage >= pageCount - 1;
+                  final atStart = state.currentPage <= 0;
+                  if (notification.overscroll < 0 && atEnd) {
+                    notifier.nextChapter();
+                  } else if (notification.overscroll > 0 && atStart) {
+                    notifier.prevChapter();
+                  }
+                  return false;
+                },
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapUp: (details) => _handleTap(
+                    details.localPosition.dx,
+                    area.maxWidth,
+                    state,
+                    notifier,
+                  ),
+                  // 注意：此处不再包裹 SelectionArea——它注册的 tap 手势会与
+                  // 三区点击竞争并拦截点击，导致"点中间呼不出菜单"。
+                  // 选词复制（UX-09）需改用不与点击冲突的方案（见报告）。
+                  child: PageView.builder(
+                    controller: _controller,
+                    itemCount: _screenCount(state),
+                    onPageChanged: (index) {
+                      // 双栏：屏幕序号 → 左栏页码（每屏两页）；竖屏：索引即页码
+                      final page = _isDualColumn(state) ? index * 2 : index;
+                      if (page != state.currentPage) {
+                        notifier.jumpToPage(page);
+                      }
+                    },
+                    itemBuilder: (context, index) =>
+                        _buildScreen(state, index),
+                  ),
                 ),
               );
             }),
@@ -168,6 +232,12 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
               color: state.theme.backgroundColor,
               child: Row(
                 children: [
+                  // 当前时间
+                  Text(
+                    '${_now.hour.toString().padLeft(2, '0')}:${_now.minute.toString().padLeft(2, '0')}',
+                    style: TextStyle(color: state.theme.textColor, fontSize: 12),
+                  ),
+                  const SizedBox(width: 12),
                   Text(
                     state.pages.isEmpty
                         ? '0/0'
@@ -192,20 +262,20 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
             ),
           ],
         ),
-      );
-  }
-
-  /// 正文文本渲染：注音开关开启时用 Text.rich 给生僻字加小字拼音，
-  /// 关闭时原样 Text（默认路径零开销）。开关值来自 PhoneticSettings
-  /// （initState 异步加载 + 盒变更监听实时刷新）。
-  Widget _buildNodeText(String text, TextStyle style, ReaderState state) {
-    if (!PhoneticSettings.enabled.value) {
-      return Text(text, style: style);
-    }
-    return PhoneticAnnotator.annotatedText(
-      text,
-      style: style,
-      annotationColor: state.theme.textColor.withValues(alpha: 0.45),
+      ),
+        // 切章加载中：顶部细进度条提示，不打断旧内容阅读
+        if (state.isLoading)
+          const Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: LinearProgressIndicator(
+              minHeight: 2,
+              backgroundColor: Colors.transparent,
+              color: AppColors.tint,
+            ),
+          ),
+      ],
     );
   }
 
@@ -221,49 +291,46 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
             case NodeType.paragraph:
               return Padding(
                 padding: EdgeInsets.only(bottom: state.layoutConfig.paragraphSpacing),
-                child: _buildNodeText(
+                child: Text(
                   node.text,
-                  TextStyle(
+                  style: TextStyle(
                     fontSize: state.layoutConfig.fontSize,
                     height: state.layoutConfig.lineHeight,
                     color: state.theme.textColor,
                     fontFamily: state.layoutConfig.fontFamily,
                     fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
                   ),
-                  state,
                 ),
               );
             case NodeType.heading:
               return Padding(
                 padding: EdgeInsets.only(bottom: state.layoutConfig.paragraphSpacing),
-                child: _buildNodeText(
+                child: Text(
                   node.text,
-                  TextStyle(
+                  style: TextStyle(
                     fontSize: state.layoutConfig.fontSize + 4,
                     fontWeight: FontWeight.w700,
                     color: state.theme.textColor,
                     fontFamily: state.layoutConfig.fontFamily,
                     fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
                   ),
-                  state,
                 ),
               );
             case NodeType.lineBreak:
               return const SizedBox(height: 8);
             case NodeType.text:
-              return _buildNodeText(
+              return Text(
                 node.text,
-                TextStyle(
+                style: TextStyle(
                   fontSize: state.layoutConfig.fontSize,
                   height: state.layoutConfig.lineHeight,
                   color: state.theme.textColor,
                   fontFamily: state.layoutConfig.fontFamily,
                   fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
                 ),
-                state,
               );
             case NodeType.image:
-              return _buildImage(node, state);
+              return const SizedBox.shrink();
           }
         }).toList(),
       ),
@@ -330,32 +397,6 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
     );
   }
 
-  Widget _buildImage(TextNode node, ReaderState state) {
-    final url = node.imageUrl;
-    return Container(
-      height: 200,
-      width: double.infinity,
-      color: state.theme.textColor.withValues(alpha: 0.1),
-      child: url == null || url.isEmpty
-          ? const Center(child: Icon(Icons.image, size: 48))
-          : Image.network(
-              url,
-              fit: BoxFit.cover,
-              errorBuilder: (_, _, _) =>
-                  const Center(child: Icon(Icons.image, size: 48)),
-              loadingBuilder: (context, child, progress) =>
-                  progress == null
-                      ? child
-                      : const Center(
-                          child: SizedBox(
-                            width: 28,
-                            height: 28,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        ),
-            ),
-    );
-  }
 }
 
 /// 覆盖翻页：正向翻页时下一页从右侧盖上来，反向时上一页留在原位、当前页向右滑出

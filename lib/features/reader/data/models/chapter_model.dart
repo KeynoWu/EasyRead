@@ -66,7 +66,7 @@ class ChapterModelAdapter extends TypeAdapter<ChapterModel> {
 
   @override
   ChapterModel read(BinaryReader reader) {
-    return ChapterModel(
+    final model = ChapterModel(
       id: reader.readString(),
       bookId: reader.readString(),
       title: reader.readString(),
@@ -75,6 +75,9 @@ class ChapterModelAdapter extends TypeAdapter<ChapterModel> {
       sourceId: reader.readBool() ? reader.readString() : null,
       cachedAt: reader.readBool() ? DateTime.fromMillisecondsSinceEpoch(reader.readInt()) : null,
     );
+    // schema 版本标记：旧数据无该字节则跳过，向后兼容。
+    if (reader.availableBytes > 0) reader.readInt();
+    return model;
   }
 
   @override
@@ -88,5 +91,9 @@ class ChapterModelAdapter extends TypeAdapter<ChapterModel> {
     if (obj.sourceId != null) writer.writeString(obj.sourceId!);
     writer.writeBool(obj.cachedAt != null);
     if (obj.cachedAt != null) writer.writeInt(obj.cachedAt!.millisecondsSinceEpoch);
+    writer.writeInt(kChapterSchemaVersion);
   }
 }
+
+/// ChapterModelAdapter 写入的 schema 版本。
+const int kChapterSchemaVersion = 1;

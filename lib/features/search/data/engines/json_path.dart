@@ -9,6 +9,9 @@ import 'dart:convert';
 class JsonPathEngine {
   static final JsonPathEngine instance = JsonPathEngine();
 
+  /// 递归下降 / 过滤表达式嵌套的最大深度，防止恶意深层 JSON 导致栈溢出。
+  static const int maxDepth = 128;
+
   /// 查询 JSON 数据，返回匹配值列表（空 = 无结果）
   List<dynamic> query(dynamic data, String path) {
     if (path.isEmpty) return [];
@@ -46,7 +49,7 @@ class JsonPathEngine {
         }
       case _RecursiveStep(:final key):
         for (final node in current) {
-          _collectRecursive(node, key, result);
+          _collectRecursive(node, key, result, 0);
         }
       case _AllStep():
         for (final node in current) {
@@ -115,17 +118,24 @@ class JsonPathEngine {
     return parts;
   }
 
-  /// 递归收集所有层级 Map 中 [key] 的值
-  void _collectRecursive(dynamic node, String key, List<dynamic> out) {
+  /// 递归收集所有层级 Map 中 [key] 的值；超过 [JsonPathEngine.maxDepth]
+  /// 深度后停止下降，防止深嵌套 JSON 栈溢出。
+  void _collectRecursive(
+    dynamic node,
+    String key,
+    List<dynamic> out,
+    int depth,
+  ) {
+    if (depth > JsonPathEngine.maxDepth) return;
     if (node is Map) {
       final value = node[key];
       if (value != null) out.add(value);
       for (final child in node.values) {
-        _collectRecursive(child, key, out);
+        _collectRecursive(child, key, out, depth + 1);
       }
     } else if (node is List) {
       for (final child in node) {
-        _collectRecursive(child, key, out);
+        _collectRecursive(child, key, out, depth + 1);
       }
     }
   }
@@ -328,6 +338,7 @@ class _FilterOperand extends _FilterExpr {
 class _FilterParser {
   final String src;
   int pos = 0;
+  int _depth = 0;
   _FilterParser(this.src);
 
   bool get _end => pos >= src.length;
@@ -400,8 +411,11 @@ class _FilterParser {
     _skipWs();
     if (_end) return null;
     if (src[pos] == '(') {
+      if (_depth >= JsonPathEngine.maxDepth) return null;
+      _depth++;
       pos++;
       final inner = _parseOr();
+      _depth--;
       _skipWs();
       if (inner == null || _end || src[pos] != ')') return null;
       pos++;

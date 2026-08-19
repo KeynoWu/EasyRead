@@ -5,7 +5,6 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../../features/bookshelf/data/models/book_model.dart';
 import '../../features/book_source/data/models/book_source_model.dart';
-import '../../features/book_source/data/models/source_subscription_model.dart';
 import '../../features/reader/data/models/chapter_model.dart';
 import '../../features/reader/data/models/reading_progress_model.dart';
 
@@ -16,7 +15,6 @@ class HiveBoxes {
   static const String settings = 'settings';
   static const String chapters = 'chapters';
   static const String readingProgress = 'reading_progress';
-  static const String sourceSubscriptions = 'source_subscriptions';
 }
 
 /// 加密盒密钥在平台安全存储（iOS Keychain / Android Keystore）中的 key。
@@ -40,8 +38,12 @@ Future<List<int>> _getOrCreateCipherKey() async {
   } on StateError {
     rethrow;
   } catch (_) {
-    // 安全存储不可用（读失败）时回退到新密钥：本会话数据仍可加密写入，
-    // 旧数据将无法解密读取（极端降级，但不会覆盖已存密钥）。
+    // 安全存储读取失败（如 Keystore/Keychain 瞬时不可用）时：
+    // 绝不生成新密钥并写回——那会覆盖可能已存在的旧密钥，导致全部加密盒
+    // 永久不可读。此时使用仅内存态的临时密钥：本会话新写入的数据加密后
+    // 下次启动无法解密（明确降级），但旧密钥物理上保持原样，可恢复。
+    debugPrint('[hive] 安全存储读取失败：使用临时内存密钥，不写回以避免覆盖已有密钥');
+    return Hive.generateSecureKey();
   }
   final key = Hive.generateSecureKey();
   try {
@@ -143,7 +145,6 @@ Future<void> initHive() async {
   await Hive.initFlutter();
   Hive.registerAdapter(BookModelAdapter());
   Hive.registerAdapter(BookSourceModelAdapter());
-  Hive.registerAdapter(SourceSubscriptionModelAdapter());
   Hive.registerAdapter(ChapterModelAdapter());
   Hive.registerAdapter(ReadingProgressModelAdapter());
   await Hive.openBox<BookModel>(HiveBoxes.bookshelf);
@@ -152,5 +153,4 @@ Future<void> initHive() async {
   await openSensitiveBox(HiveBoxes.settings);
   await Hive.openBox<ChapterModel>(HiveBoxes.chapters);
   await Hive.openBox<ReadingProgressModel>(HiveBoxes.readingProgress);
-  await openSensitiveBox<SourceSubscriptionModel>(HiveBoxes.sourceSubscriptions);
 }

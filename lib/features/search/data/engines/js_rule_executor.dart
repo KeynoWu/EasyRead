@@ -147,34 +147,39 @@ class JsRuleExecutor {
         final cache = _extractLiterals(html, baseUrl ?? '', body);
         final getStringCache = _extractGetStringCache(html, body);
         final getStringListCache = _extractGetStringListCache(html, body);
-        await engine.eval(
-          _prelude(
-            html,
-            baseUrl ?? '',
-            cache,
-            getStringCache: getStringCache,
-            getStringListCache: getStringListCache,
-            cookies: cookies,
-          ),
-        ).timeout(evalTimeout);
+        await engine
+            .eval(
+              _prelude(
+                html,
+                baseUrl ?? '',
+                cache,
+                getStringCache: getStringCache,
+                getStringListCache: getStringListCache,
+                cookies: cookies,
+              ),
+            )
+            .timeout(evalTimeout);
 
         if (hasAjax || hasCrypto || hasPost || hasHead) {
           // 第一遍：执行收集 ajax URL（占位 ajax 返回空可能引发 JS 异常，
           // 用 try-catch 包裹——ajax 调用在异常前已记录 URL）
-          await engine
-              .eval('try { $body } catch (e) {}')
-              .timeout(evalTimeout);
+          await engine.eval('try { $body } catch (e) {}').timeout(evalTimeout);
           if (hasAjax) {
             final urls = _parseUrls(
-                (await engine.eval('JSON.stringify(__ajaxUrls)').timeout(evalTimeout)).value);
+              (await engine
+                      .eval('JSON.stringify(__ajaxUrls)')
+                      .timeout(evalTimeout))
+                  .value,
+            );
             if (urls.isNotEmpty) {
               final results = await _fetchAll(
                 urls,
                 baseUrl: baseUrl ?? '',
                 charset: charset,
               );
-              await engine.eval(
-                  'globalThis.__ajaxCache = ${jsonEncode(results)};').timeout(evalTimeout);
+              await engine
+                  .eval('globalThis.__ajaxCache = ${jsonEncode(results)};')
+                  .timeout(evalTimeout);
             }
             // 切换为真实 ajax 桥
             await engine.eval(_ajaxRealBridge).timeout(evalTimeout);
@@ -187,10 +192,12 @@ class JsRuleExecutor {
                 baseUrl: baseUrl ?? '',
                 charset: charset,
               );
-              await engine.eval(
-                'globalThis.__postCache = ${jsonEncode(results)};'
-                'globalThis.__headCache = ${jsonEncode(results)};',
-              ).timeout(evalTimeout);
+              await engine
+                  .eval(
+                    'globalThis.__postCache = ${jsonEncode(results)};'
+                    'globalThis.__headCache = ${jsonEncode(results)};',
+                  )
+                  .timeout(evalTimeout);
             }
             await engine.eval(_networkRealBridge).timeout(evalTimeout);
           }
@@ -210,30 +217,37 @@ class JsRuleExecutor {
       }
 
       // setContent 路径：记录-重放（见类注释）
-      await engine.eval(
-        _recordPrelude(
-          html,
-          baseUrl ?? '',
-          getStringCache: _extractGetStringCache(html, body),
-          getStringListCache: _extractGetStringListCache(html, body),
-          cookies: cookies,
-        ),
-      ).timeout(evalTimeout);
+      await engine
+          .eval(
+            _recordPrelude(
+              html,
+              baseUrl ?? '',
+              getStringCache: _extractGetStringCache(html, body),
+              getStringListCache: _extractGetStringListCache(html, body),
+              cookies: cookies,
+            ),
+          )
+          .timeout(evalTimeout);
       await engine.eval('try { $body } catch (e) {}').timeout(evalTimeout);
       var ops = await _readOps(engine);
 
       if (hasAjax || hasPost || hasHead) {
         if (hasAjax) {
           final urls = _parseUrls(
-              (await engine.eval('JSON.stringify(__ajaxUrls)').timeout(evalTimeout)).value);
+            (await engine
+                    .eval('JSON.stringify(__ajaxUrls)')
+                    .timeout(evalTimeout))
+                .value,
+          );
           if (urls.isNotEmpty) {
             final results = await _fetchAll(
               urls,
               baseUrl: baseUrl ?? '',
               charset: charset,
             );
-            await engine.eval(
-                'globalThis.__ajaxCache = ${jsonEncode(results)};').timeout(evalTimeout);
+            await engine
+                .eval('globalThis.__ajaxCache = ${jsonEncode(results)};')
+                .timeout(evalTimeout);
           }
           await engine.eval(_ajaxRealBridge).timeout(evalTimeout);
         }
@@ -245,22 +259,26 @@ class JsRuleExecutor {
               baseUrl: baseUrl ?? '',
               charset: charset,
             );
-            await engine.eval(
-              'globalThis.__postCache = ${jsonEncode(results)};'
-              'globalThis.__headCache = ${jsonEncode(results)};',
-            ).timeout(evalTimeout);
+            await engine
+                .eval(
+                  'globalThis.__postCache = ${jsonEncode(results)};'
+                  'globalThis.__headCache = ${jsonEncode(results)};',
+                )
+                .timeout(evalTimeout);
           }
           await engine.eval(_networkRealBridge).timeout(evalTimeout);
         }
         // setContent 参数依赖 ajax/post 结果（第一遍记录为空）时，
         // 用真实结果重新记录一遍（此时 setContent 拿到真实 html）
         final staleSetContent = ops.any(
-            (op) => op[0] == 'setContent' && (op[1] as String).isEmpty);
+          (op) => op[0] == 'setContent' && (op[1] as String).isEmpty,
+        );
         if (staleSetContent) {
           // 先切换真实网络桥（保留 get/setContent 记录桥），
           // 否则 c=java.ajax(u); setContent(c) 重录仍记录空 html
-          await engine
-              .eval('globalThis.__ops = []; globalThis.__docIndex = 0;');
+          await engine.eval(
+            'globalThis.__ops = []; globalThis.__docIndex = 0;',
+          );
           await engine.eval('try { $body } catch (e) {}').timeout(evalTimeout);
           ops = await _readOps(engine);
         }
@@ -269,14 +287,20 @@ class JsRuleExecutor {
       // Dart 重放 doc 流 → 与记录顺序一致的提取值表/元素快照 → 注入
       final replay = _replayOps(html, ops);
       final getValues = replay.getValues;
-      await engine.eval('globalThis.__getValues = ${jsonEncode(getValues)};').timeout(evalTimeout);
-      await engine.eval(
-        'globalThis.__elementCaches = ${jsonEncode(replay.elementCaches)};'
-        'globalThis.__getElementsIdx = 0;',
-      ).timeout(evalTimeout);
+      await engine
+          .eval('globalThis.__getValues = ${jsonEncode(getValues)};')
+          .timeout(evalTimeout);
+      await engine
+          .eval(
+            'globalThis.__elementCaches = ${jsonEncode(replay.elementCaches)};'
+            'globalThis.__getElementsIdx = 0;',
+          )
+          .timeout(evalTimeout);
       await engine.eval(_finalPrelude).timeout(evalTimeout);
       await engine.eval(_networkRealBridge).timeout(evalTimeout);
-      await engine.eval(_cookieBridge(cookies ?? const {}, seed: false)).timeout(evalTimeout);
+      await engine
+          .eval(_cookieBridge(cookies ?? const {}, seed: false))
+          .timeout(evalTimeout);
       if (hasCrypto) {
         final crypto = await _JsCryptoCaches.fromEngine(engine);
         await engine.eval(crypto.realBridge).timeout(evalTimeout);
@@ -328,7 +352,8 @@ class JsRuleExecutor {
     final body = _scriptBody(rawRule);
     if (body == null || body.trim().isEmpty) return null;
     // 第一遍：函数包裹（支持顶层 return / IIFE / 语句序列以 item 结尾）
-    final functionWrapped = '<js>'
+    final functionWrapped =
+        '<js>'
         'var item = JSON.parse(result);\n'
         'var __ret = (function () {\n$body\n})();\n'
         'var __out = (__ret === undefined || __ret === null) ? item : __ret;\n'
@@ -345,7 +370,8 @@ class JsRuleExecutor {
     // 脚本有实际返回或修改（结果不再是原 item）→ 直接采用
     if (!_isOriginalItemJson(first, item)) return first;
     // 裸表达式风格：以规则体完成值作为结果
-    final bareWrapped = '<js>'
+    final bareWrapped =
+        '<js>'
         'var item = JSON.parse(result);\n'
         'JSON.stringify($body);'
         '</js>';
@@ -371,7 +397,8 @@ class JsRuleExecutor {
 
   /// 读取记录遍的调用序列（['get'|'setContent', 参数..., docIndex]）
   static Future<List<List<dynamic>>> _readOps(JsEngine engine) async {
-    final json = (await engine.eval('JSON.stringify(__ops)').timeout(evalTimeout)).value;
+    final json =
+        (await engine.eval('JSON.stringify(__ops)').timeout(evalTimeout)).value;
     try {
       return (jsonDecode(json) as List).cast<List<dynamic>>();
     } catch (_) {
@@ -384,7 +411,8 @@ class JsRuleExecutor {
   static ({
     List<String> getValues,
     Map<String, List<Map<String, dynamic>>> elementCaches,
-  }) _replayOps(String html, List<List<dynamic>> ops) {
+  })
+  _replayOps(String html, List<List<dynamic>> ops) {
     final docs = <dom.Document>[parser.parse(html)];
     final values = <String>[];
     final elementCaches = <String, List<Map<String, dynamic>>>{};
@@ -436,6 +464,7 @@ class JsRuleExecutor {
   /// 并发上限 [_maxConcurrentFetches]，避免恶意/异常规则一次性发起
   /// 大量请求拖垮内存与网络。
   static const int _maxConcurrentFetches = 4;
+
   /// 单次执行最多拉取的 URL 总数：超限直接丢弃多余 URL，
   /// 防止 java.ajax 无界推入导致 N/4×8s 的总时长失控与后台请求泄漏。
   static const int _maxFetchUrls = 50;
@@ -459,11 +488,15 @@ class JsRuleExecutor {
         final url = urls[index];
         try {
           final resolved = _resolveUrl(baseUrl, url);
+          if (!_isSameSite(baseUrl, resolved)) {
+            results[url] = '';
+            return;
+          }
           final html = fetcher != null
               ? await fetcher!(resolved).timeout(ajaxTimeout)
               : await client
-                  .getString(resolved, charset: charset)
-                  .timeout(ajaxTimeout);
+                    .getString(resolved, charset: charset)
+                    .timeout(ajaxTimeout);
           results[url] = html;
         } catch (_) {
           results[url] = '';
@@ -481,12 +514,22 @@ class JsRuleExecutor {
 
   static Future<List<_NetworkOp>> _readNetworkOps(JsEngine engine) async {
     try {
-      final posts = jsonDecode(
-        (await engine.eval('JSON.stringify(__postOps)').timeout(evalTimeout)).value,
-      ) as List;
-      final heads = jsonDecode(
-        (await engine.eval('JSON.stringify(__headOps)').timeout(evalTimeout)).value,
-      ) as List;
+      final posts =
+          jsonDecode(
+                (await engine
+                        .eval('JSON.stringify(__postOps)')
+                        .timeout(evalTimeout))
+                    .value,
+              )
+              as List;
+      final heads =
+          jsonDecode(
+                (await engine
+                        .eval('JSON.stringify(__headOps)')
+                        .timeout(evalTimeout))
+                    .value,
+              )
+              as List;
       return [
         for (final raw in posts)
           _NetworkOp(
@@ -520,6 +563,11 @@ class JsRuleExecutor {
     String baseUrl = '',
     String? charset,
   }) async {
+    // post/head 与 ajax 一样限制总量：否则恶意规则可在 3s eval 内 push
+    // 海量操作，后续以 4 并发串行消费导致总时长与请求量近似无界。
+    if (ops.length > _maxFetchUrls) {
+      ops = ops.sublist(0, _maxFetchUrls);
+    }
     final results = <String, Map<String, dynamic>>{};
     final client = networkClient ?? DioClient();
     var nextIndex = 0;
@@ -531,6 +579,14 @@ class JsRuleExecutor {
         final op = ops[index];
         try {
           final resolved = _resolveUrl(baseUrl, op.url);
+          if (!_isSameSite(baseUrl, resolved)) {
+            results[op.key] = {
+              'headers': <String, String>{},
+              'cookies': '',
+              'body': '',
+            };
+            return;
+          }
           final headers = op.headers;
           final Map<String, List<String>> responseHeaders;
           if (op.kind == 'post') {
@@ -583,6 +639,29 @@ class JsRuleExecutor {
     return Uri.parse(baseUrl).resolve(url).toString();
   }
 
+  /// 网络桥出站限制：只允许与书源页同站（同 host 或子域）的请求。
+  /// 封堵恶意书源把 java.getCookie 读出的会话凭据经 java.ajax/post/head
+  /// 外带到任意第三方域；同时保留 api.example.com → example.com 这类
+  /// 书源常用的跨子域调用。baseUrl 为空（测试/无页面上下文）时不限制。
+  static bool _isSameSite(String baseUrl, String targetUrl) {
+    if (baseUrl.isEmpty || targetUrl.isEmpty) return true;
+    try {
+      final base = Uri.parse(baseUrl);
+      final target = Uri.parse(targetUrl);
+      if (base.scheme.isEmpty || target.scheme.isEmpty) return false;
+      if (base.scheme != target.scheme || base.port != target.port) {
+        return false;
+      }
+      final baseHost = base.host.toLowerCase();
+      final targetHost = target.host.toLowerCase();
+      if (baseHost == targetHost) return true;
+      return targetHost.endsWith('.$baseHost') ||
+          baseHost.endsWith('.$targetHost');
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// 提取 js 标签包裹体或 at-js 前缀的脚本体
   static String? _scriptBody(String rule) {
     final t = rule.trim();
@@ -600,10 +679,23 @@ class JsRuleExecutor {
     'eval(',
     'startBrowser',
     'setTimeout',
-    '_ffiNotify',
+    '_ffi',
   ];
 
-  static bool _unsupported(String body) => _unsupportedMarkers.any(body.contains);
+  /// 黑名单命中：除直接匹配外，还剥离引号/空白后防字符串拼接绕过
+  /// （如 'ev'+'al('、'_'+'ffi'+'Notify'）。仍是纵深防御一层——
+  /// QuickJS 侧无 registerBridge、默认不绑定定时器，逃逸面已收窄。
+  static bool _unsupported(String body) {
+    if (_unsupportedMarkers.any(body.contains)) return true;
+    // 剥离空白/引号/加号/点号等符号后再检查，防 'ev'+'al('、
+    // '_ffi'+'Notify' 之类字符串拼接绕过（仍是纵深防御一层，
+    // QuickJS 侧无 registerBridge、默认不绑定定时器，逃逸面已收窄）。
+    final normalized = body.replaceAll(RegExp(r'[^A-Za-z0-9_()]'), '');
+    return normalized.contains('_ffiNotify') ||
+        normalized.contains('eval(') ||
+        normalized.contains('startBrowser') ||
+        normalized.contains('setTimeout');
+  }
 
   static final _templateExprPattern = RegExp(r'\{\{\s*(java\.[^{}]+?)\s*\}\}');
 
@@ -620,9 +712,7 @@ class JsRuleExecutor {
   }) async {
     final matches = _templateExprPattern.allMatches(template).toList();
     if (matches.isEmpty) return template;
-    final expressions = [
-      for (final match in matches) match.group(1)!.trim(),
-    ];
+    final expressions = [for (final match in matches) match.group(1)!.trim()];
     final body = 'JSON.stringify([${expressions.join(',')}])';
 
     final manager = await _getManager();
@@ -637,33 +727,40 @@ class JsRuleExecutor {
         page,
       );
       await engine.eval(recordPrelude).timeout(evalTimeout);
-      await engine.eval('try { $body } catch (e) { "[]" }').timeout(evalTimeout);
+      await engine
+          .eval('try { $body } catch (e) { "[]" }')
+          .timeout(evalTimeout);
 
       var caches = await _readTemplateCaches(engine, json, html);
       for (var round = 0; round < 4; round++) {
-        await engine.eval(_templateRealPrelude(
-          caches.jsonCache,
-          caches.htmlCache,
-          caches.md5Cache,
-          caches.base64Cache,
-          caches.base64DecodeCache,
-          caches.base64DecodeByteCache,
-          caches.hmacCache,
-          caches.hmacBase64Cache,
-          caches.aesCache,
-          caches.aesBase64Cache,
-          caches.aesEncodeBase64Cache,
-          caches.hexEncodeCache,
-          caches.hexDecodeCache,
-          caches.uriCache,
-          caches.t2sCache,
-          caches.s2tCache,
-          caches.uuidCache,
-          caches.putCache,
-          caches.timeCache,
-          collect: true,
-        )).timeout(evalTimeout);
-        await engine.eval('try { $body } catch (e) { "[]" }')
+        await engine
+            .eval(
+              _templateRealPrelude(
+                caches.jsonCache,
+                caches.htmlCache,
+                caches.md5Cache,
+                caches.base64Cache,
+                caches.base64DecodeCache,
+                caches.base64DecodeByteCache,
+                caches.hmacCache,
+                caches.hmacBase64Cache,
+                caches.aesCache,
+                caches.aesBase64Cache,
+                caches.aesEncodeBase64Cache,
+                caches.hexEncodeCache,
+                caches.hexDecodeCache,
+                caches.uriCache,
+                caches.t2sCache,
+                caches.s2tCache,
+                caches.uuidCache,
+                caches.putCache,
+                caches.timeCache,
+                collect: true,
+              ),
+            )
+            .timeout(evalTimeout);
+        await engine
+            .eval('try { $body } catch (e) { "[]" }')
             .timeout(evalTimeout);
         final next = await _readTemplateCaches(engine, json, html);
         if (next.argCount == caches.argCount) {
@@ -672,27 +769,31 @@ class JsRuleExecutor {
         }
         caches = next;
       }
-      await engine.eval(_templateRealPrelude(
-        caches.jsonCache,
-        caches.htmlCache,
-        caches.md5Cache,
-        caches.base64Cache,
-        caches.base64DecodeCache,
-        caches.base64DecodeByteCache,
-        caches.hmacCache,
-        caches.hmacBase64Cache,
-        caches.aesCache,
-        caches.aesBase64Cache,
-        caches.aesEncodeBase64Cache,
-        caches.hexEncodeCache,
-        caches.hexDecodeCache,
-        caches.uriCache,
-        caches.t2sCache,
-        caches.s2tCache,
-        caches.uuidCache,
-        caches.putCache,
-        caches.timeCache,
-      )).timeout(evalTimeout);
+      await engine
+          .eval(
+            _templateRealPrelude(
+              caches.jsonCache,
+              caches.htmlCache,
+              caches.md5Cache,
+              caches.base64Cache,
+              caches.base64DecodeCache,
+              caches.base64DecodeByteCache,
+              caches.hmacCache,
+              caches.hmacBase64Cache,
+              caches.aesCache,
+              caches.aesBase64Cache,
+              caches.aesEncodeBase64Cache,
+              caches.hexEncodeCache,
+              caches.hexDecodeCache,
+              caches.uriCache,
+              caches.t2sCache,
+              caches.s2tCache,
+              caches.uuidCache,
+              caches.putCache,
+              caches.timeCache,
+            ),
+          )
+          .timeout(evalTimeout);
 
       final result = await engine.eval(body).timeout(evalTimeout);
       final decoded = jsonDecode(result.value);
@@ -814,11 +915,9 @@ globalThis.java = {
     Map<String, String> s2tCache,
     List<String> uuidCache,
     Map<String, String> putCache,
-    Map<String, String> timeCache,
-    {
+    Map<String, String> timeCache, {
     bool collect = false,
-  }
-  ) {
+  }) {
     return '''
 globalThis.__collect = $collect;
 globalThis.rec = (arr, value) => { if (__collect) arr.push(value); };
@@ -885,50 +984,43 @@ globalThis.java = {
     final md5Args = await _readStringList(engine, '__md5');
     final base64Args = await _readStringList(engine, '__base64');
     final base64DecodeArgs = await _readStringList(engine, '__base64Decode');
-    final base64DecodeByteArgs =
-        await _readStringList(engine, '__base64DecodeByte');
+    final base64DecodeByteArgs = await _readStringList(
+      engine,
+      '__base64DecodeByte',
+    );
     final hmacArgs = await _readHmacArgs(engine, '__hmac');
     final hmacBase64Args = await _readHmacArgs(engine, '__hmacBase64');
     final aesArgs = await _readAesArgs(engine, '__aesDecode');
     final aesBase64Args = await _readAesArgs(engine, '__aesBase64Decode');
-    final aesEncodeBase64Args =
-        await _readAesArgs(engine, '__aesEncodeBase64');
+    final aesEncodeBase64Args = await _readAesArgs(engine, '__aesEncodeBase64');
     final hexEncodeArgs = await _readStringList(engine, '__hexEncode');
     final hexDecodeArgs = await _readStringList(engine, '__hexDecode');
     final uriArgs = await _readStringList(engine, '__uri');
     final timeArgs = await _readTimeArgs(engine);
     final caches = _TemplateCaches(
       jsonCache: {
-        for (final path in jsonPaths)
-          path: _queryJsonPath(json, path),
+        for (final path in jsonPaths) path: _queryJsonPath(json, path),
       },
       htmlCache: {
-        for (final path in htmlPaths)
-          path: _queryHtmlPath(html ?? '', path),
+        for (final path in htmlPaths) path: _queryHtmlPath(html ?? '', path),
       },
       md5Cache: {
         for (final arg in md5Args)
           arg: md5.convert(utf8.encode(arg)).toString(),
       },
       base64Cache: {
-        for (final arg in base64Args)
-          arg: base64Encode(utf8.encode(arg)),
+        for (final arg in base64Args) arg: base64Encode(utf8.encode(arg)),
       },
       base64DecodeCache: {
-        for (final arg in base64DecodeArgs)
-          arg: _base64DecodeToString(arg),
+        for (final arg in base64DecodeArgs) arg: _base64DecodeToString(arg),
       },
       base64DecodeByteCache: {
         for (final arg in base64DecodeByteArgs)
           arg: jsonEncode(_base64DecodeToBytes(arg)),
       },
-      hmacCache: {
-        for (final arg in hmacArgs)
-          arg.cacheKey: _hmacHex(arg),
-      },
+      hmacCache: {for (final arg in hmacArgs) arg.cacheKey: _hmacHex(arg)},
       hmacBase64Cache: {
-        for (final arg in hmacBase64Args)
-          arg.cacheKey: _hmacBase64(arg),
+        for (final arg in hmacBase64Args) arg.cacheKey: _hmacBase64(arg),
       },
       aesCache: {
         for (final arg in aesArgs)
@@ -942,24 +1034,15 @@ globalThis.java = {
         for (final arg in aesEncodeBase64Args)
           arg.cacheKey: _aesEncodeToBase64(arg),
       },
-      hexEncodeCache: {
-        for (final arg in hexEncodeArgs)
-          arg: _hexEncode(arg),
-      },
-      hexDecodeCache: {
-        for (final arg in hexDecodeArgs)
-          arg: _hexDecode(arg),
-      },
+      hexEncodeCache: {for (final arg in hexEncodeArgs) arg: _hexEncode(arg)},
+      hexDecodeCache: {for (final arg in hexDecodeArgs) arg: _hexDecode(arg)},
       uriCache: {
         for (final arg in uriArgs)
           arg: Uri.encodeComponent(arg).replaceAll('%20', '+'),
       },
       t2sCache: {
         for (final arg in t2sArgs)
-          arg: ChineseConversion.convert(
-            arg,
-            ChineseConversionMode.simplified,
-          ),
+          arg: ChineseConversion.convert(arg, ChineseConversionMode.simplified),
       },
       s2tCache: {
         for (final arg in s2tArgs)
@@ -970,10 +1053,7 @@ globalThis.java = {
       },
       uuidCache: List.generate(uuidCount, (_) => _uuid4()),
       putCache: await _readPutMap(engine),
-      timeCache: {
-        for (final arg in timeArgs)
-          arg.key: _formatTimestamp(arg),
-      },
+      timeCache: {for (final arg in timeArgs) arg.key: _formatTimestamp(arg)},
     );
     return caches;
   }
@@ -983,8 +1063,9 @@ globalThis.java = {
     String name,
   ) async {
     try {
-      final decoded =
-          jsonDecode((await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value);
+      final decoded = jsonDecode(
+        (await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value,
+      );
       return (decoded as List).map((e) => e.toString()).toList();
     } catch (_) {
       return [];
@@ -993,7 +1074,10 @@ globalThis.java = {
 
   static Future<int> _readInt(JsEngine engine, String name) async {
     try {
-      return int.tryParse((await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value) ??
+      return int.tryParse(
+            (await engine.eval('JSON.stringify($name)').timeout(evalTimeout))
+                .value,
+          ) ??
           0;
     } catch (_) {
       return 0;
@@ -1002,8 +1086,10 @@ globalThis.java = {
 
   static Future<Map<String, String>> _readPutMap(JsEngine engine) async {
     try {
-      final decoded =
-          jsonDecode((await engine.eval('JSON.stringify(__putMap)').timeout(evalTimeout)).value);
+      final decoded = jsonDecode(
+        (await engine.eval('JSON.stringify(__putMap)').timeout(evalTimeout))
+            .value,
+      );
       return {
         if (decoded is Map)
           for (final entry in decoded.entries)
@@ -1032,8 +1118,12 @@ globalThis.java = {
   ) async {
     if (cookies == null) return;
     try {
-      final decoded =
-          jsonDecode((await engine.eval('JSON.stringify(__cookieStore)').timeout(evalTimeout)).value);
+      final decoded = jsonDecode(
+        (await engine
+                .eval('JSON.stringify(__cookieStore)')
+                .timeout(evalTimeout))
+            .value,
+      );
       if (decoded is Map) {
         for (final entry in decoded.entries) {
           cookies[entry.key.toString()] = entry.value?.toString() ?? '';
@@ -1060,8 +1150,10 @@ globalThis.java = {
 
   static Future<List<_TimeArg>> _readTimeArgs(JsEngine engine) async {
     try {
-      final decoded =
-          jsonDecode((await engine.eval('JSON.stringify(__time)').timeout(evalTimeout)).value);
+      final decoded = jsonDecode(
+        (await engine.eval('JSON.stringify(__time)').timeout(evalTimeout))
+            .value,
+      );
       return [
         for (final raw in decoded as List)
           _TimeArg(
@@ -1080,14 +1172,14 @@ globalThis.java = {
     String name,
   ) async {
     try {
-      final decoded =
-          jsonDecode((await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value);
+      final decoded = jsonDecode(
+        (await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value,
+      );
       return [
         for (final raw in decoded as List)
           _HmacArg(
             data: raw is List && raw.isNotEmpty ? raw[0].toString() : '',
-            algorithm:
-                raw is List && raw.length > 1 ? raw[1].toString() : '',
+            algorithm: raw is List && raw.length > 1 ? raw[1].toString() : '',
             key: raw is List && raw.length > 2 ? raw[2].toString() : '',
           ),
       ];
@@ -1101,15 +1193,17 @@ globalThis.java = {
     String name,
   ) async {
     try {
-      final decoded =
-          jsonDecode((await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value);
+      final decoded = jsonDecode(
+        (await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value,
+      );
       return [
         for (final raw in decoded as List)
           _AesArg(
             data: raw is List && raw.isNotEmpty ? raw[0].toString() : '',
             key: raw is List && raw.length > 1 ? raw[1].toString() : '',
-            transformation:
-                raw is List && raw.length > 2 ? raw[2].toString() : '',
+            transformation: raw is List && raw.length > 2
+                ? raw[2].toString()
+                : '',
             iv: raw is List && raw.length > 3 ? raw[3].toString() : '',
           ),
       ];
@@ -1137,8 +1231,10 @@ globalThis.java = {
   }
 
   static Hash _hashForAlgorithm(String algorithm) {
-    final normalized =
-        algorithm.toUpperCase().replaceAll('HMAC', '').replaceAll('-', '');
+    final normalized = algorithm
+        .toUpperCase()
+        .replaceAll('HMAC', '')
+        .replaceAll('-', '');
     switch (normalized) {
       case 'MD5':
         return md5;
@@ -1158,14 +1254,14 @@ globalThis.java = {
     String name,
   ) async {
     try {
-      final decoded =
-          jsonDecode((await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value);
+      final decoded = jsonDecode(
+        (await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value,
+      );
       return [
         for (final raw in decoded as List)
           _DigestArg(
             data: raw is List && raw.isNotEmpty ? raw[0].toString() : '',
-            algorithm:
-                raw is List && raw.length > 1 ? raw[1].toString() : '',
+            algorithm: raw is List && raw.length > 1 ? raw[1].toString() : '',
           ),
       ];
     } catch (_) {
@@ -1175,18 +1271,15 @@ globalThis.java = {
 
   static String _digestHex(_DigestArg arg) {
     try {
-      return _hashForAlgorithm(arg.algorithm)
-          .convert(utf8.encode(arg.data))
-          .toString();
+      return _hashForAlgorithm(
+        arg.algorithm,
+      ).convert(utf8.encode(arg.data)).toString();
     } catch (_) {
       return '';
     }
   }
 
-  static String _aesDecodeToString(
-    _AesArg arg, {
-    required bool base64Input,
-  }) {
+  static String _aesDecodeToString(_AesArg arg, {required bool base64Input}) {
     try {
       final transformation = arg.transformation.toUpperCase();
       final useCbc = transformation.contains('/CBC/');
@@ -1265,16 +1358,18 @@ globalThis.java = {
     String name,
   ) async {
     try {
-      final decoded =
-          jsonDecode((await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value);
+      final decoded = jsonDecode(
+        (await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value,
+      );
       return [
         for (final raw in decoded as List)
           _SymmetricArg(
             id: raw is List && raw.isNotEmpty
                 ? int.tryParse(raw[0].toString()) ?? 0
                 : 0,
-            transformation:
-                raw is List && raw.length > 1 ? raw[1].toString() : '',
+            transformation: raw is List && raw.length > 1
+                ? raw[1].toString()
+                : '',
             key: raw is List && raw.length > 2 ? raw[2].toString() : '',
             iv: raw is List && raw.length > 3 ? raw[3].toString() : '',
           ),
@@ -1289,8 +1384,9 @@ globalThis.java = {
     String name,
   ) async {
     try {
-      final decoded =
-          jsonDecode((await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value);
+      final decoded = jsonDecode(
+        (await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value,
+      );
       return [
         for (final raw in decoded as List)
           _SymmetricOp(
@@ -1317,11 +1413,7 @@ globalThis.java = {
   }
 
   static Uint8List _symmetricDecryptToBytes(_SymmetricArg arg, String data) {
-    return _symmetricProcess(
-      arg,
-      _decodeAesData(data),
-      encrypting: false,
-    );
+    return _symmetricProcess(arg, _decodeAesData(data), encrypting: false);
   }
 
   static Uint8List _symmetricEncryptToBytes(_SymmetricArg arg, String data) {
@@ -1358,8 +1450,10 @@ globalThis.java = {
       pc.CipherParameters params = mode == 'CBC'
           ? pc.ParametersWithIV(pc.KeyParameter(key), iv)
           : pc.KeyParameter(key);
-      final normalizedPadding = padding
-          .replaceAll('PKCS5PADDING', 'PKCS7PADDING');
+      final normalizedPadding = padding.replaceAll(
+        'PKCS5PADDING',
+        'PKCS7PADDING',
+      );
       if (normalizedPadding == 'NOPADDING') {
         final cipher = pc.BlockCipher('$blockName/$mode');
         cipher.init(encrypting, params);
@@ -1368,8 +1462,10 @@ globalThis.java = {
       final cipher = pc.PaddedBlockCipher('$blockName/$mode/PKCS7');
       cipher.init(
         encrypting,
-        pc.PaddedBlockCipherParameters<pc.CipherParameters?,
-            pc.CipherParameters?>(params, null),
+        pc.PaddedBlockCipherParameters<
+          pc.CipherParameters?,
+          pc.CipherParameters?
+        >(params, null),
       );
       return cipher.process(input);
     } catch (_) {
@@ -1406,9 +1502,7 @@ globalThis.java = {
   }
 
   static String _bytesToHex(Uint8List bytes) {
-    return bytes
-        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
-        .join();
+    return bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
   }
 
   static String _queryJsonPath(Map<String, dynamic>? json, String path) {
@@ -1496,10 +1590,14 @@ globalThis.java = {
   /// 预提取 java.get('字面量'[, 'attr']) → 查询缓存。
   /// 特殊键 'url'（Legado 取当前页 URL）返回 baseUrl。
   static Map<String, String> _extractLiterals(
-      String html, String baseUrl, String body) {
+    String html,
+    String baseUrl,
+    String body,
+  ) {
     final cache = <String, String>{};
     final re = RegExp(
-        "java\\.(get|getElement)\\(\\s*('([^']*)'|\"([^\"]*)\")(?:,\\s*('([^']*)'|\"([^\"]*)\"))?\\s*\\)");
+      "java\\.(get|getElement)\\(\\s*('([^']*)'|\"([^\"]*)\")(?:,\\s*('([^']*)'|\"([^\"]*)\"))?\\s*\\)",
+    );
     final doc = parser.parse(html);
     for (final m in re.allMatches(body)) {
       final sel = m.group(3) ?? m.group(4) ?? '';
@@ -1521,13 +1619,9 @@ globalThis.java = {
     return cache;
   }
 
-  static Map<String, String> _extractGetStringCache(
-    String html,
-    String body,
-  ) {
+  static Map<String, String> _extractGetStringCache(String html, String body) {
     final cache = <String, String>{};
-    final re = RegExp(
-        "java\\.getString\\(\\s*('([^']*)'|\"([^\"]*)\")");
+    final re = RegExp("java\\.getString\\(\\s*('([^']*)'|\"([^\"]*)\")");
     for (final m in re.allMatches(body)) {
       final path = m.group(2) ?? m.group(3) ?? '';
       if (path.isEmpty || cache.containsKey(path)) continue;
@@ -1567,8 +1661,7 @@ globalThis.java = {
     String body,
   ) {
     final cache = <String, List<String>>{};
-    final re = RegExp(
-        "java\\.getStringList\\(\\s*('([^']*)'|\"([^\"]*)\")");
+    final re = RegExp("java\\.getStringList\\(\\s*('([^']*)'|\"([^\"]*)\")");
     for (final m in re.allMatches(body)) {
       final path = m.group(2) ?? m.group(3) ?? '';
       if (path.isEmpty || cache.containsKey(path)) continue;
@@ -1588,8 +1681,7 @@ globalThis.java = {
           final values = JsonPathEngine.instance.query(decoded, normalized);
           return [
             for (final value in values)
-              if (value != null)
-                value is String ? value : jsonEncode(value),
+              if (value != null) value is String ? value : jsonEncode(value),
           ];
         }
       } catch (_) {
@@ -2082,20 +2174,14 @@ class _SymmetricOp {
   final int id;
   final String data;
 
-  const _SymmetricOp({
-    required this.id,
-    required this.data,
-  });
+  const _SymmetricOp({required this.id, required this.data});
 }
 
 class _DigestArg {
   final String data;
   final String algorithm;
 
-  const _DigestArg({
-    required this.data,
-    required this.algorithm,
-  });
+  const _DigestArg({required this.data, required this.algorithm});
 }
 
 class _TemplateCaches {
@@ -2230,36 +2316,51 @@ class _JsCryptoCaches {
 
   static Future<_JsCryptoCaches> fromEngine(JsEngine engine) async {
     final md5Args = await JsRuleExecutor._readStringList(engine, '__md5');
-    final md5ShortArgs =
-        await JsRuleExecutor._readStringList(engine, '__md5Short');
-    final base64Args =
-        await JsRuleExecutor._readStringList(engine, '__base64');
-    final base64DecodeArgs =
-        await JsRuleExecutor._readStringList(engine, '__base64Decode');
-    final base64DecodeByteArgs =
-        await JsRuleExecutor._readStringList(engine, '__base64DecodeByte');
+    final md5ShortArgs = await JsRuleExecutor._readStringList(
+      engine,
+      '__md5Short',
+    );
+    final base64Args = await JsRuleExecutor._readStringList(engine, '__base64');
+    final base64DecodeArgs = await JsRuleExecutor._readStringList(
+      engine,
+      '__base64Decode',
+    );
+    final base64DecodeByteArgs = await JsRuleExecutor._readStringList(
+      engine,
+      '__base64DecodeByte',
+    );
     final hmacArgs = await JsRuleExecutor._readHmacArgs(engine, '__hmac');
-    final hmacBase64Args =
-        await JsRuleExecutor._readHmacArgs(engine, '__hmacBase64');
-    final digestArgs =
-        await JsRuleExecutor._readDigestArgs(engine, '__digestHex');
+    final hmacBase64Args = await JsRuleExecutor._readHmacArgs(
+      engine,
+      '__hmacBase64',
+    );
+    final digestArgs = await JsRuleExecutor._readDigestArgs(
+      engine,
+      '__digestHex',
+    );
     final aesArgs = await JsRuleExecutor._readAesArgs(engine, '__aesDecode');
-    final aesBase64Args =
-        await JsRuleExecutor._readAesArgs(engine, '__aesBase64Decode');
-    final hexEncodeArgs =
-        await JsRuleExecutor._readStringList(engine, '__hexEncode');
-    final hexDecodeArgs =
-        await JsRuleExecutor._readStringList(engine, '__hexDecode');
+    final aesBase64Args = await JsRuleExecutor._readAesArgs(
+      engine,
+      '__aesBase64Decode',
+    );
+    final hexEncodeArgs = await JsRuleExecutor._readStringList(
+      engine,
+      '__hexEncode',
+    );
+    final hexDecodeArgs = await JsRuleExecutor._readStringList(
+      engine,
+      '__hexDecode',
+    );
     final uriArgs = await JsRuleExecutor._readStringList(engine, '__uri');
     final t2sArgs = await JsRuleExecutor._readStringList(engine, '__t2s');
     final s2tArgs = await JsRuleExecutor._readStringList(engine, '__s2t');
     final uuidCount = await JsRuleExecutor._readInt(engine, '__uuidCount');
     final timeArgs = await JsRuleExecutor._readTimeArgs(engine);
-    final symmetricArgs =
-        await JsRuleExecutor._readSymmetricArgs(engine, '__symmetric');
-    final symmetricById = {
-      for (final arg in symmetricArgs) arg.id: arg,
-    };
+    final symmetricArgs = await JsRuleExecutor._readSymmetricArgs(
+      engine,
+      '__symmetric',
+    );
+    final symmetricById = {for (final arg in symmetricArgs) arg.id: arg};
     final decryptStrOps = await JsRuleExecutor._readSymmetricOps(
       engine,
       '__symmetricDecryptStr',
@@ -2288,8 +2389,7 @@ class _JsCryptoCaches {
       return {
         for (final op in ops)
           if (symmetricById.containsKey(op.id))
-            '${op.id}|${op.data}':
-                compute(symmetricById[op.id]!, op.data),
+            '${op.id}|${op.data}': compute(symmetricById[op.id]!, op.data),
       };
     }
 
@@ -2303,8 +2403,7 @@ class _JsCryptoCaches {
           arg: md5.convert(utf8.encode(arg)).toString().substring(0, 16),
       },
       base64Cache: {
-        for (final arg in base64Args)
-          arg: base64Encode(utf8.encode(arg)),
+        for (final arg in base64Args) arg: base64Encode(utf8.encode(arg)),
       },
       base64DecodeCache: {
         for (final arg in base64DecodeArgs)
@@ -2315,8 +2414,7 @@ class _JsCryptoCaches {
           arg: jsonEncode(JsRuleExecutor._base64DecodeToBytes(arg)),
       },
       hmacCache: {
-        for (final arg in hmacArgs)
-          arg.cacheKey: JsRuleExecutor._hmacHex(arg),
+        for (final arg in hmacArgs) arg.cacheKey: JsRuleExecutor._hmacHex(arg),
       },
       hmacBase64Cache: {
         for (final arg in hmacBase64Args)
@@ -2341,12 +2439,10 @@ class _JsCryptoCaches {
           ),
       },
       hexEncodeCache: {
-        for (final arg in hexEncodeArgs)
-          arg: JsRuleExecutor._hexEncode(arg),
+        for (final arg in hexEncodeArgs) arg: JsRuleExecutor._hexEncode(arg),
       },
       hexDecodeCache: {
-        for (final arg in hexDecodeArgs)
-          arg: JsRuleExecutor._hexDecode(arg),
+        for (final arg in hexDecodeArgs) arg: JsRuleExecutor._hexDecode(arg),
       },
       uriCache: {
         for (final arg in uriArgs)
@@ -2354,10 +2450,7 @@ class _JsCryptoCaches {
       },
       t2sCache: {
         for (final arg in t2sArgs)
-          arg: ChineseConversion.convert(
-            arg,
-            ChineseConversionMode.simplified,
-          ),
+          arg: ChineseConversion.convert(arg, ChineseConversionMode.simplified),
       },
       s2tCache: {
         for (final arg in s2tArgs)
@@ -2377,21 +2470,18 @@ class _JsCryptoCaches {
       ),
       symmetricDecryptCache: symmetricResults(
         decryptOps,
-        (arg, data) => jsonEncode(
-          JsRuleExecutor._symmetricDecryptToBytes(arg, data),
-        ),
+        (arg, data) =>
+            jsonEncode(JsRuleExecutor._symmetricDecryptToBytes(arg, data)),
       ),
       symmetricEncryptCache: symmetricResults(
         encryptOps,
-        (arg, data) => jsonEncode(
-          JsRuleExecutor._symmetricEncryptToBytes(arg, data),
-        ),
+        (arg, data) =>
+            jsonEncode(JsRuleExecutor._symmetricEncryptToBytes(arg, data)),
       ),
       symmetricEncryptBase64Cache: symmetricResults(
         encryptBase64Ops,
-        (arg, data) => base64Encode(
-          JsRuleExecutor._symmetricEncryptToBytes(arg, data),
-        ),
+        (arg, data) =>
+            base64Encode(JsRuleExecutor._symmetricEncryptToBytes(arg, data)),
       ),
       symmetricEncryptHexCache: symmetricResults(
         encryptHexOps,
@@ -2402,7 +2492,8 @@ class _JsCryptoCaches {
     );
   }
 
-  String get realBridge => '''
+  String get realBridge =>
+      '''
 globalThis.__md5Cache = ${jsonEncode(md5Cache)};
 globalThis.__md5ShortCache = ${jsonEncode(md5ShortCache)};
 globalThis.__base64Cache = ${jsonEncode(base64Cache)};

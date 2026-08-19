@@ -60,7 +60,7 @@ class ReadingProgressModelAdapter extends TypeAdapter<ReadingProgressModel> {
 
   @override
   ReadingProgressModel read(BinaryReader reader) {
-    return ReadingProgressModel(
+    final model = ReadingProgressModel(
       bookId: reader.readString(),
       chapterIndex: reader.readInt(),
       paragraphOffset: reader.readInt(),
@@ -68,6 +68,9 @@ class ReadingProgressModelAdapter extends TypeAdapter<ReadingProgressModel> {
       pageIndex: reader.readInt(),
       updatedAt: DateTime.fromMillisecondsSinceEpoch(reader.readInt()),
     );
+    // schema 版本标记：旧数据无该字节则跳过，向后兼容。
+    if (reader.availableBytes > 0) reader.readInt();
+    return model;
   }
 
   @override
@@ -78,5 +81,10 @@ class ReadingProgressModelAdapter extends TypeAdapter<ReadingProgressModel> {
     writer.writeDouble(obj.scrollOffset);
     writer.writeInt(obj.pageIndex);
     writer.writeInt(obj.updatedAt.millisecondsSinceEpoch);
+    // 当前 schema 版本
+    writer.writeInt(kProgressSchemaVersion);
   }
 }
+
+/// ReadingProgressModelAdapter 写入的 schema 版本。
+const int kProgressSchemaVersion = 1;

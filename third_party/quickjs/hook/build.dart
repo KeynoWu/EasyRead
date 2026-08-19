@@ -42,10 +42,20 @@ Future<void> _build(BuildInput input, BuildOutputBuilder output) async {
         _repoLibName,
       ]);
     case OS.macOS:
-      // macOS 宿主编译：显式部署目标，避免 SDK 默认 minos 泄漏
+      // macOS 宿主编译：显式部署目标，避免 SDK 默认 minos 泄漏；
+      // 同时显式传 isysroot（链接阶段找 libSystem 需要 SDK 路径），
+      // 否则 Xcode 新版本下 ld 报 "library 'System' not found"。
+      final macSdk = (await Process.run(
+        'xcrun',
+        ['--sdk', 'macosx', '--show-sdk-path'],
+      ))
+          .stdout
+          .toString()
+          .trim();
       env = {
-        'CFLAGS':
-            '-mmacosx-version-min=${input.config.code.macOS.targetVersion}',
+        'CFLAGS': '-mmacosx-version-min=${input.config.code.macOS.targetVersion}'
+            '${macSdk.isEmpty ? '' : ' -isysroot $macSdk'}',
+        'LDFLAGS': macSdk.isEmpty ? '' : '-isysroot $macSdk',
       };
       makeArgs.add(_repoLibName);
     case OS.android:

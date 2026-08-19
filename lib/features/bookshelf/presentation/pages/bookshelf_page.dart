@@ -1,19 +1,19 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:hive/hive.dart';
 import '../../../../core/database/hive_init.dart';
+import '../../../../core/router/app_router.dart' show ReaderRouteArgs;
 import '../../../../core/theme/app_colors.dart';
 import '../../../../features/book_source/presentation/providers/book_source_provider.dart';
+import '../../../../features/search/domain/entities/search_result.dart';
 import '../../data/services/book_detail_service.dart';
 import '../../../reader/data/models/reading_progress_model.dart';
-import '../../../reader/data/services/bookmark_service.dart';
-import '../../../reader/data/services/note_service.dart';
+import '../../../reader/data/services/book_cache_service.dart';
 import '../../../reader/presentation/providers/reader_provider.dart';
 import '../../domain/entities/book.dart';
-import '../../domain/usecases/export_booklist.dart';
-import '../../domain/usecases/import_booklist.dart';
-import '../../domain/usecases/import_local_book.dart';
 import '../../domain/usecases/manage_book_group.dart';
 import '../providers/bookshelf_provider.dart';
 import '../widgets/bookshelf_grid.dart';
@@ -31,7 +31,6 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   String _sortMode = 'time'; // time | name | author | added
   String? _selectedGroup; // null = 全部
   bool _editMode = false;
-  bool _importing = false;
   bool _refreshingAll = false;
   bool _showSearch = false;
   String _searchQuery = '';
@@ -50,87 +49,9 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   List<Book>? _cachedFiltered;
   String? _cachedViewKey;
 
-  Future<void> _importLocalBook() async {
-    if (_importing) return;
-    setState(() => _importing = true);
-    try {
-      final repo = ref.read(bookshelfRepositoryProvider);
-      final useCase = ImportLocalBook(repository: repo);
-      final books = await useCase.fromFile();
-      if (!mounted) return;
-      if (books.isNotEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已导入 ${books.length} 本书')),
-        );
-        ref.invalidate(bookshelfListProvider);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('导入失败或已取消')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _importing = false);
-    }
-  }
-
   Future<void> _refreshBookshelf() async {
     ref.invalidate(bookshelfListProvider);
     await ref.read(bookshelfListProvider.future);
-  }
-
-  /// 导出书单：默认导出当前筛选结果（排序/分组/搜索过滤后的列表）
-  Future<void> _exportBooklist() async {
-    final useCase = ExportBooklist(
-      sourceRepository: ref.read(bookSourceRepositoryProvider),
-      detailService: ref.read(bookDetailServiceProvider),
-    );
-    final json = await useCase.buildJson(_cachedFiltered ?? const []);
-    final message = await useCase.saveToFile(json);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
-  }
-
-  /// 导入书单：选择 .json 文件 → 解析 → 批量入书架 → 刷新书架列表
-  Future<void> _importBooklist() async {
-    if (_importing) return;
-    setState(() => _importing = true);
-    try {
-      final useCase = ImportBooklist(
-        bookshelfRepository: ref.read(bookshelfRepositoryProvider),
-        sourceRepository: ref.read(bookSourceRepositoryProvider),
-        detailService: ref.read(bookDetailServiceProvider),
-      );
-      final result = await useCase.fromFile();
-      if (!mounted) return;
-      if (result.canceled) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已取消导入')),
-        );
-        return;
-      }
-      if (result.error != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(result.error!)),
-        );
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            '导入完成：成功 ${result.imported} 本，'
-            '跳过 ${result.skipped} 本，未匹配书源 ${result.unmatchedSource} 本',
-          ),
-        ),
-      );
-      if (result.imported > 0) {
-        // 导入后自动刷新书架列表（复用既有刷新逻辑）
-        await _refreshBookshelf();
-      }
-    } finally {
-      if (mounted) setState(() => _importing = false);
-    }
   }
 
   /// 打开书籍阅读（续读上次进度）
@@ -142,11 +63,14 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     final alternatives = detail?.alternativesJson;
     final variables = detail?.variablesJson;
     context.push(
-      '/reader/${Uri.encodeComponent(book.id)}'
-      '?sourceId=${Uri.encodeComponent(sourceId ?? '')}'
-      '&detailUrl=${Uri.encodeComponent(detailUrl ?? '')}'
-      '&alternatives=${Uri.encodeComponent(alternatives ?? '')}'
-      '&variables=${Uri.encodeComponent(variables ?? '')}',
+      '/reader/${Uri.encodeComponent(book.id)}',
+      extra: ReaderRouteArgs(
+        bookId: book.id,
+        sourceId: sourceId,
+        detailUrl: detailUrl,
+        alternativesJson: alternatives,
+        variablesJson: variables,
+      ),
     );
   }
 
@@ -157,6 +81,12 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('查看详情'),
+              subtitle: const Text('简介 / 目录 / 换源'),
+              onTap: () => Navigator.pop(context, 'detail'),
+            ),
             ListTile(
               leading: const Icon(Icons.refresh),
               title: const Text('更新书籍详情'),
@@ -173,10 +103,65 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     );
     if (!mounted) return;
     switch (action) {
+      case 'detail':
+        await _openBookDetail(book);
       case 'refresh':
         await _refreshBookDetail(book);
       case 'clearCache':
         await _clearBookCache(book);
+    }
+  }
+
+  /// 从书架打开书籍详情页（简介/目录/换源/导出）
+  Future<void> _openBookDetail(Book book) async {
+    final detail = await ref.read(bookDetailServiceProvider).get(book.id);
+    if (!mounted) return;
+    String? sourceName;
+    try {
+      final source = book.sourceId == null
+          ? null
+          : await ref
+              .read(bookSourceRepositoryProvider)
+              .getById(book.sourceId!);
+      sourceName = source?.name;
+    } catch (_) {
+      // 查询失败用兜底文案
+    }
+    if (!mounted) return;
+    context.push(
+      '/book-detail',
+      extra: SearchResult(
+        bookId: book.id,
+        name: book.name,
+        author: book.author,
+        coverUrl: book.coverUrl,
+        detailUrl: detail?.detailUrl,
+        sourceId: book.sourceId ?? 'default',
+        sourceName: sourceName ?? '未知书源',
+        lastChapter: book.lastChapter,
+        alternatives: _decodeAlternatives(detail?.alternativesJson),
+        variables: BookDetail.decodeVariables(detail?.variablesJson),
+      ),
+    );
+  }
+
+  /// 解析替代书源 JSON（书架缓存格式与搜索结果的 alternatives 相同）
+  List<SourceOption> _decodeAlternatives(String? json) {
+    if (json == null || json.isEmpty) return const [];
+    try {
+      final list = jsonDecode(json) as List;
+      return [
+        for (final e in list)
+          if (e is Map)
+            SourceOption(
+              bookId: e['bookId']?.toString() ?? '',
+              sourceId: e['sourceId']?.toString() ?? '',
+              sourceName: e['sourceName']?.toString() ?? '未知书源',
+              detailUrl: e['detailUrl']?.toString(),
+            ),
+      ];
+    } catch (_) {
+      return const [];
     }
   }
 
@@ -225,14 +210,20 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     if (_refreshingAll) return;
     setState(() => _refreshingAll = true);
     final repo = ref.read(bookshelfRepositoryProvider);
-    for (final book in await repo.getAll()) {
-      if (book.sourceId == null) continue;
-      await _refreshBookDetail(book, showFeedback: false);
+    final books = await repo.getAll();
+    final candidates = books.where((b) => b.sourceId != null).toList();
+    // 分批并发（每批 4 个），避免大批量书籍请求风暴
+    const batchSize = 4;
+    for (var i = 0; i < candidates.length; i += batchSize) {
+      final batch = candidates.skip(i).take(batchSize);
+      await Future.wait(
+        batch.map((b) => _refreshBookDetail(b, showFeedback: false)),
+      );
     }
     if (!mounted) return;
     setState(() => _refreshingAll = false);
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已尝试更新全部书籍详情')),
+      SnackBar(content: Text('已尝试更新全部书籍详情（${candidates.length} 本）')),
     );
   }
 
@@ -271,6 +262,17 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     });
   }
 
+  /// 清理某本书的整本缓存（含章节内容与元数据）
+  Future<void> _clearBookCacheFor(String bookId) async {
+    final box = await BookCacheBox.open();
+    final keys = box.keys
+        .where((k) => k.toString() == '__meta_$bookId' || k.toString().startsWith('$bookId|'))
+        .toList();
+    if (keys.isNotEmpty) {
+      await box.deleteAll(keys);
+    }
+  }
+
   Future<void> _deleteSelected() async {
     if (_selectedIds.isEmpty) return;
     final confirmed = await showDialog<bool>(
@@ -296,15 +298,12 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     // 删除书籍时同步清理章节缓存与阅读进度，避免残留数据占用磁盘或错位续读
     final readerRepo = ref.read(readerRepositoryProvider);
     final progressBox = await Hive.openBox<ReadingProgressModel>(HiveBoxes.readingProgress);
-    final bookmarkService = BookmarkService();
-    final noteService = NoteService();
     for (final id in _selectedIds) {
       await detailService.remove(id);
       await readerRepo.clearBookCache(id);
       await progressBox.delete(id);
-      // 同步清理书签与笔记，避免删除书籍后残留孤儿数据
-      await bookmarkService.removeAllForBook(id);
-      await noteService.removeAllForBook(id);
+      // 清理整本缓存（book_cache），避免孤儿数据残留磁盘
+      await _clearBookCacheFor(id);
     }
     if (!mounted) return;
     setState(() {
@@ -313,6 +312,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     });
     ref.invalidate(bookshelfListProvider);
     if (mounted) {
+      HapticFeedback.mediumImpact();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('已删除')),
       );
@@ -398,27 +398,6 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
               onPressed: _refreshingAll ? null : _refreshAllBooks,
               tooltip: '更新全部详情',
             ),
-            IconButton(
-              icon: const Icon(Icons.file_upload_outlined),
-              onPressed: _importLocalBook,
-              tooltip: '导入本地书籍',
-            ),
-            PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert),
-              tooltip: '更多',
-              onSelected: (value) {
-                switch (value) {
-                  case 'export':
-                    _exportBooklist();
-                  case 'import':
-                    _importBooklist();
-                }
-              },
-              itemBuilder: (context) => const [
-                PopupMenuItem(value: 'export', child: Text('导出书单')),
-                PopupMenuItem(value: 'import', child: Text('导入书单')),
-              ],
-            ),
             PopupMenuButton<String>(
               icon: const Icon(Icons.sort),
               onSelected: (value) => setState(() => _sortMode = value),
@@ -439,7 +418,6 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
       ),
       body: Column(
         children: [
-          if (_importing) const LinearProgressIndicator(),
           Expanded(
             child: booksAsync.when(
               data: (books) {
@@ -499,15 +477,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                                   const SizedBox(height: 16),
                                   const Text('书架空空', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
                                   const SizedBox(height: 8),
-                                  const Text('去搜索添加书籍，或导入本地 TXT/EPUB', textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
-                                  const SizedBox(height: 24),
-                                  Center(
-                                    child: FilledButton.icon(
-                                      onPressed: _importLocalBook,
-                                      icon: const Icon(Icons.file_upload_outlined),
-                                      label: const Text('导入本地书籍'),
-                                    ),
-                                  ),
+                                  const Text('去搜索添加书籍', textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
                                 ],
                               )
                             : _isGrid

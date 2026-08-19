@@ -1,6 +1,32 @@
-# EasyRead 多格式书源兼容 — 续接文档（2026-08-05）
+# EasyRead 多格式书源兼容 — 续接文档（2026-08-05，最新：2026-08-19）
 
 > 重开会话请先读此文件 + 最近 git log。
+> **当前主线：docs/core-first-plan.md（v2 核心优先+减法）已取代 docs/refactoring-plan.md。**
+
+## ⚠️ 最新状态（2026-08-19）：产品收敛为「简单小说阅读器」
+
+### 已完成的减法（M0，未提交）
+- **删除**：TTS 朗读、图片章节/漫画、RSS 订阅源、阅读统计、WebDAV+本地备份、本地导入 epub/txt、拼音注音、章内搜索、导出书籍、书签/笔记、规则测试器/书源调试页/书源订阅页、发现 tab（导航 5→4）、自动刷新、书单导入导出、source_subscription 数据盒。
+- **保留**：书源导入/列表/编辑/登录/批量检测、搜索、详情、阅读（翻页/滚动/进度续读/缓存/换源/净化/排版/亮度/自动换源）、书架、设置（净化规则/清缓存/自动换源）。
+- 依赖移除：flutter_tts / archive / xml（保留 pinyin：简繁转换）。
+- lib：28945 → 19802 行；测试：503 → 354 用例全绿。
+
+### 已完成的核心链路修复（M1，未提交）
+1. 移除整页 HTML 兜底（reader_repository_impl 两处）→ 解析为空抛 ChapterLoadException，阅读页错误+重试。
+2. 目录失败可见可重试（chapter_catalog_sheet 已有失败+重试）。
+3. [catalog]/[reader] debugPrint 清零。
+4. 新增 test/features/reader/chapter_empty_error_test.dart。
+5. **修复 quickjs macOS 链接**（third_party/quickjs/hook/build.dart）：macOS 分支补 `xcrun --sdk macosx --show-sdk-path` 的 isysroot（CFLAGS+LDFLAGS），否则 Xcode 新版本 ld 报 `library 'System' not found`，JS 引擎构建失败（此前 macOS 集成测试/构建全挂）。验证：flutter build macos --debug ✅。
+
+### 待办
+- [x] M1 冒烟：widget 级 2/2 + macOS 桌面集成测试通过（quickjs 链接修复后）。
+- [ ] M1-5 真实书源端到端验收（模拟器/真机 + 真实书源如天域）：导入→搜索→详情→阅读，确认不再整页 HTML。
+- [ ] M2（可选）：拆 js_rule_executor(2553)/rule_engine(1277)/reader_repository_impl(~1250)。
+- [ ] 提交决策：工作区含历史安全修复(52 文件) + 本次 M0/M1，建议分 2 个 commit。
+
+---
+
+# 历史记录（旧主线，功能仍保留部分已被减法移除）
 
 ## 已交付（全部推送 main，166 测试全过，analyze 0 问题）
 

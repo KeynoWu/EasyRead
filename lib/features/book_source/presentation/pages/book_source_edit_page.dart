@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../domain/entities/book_source.dart';
 import '../../domain/repositories/book_source_repository.dart';
@@ -199,21 +198,6 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
     );
   }
 
-  Future<void> _openDebug() async {
-    final name = _controllers['name']!.text.trim();
-    final source = TestBookSource().buildTestSource(
-      name: name.isEmpty ? '测试' : name,
-      url: _controllers['url']!.text.trim().isEmpty
-          ? null
-          : _controllers['url']!.text.trim(),
-      group: _controllers['group']!.text.trim().isEmpty
-          ? null
-          : _controllers['group']!.text.trim(),
-      rules: _buildRules(),
-    );
-    await context.push('/book-source/debug', extra: source);
-  }
-
   Future<void> _save() async {
     final name = _controllers['name']!.text.trim();
     if (name.isEmpty) {
@@ -265,11 +249,6 @@ class _BookSourceEditPageState extends State<BookSourceEditPage> {
       appBar: AppBar(
         title: Text(widget.source == null ? '新建书源' : '编辑书源'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.bug_report_outlined),
-            onPressed: _openDebug,
-            tooltip: '调试规则',
-          ),
           IconButton(
             icon: const Icon(Icons.science_outlined),
             onPressed: _test,

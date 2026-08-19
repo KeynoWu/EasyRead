@@ -1,18 +1,14 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import '../../core/pagination/page_layout.dart';
 import '../../core/theme/reader_theme.dart';
-import '../../data/services/tts_service.dart';
 import '../../../settings/domain/entities/chinese_conversion.dart';
 import '../providers/reader_provider.dart';
 
 class ReaderSettingsPanel extends ConsumerStatefulWidget {
-  /// 朗读设置作用的 TtsService；不传时面板自建实例兜底。
-  /// 阅读页应传入自身正在朗读的实例，保证语速/定时停止真正生效。
-  final TtsService? ttsService;
-
-  const ReaderSettingsPanel({super.key, this.ttsService});
+  const ReaderSettingsPanel({super.key});
 
   @override
   ConsumerState<ReaderSettingsPanel> createState() => _ReaderSettingsPanelState();
@@ -20,21 +16,16 @@ class ReaderSettingsPanel extends ConsumerStatefulWidget {
 
 class _ReaderSettingsPanelState extends ConsumerState<ReaderSettingsPanel> {
   double _brightness = 0.8;
-  /// 朗读语速（0.2-1.0，回显持久化值）
-  double _speechRate = 0.5;
-  /// 定时停止分钟数；null 表示不停止
-  int? _sleepTimerMinutes;
-  /// 面板自建 TTS 实例：仅当外部未注入时创建，dispose 时回收
-  TtsService? _ownedTts;
-  /// 朗读设置作用的 TTS 实例（优先外部注入）
-  TtsService get _tts => widget.ttsService ?? (_ownedTts ??= TtsService());
   /// 当前设置写入范围（面板打开时从 notifier 回显；切换后后续修改写入对应范围）
   SettingsScope _scope = SettingsScope.global;
-  /// 滑杆拖动中的预览值：onChanged 只更新本地预览，onChangeEnd 才提交重排
+  /// 滑杆拖动中的预览值：onChanged 更新本地预览并节流实时重排，
+  /// onChangeEnd 落盘最终值
   double? _previewFontSize;
   double? _previewLineHeight;
   double? _previewParagraphSpacing;
   double? _previewHorizontalPadding;
+  /// 布局预览节流 Timer：拖动中合并重排（150ms），避免逐 tick 全量分页
+  Timer? _previewTimer;
 
   @override
   void initState() {
@@ -49,24 +40,19 @@ class _ReaderSettingsPanelState extends ConsumerState<ReaderSettingsPanel> {
     }).catchError((_) {
       // 平台不支持时保持默认值
     });
-    // 进入面板时读取持久化的 TTS 设置（语速/定时停止）回显到控件
-    TtsService.loadSettings().then((settings) {
-      if (mounted) {
-        setState(() {
-          _speechRate = settings.rate;
-          _sleepTimerMinutes = settings.sleepMinutes;
-        });
-      }
-    }).catchError((_) {
-      // 读取失败保持默认值
-    });
   }
 
   @override
   void dispose() {
-    // 回收面板自建实例：取消其内部定时器，避免关闭面板后倒计时残留
-    _ownedTts?.dispose();
+    // 取消布局预览节流定时器，避免面板关闭后仍触发重排
+    _previewTimer?.cancel();
     super.dispose();
+  }
+
+  /// 拖动节流：合并 150ms 内的连续拖动，触发一次实时重排预览（不写盘）
+  void _scheduleLayoutPreview(VoidCallback apply) {
+    _previewTimer?.cancel();
+    _previewTimer = Timer(const Duration(milliseconds: 150), apply);
   }
 
   @override
@@ -90,6 +76,43 @@ class _ReaderSettingsPanelState extends ConsumerState<ReaderSettingsPanel> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // 面板头部：返回 + 当前章节标题 + 收起。
+              // 顶栏随面板显隐（沉浸式阅读），此处保证隐藏时仍有返回途径。
+              Row(
+                children: [
+                  IconButton(
+                    icon: Icon(
+                      Icons.arrow_back,
+                      color: state.theme.textColor,
+                    ),
+                    onPressed: () => Navigator.of(context).pop(),
+                    tooltip: '返回',
+                  ),
+                  Expanded(
+                    child: Text(
+                      state.currentChapter?.title ?? '阅读',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: state.theme.textColor,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      Icons.keyboard_arrow_down,
+                      color: state.theme.textColor,
+                    ),
+                    onPressed: notifier.toggleSettings,
+                    tooltip: '收起',
+                  ),
+                ],
+              ),
+              const Divider(height: 1),
+              const SizedBox(height: 12),
               // 设置范围：决定后续修改持久化到全局还是仅当前书本
               _buildSection(
                 title: '设置范围',
@@ -134,14 +157,29 @@ class _ReaderSettingsPanelState extends ConsumerState<ReaderSettingsPanel> {
                         min: 12,
                         max: 32,
                         divisions: 20,
-                        // 拖动中只更新本地预览，抬手才触发分页重排，避免逐 tick 重排
+                        // 拖动中节流实时重排预览（不写盘），抬手落盘最终值
                         onChanged: (value) {
                           setState(() => _previewFontSize = value);
+                          _scheduleLayoutPreview(() {
+                            // updateLayout 整体替换 layoutConfig：必须透传全部现有字段，
+                            // 否则用户已设的段距/边距/字重/衬线会被清空
+                            final layout = state.layoutConfig;
+                            notifier.updateLayout(
+                              LayoutConfig(
+                                fontSize: value,
+                                lineHeight: layout.lineHeight,
+                                paragraphSpacing: layout.paragraphSpacing,
+                                horizontalPadding: layout.horizontalPadding,
+                                fontWeight: layout.fontWeight,
+                                fontFamily: layout.fontFamily,
+                              ),
+                              persist: false,
+                            );
+                          });
                         },
                         onChangeEnd: (value) {
                           _previewFontSize = null;
-                          // updateLayout 整体替换 layoutConfig：必须透传全部现有字段，
-                          // 否则用户已设的段距/边距/字重/衬线会被清空
+                          _previewTimer?.cancel();
                           final layout = state.layoutConfig;
                           notifier.updateLayout(LayoutConfig(
                             fontSize: value,
@@ -171,13 +209,28 @@ class _ReaderSettingsPanelState extends ConsumerState<ReaderSettingsPanel> {
                         min: 1.0,
                         max: 2.0,
                         divisions: 10,
-                        // 拖动中只更新本地预览，抬手才触发分页重排，避免逐 tick 重排
+                        // 拖动中节流实时重排预览（不写盘），抬手落盘最终值
                         onChanged: (value) {
                           setState(() => _previewLineHeight = value);
+                          _scheduleLayoutPreview(() {
+                            // updateLayout 整体替换 layoutConfig：必须透传全部现有字段
+                            final layout = state.layoutConfig;
+                            notifier.updateLayout(
+                              LayoutConfig(
+                                fontSize: layout.fontSize,
+                                lineHeight: value,
+                                paragraphSpacing: layout.paragraphSpacing,
+                                horizontalPadding: layout.horizontalPadding,
+                                fontWeight: layout.fontWeight,
+                                fontFamily: layout.fontFamily,
+                              ),
+                              persist: false,
+                            );
+                          });
                         },
                         onChangeEnd: (value) {
                           _previewLineHeight = null;
-                          // updateLayout 整体替换 layoutConfig：必须透传全部现有字段
+                          _previewTimer?.cancel();
                           final layout = state.layoutConfig;
                           notifier.updateLayout(LayoutConfig(
                             fontSize: layout.fontSize,
@@ -207,13 +260,28 @@ class _ReaderSettingsPanelState extends ConsumerState<ReaderSettingsPanel> {
                         min: 4,
                         max: 24,
                         divisions: 20,
-                        // 拖动中只更新本地预览，抬手才提交，避免逐 tick 重排
+                        // 拖动中节流实时重排预览（不写盘），抬手落盘最终值
                         onChanged: (value) {
                           setState(() => _previewParagraphSpacing = value);
+                          _scheduleLayoutPreview(() {
+                            // updateLayout 整体替换 layoutConfig：必须透传全部现有字段
+                            final layout = state.layoutConfig;
+                            notifier.updateLayout(
+                              LayoutConfig(
+                                fontSize: layout.fontSize,
+                                lineHeight: layout.lineHeight,
+                                paragraphSpacing: value,
+                                horizontalPadding: layout.horizontalPadding,
+                                fontWeight: layout.fontWeight,
+                                fontFamily: layout.fontFamily,
+                              ),
+                              persist: false,
+                            );
+                          });
                         },
                         onChangeEnd: (value) {
                           _previewParagraphSpacing = null;
-                          // updateLayout 整体替换 layoutConfig：必须透传全部现有字段
+                          _previewTimer?.cancel();
                           final layout = state.layoutConfig;
                           notifier.updateLayout(LayoutConfig(
                             fontSize: layout.fontSize,
@@ -243,13 +311,28 @@ class _ReaderSettingsPanelState extends ConsumerState<ReaderSettingsPanel> {
                         min: 8,
                         max: 32,
                         divisions: 24,
-                        // 拖动中只更新本地预览，抬手才提交，避免逐 tick 重排
+                        // 拖动中节流实时重排预览（不写盘），抬手落盘最终值
                         onChanged: (value) {
                           setState(() => _previewHorizontalPadding = value);
+                          _scheduleLayoutPreview(() {
+                            // updateLayout 整体替换 layoutConfig：必须透传全部现有字段
+                            final layout = state.layoutConfig;
+                            notifier.updateLayout(
+                              LayoutConfig(
+                                fontSize: layout.fontSize,
+                                lineHeight: layout.lineHeight,
+                                paragraphSpacing: layout.paragraphSpacing,
+                                horizontalPadding: value,
+                                fontWeight: layout.fontWeight,
+                                fontFamily: layout.fontFamily,
+                              ),
+                              persist: false,
+                            );
+                          });
                         },
                         onChangeEnd: (value) {
                           _previewHorizontalPadding = null;
-                          // updateLayout 整体替换 layoutConfig：必须透传全部现有字段
+                          _previewTimer?.cancel();
                           final layout = state.layoutConfig;
                           notifier.updateLayout(LayoutConfig(
                             fontSize: layout.fontSize,
@@ -398,44 +481,36 @@ class _ReaderSettingsPanelState extends ConsumerState<ReaderSettingsPanel> {
                 ),
               ),
               const SizedBox(height: 16),
-              // 朗读：语速 + 定时停止（对齐 legado 听书）
-              _buildSection(
-                title: '朗读',
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // 语速
-                    Row(
-                      children: [
-                        const Text('慢', style: TextStyle(fontSize: 12)),
-                        Expanded(
-                          child: Slider(
-                            value: _speechRate,
-                            min: 0.2,
-                            max: 1.0,
-                            divisions: 16,
-                            // 拖动中只更新本地预览，抬手才应用到引擎并持久化
-                            onChanged: (value) => setState(() => _speechRate = value),
-                            onChangeEnd: _applySpeechRate,
+              // 恢复默认：排版/主题/阅读模式/翻页动画回退默认值
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    final confirmed = await showDialog<bool>(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        title: const Text('恢复默认设置'),
+                        content: const Text('将重置字号、行距、段距、边距、字重、'
+                            '字体、主题、阅读模式与翻页动画为默认值（全局）。'),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, false),
+                            child: const Text('取消'),
                           ),
-                        ),
-                        const Text('快', style: TextStyle(fontSize: 12)),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    // 定时停止
-                    SegmentedButton<int?>(
-                      segments: const [
-                        ButtonSegment(value: null, label: Text('不停止')),
-                        ButtonSegment(value: 15, label: Text('15 分钟')),
-                        ButtonSegment(value: 30, label: Text('30 分钟')),
-                        ButtonSegment(value: 60, label: Text('60 分钟')),
-                      ],
-                      selected: {_sleepTimerMinutes},
-                      onSelectionChanged: (selection) =>
-                          _applySleepTimer(selection.first),
-                    ),
-                  ],
+                          FilledButton(
+                            onPressed: () => Navigator.pop(context, true),
+                            child: const Text('恢复'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirmed == true) {
+                      notifier.resetLayoutSettings();
+                      if (mounted) setState(() {});
+                    }
+                  },
+                  icon: const Icon(Icons.restart_alt, size: 18),
+                  label: const Text('恢复默认设置'),
                 ),
               ),
             ],
@@ -460,25 +535,6 @@ class _ReaderSettingsPanelState extends ConsumerState<ReaderSettingsPanel> {
         const SnackBar(content: Text('当前使用全局设置，修改将仅应用于本书')),
       );
     }
-  }
-
-  /// 提交语速：应用到 TTS 引擎并持久化
-  Future<void> _applySpeechRate(double value) async {
-    setState(() => _speechRate = value);
-    await _tts.setSpeechRate(value);
-    await TtsService.saveSettings(rate: value, sleepMinutes: _sleepTimerMinutes);
-  }
-
-  /// 应用定时停止：启动/取消 TTS 倒计时并持久化，SnackBar 提示剩余分钟
-  Future<void> _applySleepTimer(int? minutes) async {
-    setState(() => _sleepTimerMinutes = minutes);
-    _tts.setSleepTimer(minutes == null ? null : Duration(minutes: minutes));
-    await TtsService.saveSettings(rate: _speechRate, sleepMinutes: minutes);
-    if (!mounted) return;
-    final message =
-        minutes == null ? '已取消定时停止' : '将在 $minutes 分钟后停止朗读';
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   Widget _buildSection({required String title, required Widget child}) {

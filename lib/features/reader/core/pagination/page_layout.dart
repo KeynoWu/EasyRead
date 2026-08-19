@@ -170,8 +170,10 @@ class PageLayout {
       if (best <= start) {
         best = start + 1;
       }
-      final chunk = text.substring(start, best).trim();
-      if (chunk.isNotEmpty) {
+      // 不 trim 首尾空白：页面边界剥离空白会造成西文连字/字符丢失，
+      // 保留原切片（仅跳过纯空白块）。渲染层不必担心，TextSpan 天然处理空白。
+      final chunk = text.substring(start, best);
+      if (chunk.trim().isNotEmpty) {
         result.add(TextNode(type: NodeType.paragraph, text: chunk));
       }
       start = best;

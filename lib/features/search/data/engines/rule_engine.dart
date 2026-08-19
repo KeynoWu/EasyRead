@@ -657,7 +657,9 @@ class RuleEngine {
       final regex = RegExp(suffix.pattern);
       if (suffix.replaceFirst) {
         final match = regex.firstMatch(value);
-        if (match == null) return suffix.replacement;
+        // Legado/Java 语义：replaceFirst 未命中时返回原值，
+        // 而不是把替换串本身当作结果（那会污染字段值）。
+        if (match == null) return value;
         return _expandReplacement(match, suffix.replacement);
       }
       return value.replaceAllMapped(
@@ -672,9 +674,10 @@ class RuleEngine {
   /// 展开 Java/Legado 风格替换串：`$1`/`$2` 引用捕获组，`$$` 转义为 `$`。
   static String _expandReplacement(Match match, String replacement) {
     return replacement.replaceAllMapped(
-      RegExp(r'\$\$|\$\d+'),
+      RegExp(r'\$\$|\$&|\$\d+'),
       (group) {
         if (group.group(0) == r'$$') return r'$';
+        if (group.group(0) == r'$&') return match.group(0) ?? '';
         final index = int.parse(group.group(0)!.substring(1));
         return index <= match.groupCount ? match.group(index) ?? '' : '';
       },

@@ -3,7 +3,7 @@ import 'package:hive/hive.dart';
 import '../../domain/entities/chapter_catalog.dart';
 import '../../domain/repositories/reader_repository.dart';
 
-/// 整本缓存盒：BookCacheService 写入、BookExporter 读取共用。
+/// 整本缓存盒：BookCacheService 写入、阅读器读取共用。
 ///
 /// 盒名 `book_cache`，与阅读器既有的 LRU 章节缓存盒（`chapters`）相互独立：
 /// - 章节内容：`bookId|chapterIndex` → 净化后 HTML（String）
@@ -44,6 +44,11 @@ class BookCacheService {
 
   BookCacheService({required this.repository});
 
+  /// 整本缓存（book_cache）的上限：最多保留最近缓存的整本书。
+  /// 整本缓存用于导出，必须保持单本书内部章节完整，故不做单章淘汰，
+  /// 只按元数据 updatedAt 淘汰最久未被重新缓存的整本书（含其章节+meta）。
+  static const int maxBooks = 20;
+
   /// 整本缓存：
   /// - 跳过已缓存章节（命中计数）；失败章节计入 [BookCacheResult.failed]
   ///   并继续，重跑时自动重试；
@@ -55,7 +60,37 @@ class BookCacheService {
   ///
   /// [chapters] 为空时按目录从仓库拉取（调用方已有目录时可传入复用，
   /// 避免重复请求）。
+  /// 同书同源的并发去重：缓存期间再次触发直接复用同一 Future，
+  /// 避免 check-then-act 竞态导致重复拉取或混入不同源章节。
+  static final Map<String, Future<BookCacheResult>> _inFlight = {};
+
   Future<BookCacheResult> cacheBook({
+    required String bookId,
+    required String sourceId,
+    required String detailUrl,
+    List<ChapterItem>? chapters,
+    Map<String, String> variables = const {},
+    void Function(int done, int total, String title)? onProgress,
+    CancelToken? cancelToken,
+  }) {
+    final key = '$bookId|$sourceId';
+    final running = _inFlight[key];
+    if (running != null) return running;
+    final future = _cacheBook(
+      bookId: bookId,
+      sourceId: sourceId,
+      detailUrl: detailUrl,
+      chapters: chapters,
+      variables: variables,
+      onProgress: onProgress,
+      cancelToken: cancelToken,
+    );
+    _inFlight[key] = future;
+    future.whenComplete(() => _inFlight.remove(key));
+    return future;
+  }
+
+  Future<BookCacheResult> _cacheBook({
     required String bookId,
     required String sourceId,
     required String detailUrl,
@@ -122,6 +157,9 @@ class BookCacheService {
       }
       onProgress?.call(i + 1, total, item.title);
     }
+    if (cancelToken == null || !cancelToken.isCancelled) {
+      await _trimCacheBooks(box);
+    }
     return BookCacheResult(
       total: total,
       cached: cached,
@@ -129,6 +167,39 @@ class BookCacheService {
       failed: failed,
       cancelled: cancelToken != null && cancelToken.isCancelled,
     );
+  }
+
+  /// 按书数限制淘汰最旧的整本缓存：超过 [maxBooks] 时删除最久未缓存的书
+  /// （章节 + 元数据），避免 disk 无界增长。单本书内部不淘汰，保证导出完整。
+  Future<void> _trimCacheBooks(Box box) async {
+    final metaKeys = box.keys
+        .where((k) => k.toString().startsWith('__meta_'))
+        .toList();
+    if (metaKeys.length <= maxBooks) return;
+    final updatedAt = <String, DateTime>{};
+    for (final k in metaKeys) {
+      final v = box.get(k);
+      final ms = v is Map ? v['updatedAt'] : null;
+      updatedAt[k.toString()] =
+          ms is int ? DateTime.fromMillisecondsSinceEpoch(ms) : DateTime.fromMillisecondsSinceEpoch(0);
+    }
+    final oldest = metaKeys.map((k) => k.toString()).toList()
+      ..sort((a, b) => updatedAt[a]!.compareTo(updatedAt[b]!));
+    final evictCount = oldest.length - maxBooks;
+    final bookIds = [
+      for (final metaKey in oldest.take(evictCount))
+        metaKey.substring('__meta_'.length),
+    ];
+    final toDelete = <dynamic>[];
+    for (final key in box.keys) {
+      final s = key.toString();
+      if (bookIds.any((id) => s == '__meta_$id' || s.startsWith('$id|'))) {
+        toDelete.add(key);
+      }
+    }
+    if (toDelete.isNotEmpty) {
+      await box.deleteAll(toDelete);
+    }
   }
 
   /// 已缓存章节数（断点续传/导出前置判断用）

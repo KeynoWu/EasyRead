@@ -5,8 +5,12 @@ import '../../domain/usecases/manage_purification_rules.dart';
 /// 用户配置的净化规则 → 净化管线。
 /// 规则存放在 Hive（异步读取），加载完成后通过 [PurifyPipeline] 注入阅读仓库。
 /// 首次启动时若规则库为空，先导入内置默认规则集。
+/// 净化规则管理器：可由测试 override 注入替身（避免硬 new 无法替换依赖）。
+final managePurificationRulesProvider =
+    Provider<ManagePurificationRules>((ref) => ManagePurificationRules());
+
 final purifyPipelineProvider = FutureProvider<PurifyPipeline>((ref) async {
-  final manager = ManagePurificationRules();
+  final manager = ref.watch(managePurificationRulesProvider);
   await manager.ensureDefaults();
   final purifier = await manager.buildPurifier();
   final titlePurifier = await manager.buildTitlePurifier();

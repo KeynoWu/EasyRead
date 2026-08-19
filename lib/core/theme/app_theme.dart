@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 import 'app_colors.dart';
 
@@ -18,6 +19,18 @@ class AppTheme {
       ),
     );
     return base.copyWith(
+      // 平台原生转场：iOS/macOS 用 Cupertino 滑入（含边缘右滑返回手势），
+      // 其余平台用 Material 淡入。避免默认 Android 风格缩放转场导致的
+      // "像 Web/Android"观感。
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: {
+          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.android: FadeUpwardsPageTransitionsBuilder(),
+          TargetPlatform.linux: FadeUpwardsPageTransitionsBuilder(),
+          TargetPlatform.windows: FadeUpwardsPageTransitionsBuilder(),
+        },
+      ),
       // 大标题导航栏（iOS Large Title 风格）
       appBarTheme: const AppBarTheme(
         backgroundColor: AppColors.background,
@@ -106,6 +119,16 @@ class AppTheme {
       ),
     );
     return base.copyWith(
+      // 与浅色主题一致：iOS Cupertino 转场 + 边缘返回手势
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: {
+          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.android: FadeUpwardsPageTransitionsBuilder(),
+          TargetPlatform.linux: FadeUpwardsPageTransitionsBuilder(),
+          TargetPlatform.windows: FadeUpwardsPageTransitionsBuilder(),
+        },
+      ),
       appBarTheme: const AppBarTheme(
         backgroundColor: AppColors.darkBackground,
         foregroundColor: AppColors.darkTextPrimary,

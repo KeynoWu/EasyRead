@@ -134,8 +134,10 @@ class JsPurifier {
   static String _expandCaptures(String replacement, _JsMatch match) {
     if (!replacement.contains(r'$')) return replacement;
     return replacement.replaceAllMapped(
-      RegExp(r'\$(\d+)'),
+      RegExp(r'\$\$|\$&|\$(\d+)'),
       (m) {
+        if (m.group(0) == r'$$') return r'$';
+        if (m.group(0) == r'$&') return match.text;
         final index = int.parse(m.group(1)!);
         if (index == 0) return match.text;
         if (index <= match.groups.length) {

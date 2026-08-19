@@ -23,39 +23,54 @@ class PurifyPatternGuard {
       if (ch != '(') continue;
       final close = _findGroupEnd(pattern, i);
       if (close == -1) continue;
-      final qLen = _unboundedQuantifierLength(pattern, close + 1);
-      if (qLen == 0) {
+      final body = pattern.substring(i + 1, close);
+      // 组后无任何量词时，即使组体可变长也只是线性匹配，无灾难性回溯
+      if (!_hasAnyQuantifier(pattern, close + 1)) {
         i = close;
         continue;
       }
-      // 组体不含量词时嵌套只是普通分组，无回溯风险
-      final body = pattern.substring(i + 1, close);
-      if (_bodyHasQuantifier(body)) return true;
-      i = close + qLen;
+      // 组体含可变长量词（.* / .+ / a? 等）或顶层 alternation 时，
+      // 组被重复匹配即可产生指数级回溯。精确次数 {20} 同样可能灾难性
+      // （如 (.*a){20}），因此这里用「组后有任何量词」而非仅无上界量词。
+      if (_bodyHasQuantifier(body) || _hasTopLevelAlternation(body)) {
+        return true;
+      }
+      i = close;
     }
     return false;
   }
 
-  /// 从 [start] 起的无上界量词长度：`+`/`*` 为 1，`{n,}` 为括号总长，否则 0
-  static int _unboundedQuantifierLength(String pattern, int start) {
-    if (start >= pattern.length) return 0;
+  /// 组后是否紧跟任意量词（+、*、?、{...}）
+  static bool _hasAnyQuantifier(String pattern, int start) {
+    if (start >= pattern.length) return false;
     final ch = pattern[start];
-    if (ch == '+' || ch == '*') return 1;
-    if (ch == '{') {
-      final end = pattern.indexOf('}', start);
-      if (end == -1) return 0;
-      final spec = pattern.substring(start + 1, end);
-      // 仅无上界（如 {2,}）与上界可超大的区间构成灾难性回溯风险
-      if (RegExp(r'^\d+\s*,\s*\d*\s*$').hasMatch(spec)) {
-        final comma = spec.indexOf(',');
-        final upper = spec.substring(comma + 1).trim();
-        if (upper.isEmpty) return end - start + 1; // {n,} 无上界
-        if (int.tryParse(upper) != null && int.parse(upper) > 100) {
-          return end - start + 1; // {n,巨大} 近似无上界
-        }
+    if (ch == '+' || ch == '*' || ch == '?') return true;
+    if (ch == '{') return pattern.indexOf('}', start) != -1;
+    return false;
+  }
+
+  /// 是否存在顶层 |（不在嵌套组 / 字符类内）
+  static bool _hasTopLevelAlternation(String body) {
+    var depth = 0;
+    for (var i = 0; i < body.length; i++) {
+      final ch = body[i];
+      if (ch == '\\') {
+        i++;
+        continue;
+      }
+      if (ch == '[') {
+        i = _skipCharClass(body, i);
+        continue;
+      }
+      if (ch == '(') {
+        depth++;
+      } else if (ch == ')') {
+        if (depth > 0) depth--;
+      } else if (ch == '|' && depth == 0) {
+        return true;
       }
     }
-    return 0;
+    return false;
   }
 
   /// 组体是否含量词（+、*、?、{n,m}/{n,}）。精确次数 {n} 是确定性的，不算风险。

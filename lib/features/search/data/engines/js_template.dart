@@ -25,11 +25,22 @@ class JsTemplateEngine {
     'while (',
   ];
 
-  /// 该规则是否属于模板子集可处理范围（无 ajax/浏览器/正则 match 等）
+  /// 模板子集实际实现的方法：仅支持这三者 + 变量赋值。
+  /// 出现任何其它 java.xxx 能力（加密/编码/put/getString 等）都应交给
+  /// 完整 JsRuleExecutor，而不是被模板引擎静默忽略返回 null。
+  static const _allowedJavaMethods = {'get', 'getElement', 'setContent'};
+
+  /// 该规则是否属于模板子集可处理范围。
+  /// 先过黑名单（ajax/eval/match 等），再过 java 方法白名单。
   static bool canHandle(String rawRule) {
     final body = _scriptBody(rawRule);
     if (body == null) return false;
-    return !unsupportedMarkers.any(body.contains);
+    if (unsupportedMarkers.any(body.contains)) return false;
+    final methods = RegExp(r'java\.(\w+)')
+        .allMatches(body)
+        .map((m) => m.group(1)!)
+        .toSet();
+    return methods.every(_allowedJavaMethods.contains);
   }
 
   /// 执行 JS 模板规则，返回提取值；不支持/解析失败返回 null

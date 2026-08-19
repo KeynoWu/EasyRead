@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:fast_gbk/fast_gbk.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
@@ -19,16 +20,19 @@ class DioClient {
   DioClient.forTesting(Dio dio) : this._withDio(dio);
 
   static Dio _buildDio() {
-    final dio = Dio(BaseOptions(
-      connectTimeout: const Duration(seconds: 10),
-      receiveTimeout: const Duration(seconds: 15),
-      followRedirects: false,
-      validateStatus: (status) => status != null && status < 400,
-      headers: {
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-      },
-    ));
+    final dio = Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 10),
+        receiveTimeout: const Duration(seconds: 15),
+        followRedirects: false,
+        validateStatus: (status) => status != null && status < 400,
+        headers: {
+          'Accept':
+              'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        },
+      ),
+    );
     dio.interceptors.addAll([
       UaInterceptor(),
       RateLimitInterceptor(),
@@ -206,7 +210,7 @@ class DioClient {
     var activeHeaders = headers;
     var currentUri = Uri.parse(current);
     for (var i = 0; i < 5; i++) {
-      _assertSafeUrl(current);
+      await _assertSafeUrl(current);
       final options = Options(
         headers: activeHeaders,
         extra: {'source_id': sourceId, ...?extra},
@@ -246,18 +250,18 @@ class DioClient {
         }
         // HTTP 语义：301/302/303 重定向后 POST 应转为 GET 并丢弃 body；
         // 仅 307/308 保持原方法与 body
-          if (statusCode == 301 || statusCode == 302 || statusCode == 303) {
-            method = 'GET';
-            data = null;
-            // 转 GET 后无 body：移除表单 Content-Type，避免无 body 仍声明
-            // application/x-www-form-urlencoded 引起严格代理/服务端告警
-            if (activeHeaders != null &&
-                activeHeaders.containsKey('Content-Type')) {
-              activeHeaders = Map<String, String>.from(activeHeaders)
-                ..remove('Content-Type');
-              if (activeHeaders.isEmpty) activeHeaders = null;
-            }
+        if (statusCode == 301 || statusCode == 302 || statusCode == 303) {
+          method = 'GET';
+          data = null;
+          // 转 GET 后无 body：移除表单 Content-Type，避免无 body 仍声明
+          // application/x-www-form-urlencoded 引起严格代理/服务端告警
+          if (activeHeaders != null &&
+              activeHeaders.containsKey('Content-Type')) {
+            activeHeaders = Map<String, String>.from(activeHeaders)
+              ..remove('Content-Type');
+            if (activeHeaders.isEmpty) activeHeaders = null;
           }
+        }
         current = nextUri.toString();
         currentUri = nextUri;
         continue;
@@ -267,10 +271,45 @@ class DioClient {
     throw StateError('重定向次数过多');
   }
 
-  static void _assertSafeUrl(String url) {
+  /// 校验 URL 安全：scheme 合法 + 非内网/保留地址；对域名额外做 DNS 解析，
+  /// 逐条校验解析出的 IP，封堵 nip.io / localtest.me / DNS 重绑定等绕过手段。
+  /// 解析失败时放行（让真实请求在传输层失败）：不影响离线/无 DNS 环境，
+  /// 但一旦解析成功且指向内网/保留地址即拒绝。
+  static Future<void> _assertSafeUrl(String url) async {
     if (!_isHttpUrl(url)) {
       throw ArgumentError('不支持的 URL scheme 或地址: $url');
     }
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    final host = uri.host.toLowerCase();
+    // 字面量 IP / 数字型 host 已在 _isHttpUrl 中处理完毕，无需解析
+    if (_parseIpv4(host) != null ||
+        host.contains(':') ||
+        _looksLikeNumericHost(host)) {
+      return;
+    }
+    try {
+      final addresses = await InternetAddress.lookup(host);
+      for (final address in addresses) {
+        if (!_isSafeResolvedAddress(address)) {
+          throw ArgumentError('域名解析到内网/保留地址，拒绝请求: $url');
+        }
+      }
+    } catch (e) {
+      // 仅吞掉 DNS 解析类错误（SocketException 等）：请求随后会在传输层失败。
+      // 已解析出不安全地址时上面已抛出 ArgumentError，不会被此处吞掉。
+      if (e is ArgumentError) rethrow;
+      return;
+    }
+  }
+
+  static bool _isSafeResolvedAddress(InternetAddress address) {
+    if (address.type == InternetAddressType.IPv4) {
+      final bytes = address.rawAddress;
+      if (bytes.length != 4) return false;
+      return !_isUnsafeIpv4([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    }
+    return !_isUnsafeIpv6(address.address);
   }
 
   /// 仅允许 http/https，并阻止直接指向本机、内网和保留地址的 URL。
@@ -326,7 +365,9 @@ class DioClient {
     // IPv4 映射 0:0:0:0:0:ffff:<v4> 与回环 0:0:0:0:0:0:0:1
     if (lower.contains(':') && !lower.contains('::')) {
       final groups = lower.split(':');
-      if (groups.length >= 7 && groups.take(5).every((g) => g == '0') && groups[5] == 'ffff') {
+      if (groups.length >= 7 &&
+          groups.take(5).every((g) => g == '0') &&
+          groups[5] == 'ffff') {
         List<int>? mapped;
         if (groups.length == 8) {
           mapped = _ipv4FromHexPair(groups[6], groups[7]);
@@ -363,10 +404,19 @@ class DioClient {
     return [hi >> 8, hi & 0xFF, lo >> 8, lo & 0xFF];
   }
 
-  static Map<String, String>? _sanitizeRedirectHeaders(Map<String, String>? headers) {
+  static Map<String, String>? _sanitizeRedirectHeaders(
+    Map<String, String>? headers,
+  ) {
     if (headers == null) return null;
     // content-type 为非敏感请求头：跨域重定向后仍可能以 POST 重发 body（307/308）
-    const allowed = {'accept', 'accept-language', 'user-agent', 'accept-encoding', 'connection', 'content-type'};
+    const allowed = {
+      'accept',
+      'accept-language',
+      'user-agent',
+      'accept-encoding',
+      'connection',
+      'content-type',
+    };
     final sanitized = <String, String>{};
     for (final entry in headers.entries) {
       if (allowed.contains(entry.key.toLowerCase())) {

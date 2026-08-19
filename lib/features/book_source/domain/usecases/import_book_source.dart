@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:either_dart/either.dart';
 import '../../../../core/network/dio_client.dart';
+import '../../../../core/network/url_redact.dart';
 import '../entities/book_source.dart';
 import '../repositories/book_source_repository.dart';
 import 'parse_book_source_rule.dart';
@@ -79,7 +80,7 @@ class ImportBookSource {
   }) async {
     final trimmed = url.trim();
     if (trimmed.isEmpty) return const Left('请输入书源地址');
-    debugPrint('[ImportBookSource] fromUrl 开始: $trimmed');
+    debugPrint('[ImportBookSource] fromUrl 开始: ${redactUrl(trimmed)}');
     try {
       final content = await _downloadWithIdleTimeout(trimmed, onProgress: onProgress, cancelToken: cancelToken);
       debugPrint('[ImportBookSource] 请求完成, 内容长度: ${content.length}');
@@ -103,7 +104,7 @@ class ImportBookSource {
       debugPrint('[ImportBookSource] 请求失败: ${e.type}');
       return Left('网络请求失败: ${_friendlyError(e)}');
     } catch (e) {
-      debugPrint('[ImportBookSource] 请求失败: ${e.runtimeType}: $e');
+      debugPrint('[ImportBookSource] 请求失败: ${e.runtimeType}');
       return Left('网络请求失败: $e');
     }
   }

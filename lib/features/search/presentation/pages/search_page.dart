@@ -26,6 +26,8 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   final _searchController = TextEditingController();
   final _historyService = SearchHistoryService();
   late Future<List<String>> _historyFuture;
+  /// 结果列表滚动控制器：滚动到底部自动加载下一页
+  final ScrollController _scrollController = ScrollController();
 
   /// 当前生效的搜索关键词，驱动结果 provider（仅手动搜索/回车时更新）
   String _keyword = '';
@@ -43,13 +45,30 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   void initState() {
     super.initState();
     _historyFuture = _historyService.getRecent();
+    _scrollController.addListener(_onResultScroll);
   }
 
   @override
   void dispose() {
     _searchCancel?.cancel();
+    _scrollController.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  /// 滚动接近底部（200px 内）且本页已完成时自动加载下一页
+  void _onResultScroll() {
+    if (!_scrollController.hasClients) return;
+    final position = _scrollController.position;
+    if (position.pixels >= position.maxScrollExtent - 200) {
+      if (_keyword.isEmpty || _loadingMore) return;
+      final async = ref.read(searchResultsProvider((_keyword, _page)));
+      final finished =
+          async is AsyncData<SearchProgress> && async.value.finished;
+      if (finished) {
+        _loadMore();
+      }
+    }
   }
 
   /// 触发新搜索：取消旧批次、换上新令牌后驱动 provider。
@@ -207,12 +226,14 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                   ? _buildNoResultState(progress)
                   : const Center(child: CircularProgressIndicator()))
               : ListView.builder(
+                  controller: _scrollController,
                   itemCount: results.length,
                   itemBuilder: (context, index) =>
                       SearchResultItem(result: results[index]),
                 ),
         ),
         // 加载更多：第一页有结果且当前页完成后提供下一页入口
+        // （滚动到底部也会自动触发 _loadMore）
         if (results.isNotEmpty && progress.finished && !_loadingMore)
           SafeArea(
             top: false,

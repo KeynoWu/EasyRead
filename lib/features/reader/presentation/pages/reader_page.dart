@@ -3,26 +3,19 @@ import 'dart:convert';
 import 'package:screen_brightness/screen_brightness.dart';
 import '../../../../core/theme/app_colors.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'
+    show HapticFeedback, SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../data/services/bookmark_service.dart';
-import '../../data/services/note_service.dart';
-import '../../domain/entities/bookmark.dart';
-import '../../domain/entities/reading_note.dart';
 import '../../domain/usecases/auto_switch_source.dart';
-import '../../data/services/tts_service.dart';
-import '../../../settings/domain/usecases/reading_stats_service.dart';
 import '../providers/reader_provider.dart';
 import '../widgets/page_view_widget.dart';
-import '../widgets/bookmark_sheet.dart';
-import '../widgets/chapter_search_sheet.dart';
-import '../widgets/note_sheet.dart';
+import '../../../../core/router/app_router.dart' show ReaderRouteArgs;
 import '../../../../features/search/domain/entities/search_result.dart';
 import '../../../book_source/presentation/providers/book_source_provider.dart';
 import '../widgets/chapter_catalog_sheet.dart';
 import '../widgets/reader_settings_panel.dart';
 import '../widgets/source_switcher_sheet.dart';
-import '../widgets/image_reader_widget.dart';
 
 class ReaderPage extends ConsumerStatefulWidget {
   final String bookId;
@@ -47,10 +40,6 @@ class ReaderPage extends ConsumerStatefulWidget {
 class _ReaderPageState extends ConsumerState<ReaderPage> {
   /// 缓存 notifier：dispose 阶段 widget.ref 不可用，用此引用收尾同步
   ReaderNotifier? _notifier;
-  final TtsService _tts = TtsService();
-  final ReadingStatsService _statsService = ReadingStatsService();
-  final BookmarkService _bookmarkService = BookmarkService();
-  final NoteService _noteService = NoteService();
 
   /// 解析替代书源
   List<SourceOption> get _alternatives {
@@ -87,36 +76,39 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     } catch (_) {}
     return const {};
   }
-  bool _isTtsPlaying = false;
+
   /// 本页会话是否已自动换源过：单次失败只自动换一次（防循环），
   /// 后续失败需用户手动换源或重新进入阅读页后才会再次触发
   bool _autoSwitchAttempted = false;
-  DateTime? _pageOpenTime;
+
   /// 进入阅读页时的应用亮度，退出时恢复（阅读页存活期间亮度才生效）
   double? _entryBrightness;
 
   @override
   void initState() {
     super.initState();
-    _pageOpenTime = DateTime.now();
     // 缓存 notifier 引用：dispose 阶段 widget 的 ref 已被 Riverpod 3
     // 标记不可用（_assertNotDisposed），但 readerProvider 非 autoDispose
     // 仍存活，缓存的引用可直接调用其方法
     _notifier = ref.read(readerProvider.notifier);
     // 记录进入时的亮度，页面退出时恢复
-    ScreenBrightness().application.then((value) {
-      if (mounted) _entryBrightness = value;
-    }).catchError((_) {
-      // 平台不支持时跳过
-    });
+    ScreenBrightness().application
+        .then((value) {
+          if (mounted) _entryBrightness = value;
+        })
+        .catchError((_) {
+          // 平台不支持时跳过
+        });
     Future.microtask(() async {
       // initState 处于 widget 构建期，Riverpod 禁止在此修改 provider；
       // 延迟到帧后执行（resetForBook 先清残留，再按进度续读）
-      ref.read(readerProvider.notifier).resetForBook(
-        widget.bookId,
-        detailUrl: widget.detailUrl,
-        variables: _variables,
-      );
+      ref
+          .read(readerProvider.notifier)
+          .resetForBook(
+            widget.bookId,
+            detailUrl: widget.detailUrl,
+            variables: _variables,
+          );
       // 先恢复持久化的排版/主题/阅读模式，再按进度续读，
       // 避免首次分页使用默认设置后又被覆盖
       await ref.read(readerProvider.notifier).loadPersistedSettings();
@@ -127,13 +119,15 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       final sourceId = (widget.sourceId != null && widget.sourceId!.isNotEmpty)
           ? widget.sourceId
           : 'default';
-      ref.read(readerProvider.notifier).loadChapter(
-        bookId: widget.bookId,
-        chapterIndex: startChapter,
-        sourceId: sourceId!,
-        detailUrl: widget.detailUrl,
-        variables: _variables,
-      );
+      ref
+          .read(readerProvider.notifier)
+          .loadChapter(
+            bookId: widget.bookId,
+            chapterIndex: startChapter,
+            sourceId: sourceId!,
+            detailUrl: widget.detailUrl,
+            variables: _variables,
+          );
     });
   }
 
@@ -141,73 +135,22 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   void dispose() {
     // 用缓存引用而非 widget.ref：dispose 阶段 ref 已不可用（Riverpod 3）
     _notifier?.syncShelfNow();
-    // 释放 TTS：停止朗读、置空回调，防止离页后回调 UI
-    unawaited(_tts.dispose());
     // 恢复进入阅读页前的亮度（仅阅读页存活期间亮度生效）
     final entry = _entryBrightness;
     if (entry != null) {
-      unawaited(ScreenBrightness()
-          .setApplicationScreenBrightness(entry)
-          .catchError((_) {}));
+      unawaited(
+        ScreenBrightness()
+            .setApplicationScreenBrightness(entry)
+            .catchError((_) {}),
+      );
     } else {
-      unawaited(ScreenBrightness()
-          .resetApplicationScreenBrightness()
-          .catchError((_) {}));
-    }
-    // 记录本次阅读时长
-    final openTime = _pageOpenTime;
-    if (openTime != null) {
-      final elapsed = DateTime.now().difference(openTime).inSeconds;
-      if (elapsed > 5) {
-        _statsService.recordSession(elapsed);
-      }
+      unawaited(
+        ScreenBrightness().resetApplicationScreenBrightness().catchError(
+          (_) {},
+        ),
+      );
     }
     super.dispose();
-  }
-
-  Future<void> _openBookmarks() async {
-    final state = ref.read(readerProvider);
-    if (state.currentChapter == null) return;
-
-    // 打开书签列表；若选择书签则跳转
-    final selected = await showModalBottomSheet<dynamic>(
-      context: context,
-      builder: (_) => BookmarkSheet(bookId: widget.bookId),
-    );
-    if (selected != null && mounted) {
-      final bookmark = selected;
-      await ref.read(readerProvider.notifier).jumpToChapter(bookmark.chapterIndex);
-      if (mounted) {
-        ref.read(readerProvider.notifier).jumpToPage(bookmark.pageIndex);
-      }
-    }
-  }
-
-  Future<void> _toggleBookmark() async {
-    final state = ref.read(readerProvider);
-    if (state.currentChapter == null) return;
-
-    final chapter = state.currentChapter!;
-    final exists = await _bookmarkService.exists(widget.bookId, chapter.index, state.currentPage);
-    if (exists) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('该位置已有书签')),
-      );
-      return;
-    }
-
-    await _bookmarkService.add(Bookmark(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      bookId: widget.bookId,
-      chapterIndex: chapter.index,
-      pageIndex: state.currentPage,
-      createdAt: DateTime.now(),
-    ));
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('书签已添加')),
-    );
   }
 
   /// 章节加载失败 → 自动换源：设置开启且有可用替代源时，
@@ -227,8 +170,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     // 当前源名称用于提示"xx 失效"；查询失败不阻塞自动换源
     var currentName = '当前书源';
     try {
-      final currentSource =
-          await ref.read(bookSourceRepositoryProvider).getById(currentSourceId);
+      final currentSource = await ref
+          .read(bookSourceRepositoryProvider)
+          .getById(currentSourceId);
       if (currentSource != null && currentSource.name.isNotEmpty) {
         currentName = currentSource.name;
       }
@@ -240,8 +184,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     // 与手动换源一致：仅尝试当前启用（且未被删除）的替代源
     List<SourceOption> usableAlternatives = _alternatives;
     try {
-      final enabledSources =
-          await ref.read(bookSourceRepositoryProvider).getEnabled();
+      final enabledSources = await ref
+          .read(bookSourceRepositoryProvider)
+          .getEnabled();
       final enabledIds = {for (final s in enabledSources) s.id};
       usableAlternatives = [
         for (final a in _alternatives)
@@ -252,24 +197,26 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     }
     if (!mounted) return;
 
-    final result = await AutoSwitchSource(
-      repository: ref.read(readerRepositoryProvider),
-    ).execute(
-      bookId: widget.bookId,
-      currentSourceId: currentSourceId,
-      currentDetailUrl: widget.detailUrl,
-      alternatives: usableAlternatives,
-      variables: _variables,
-    );
+    final result =
+        await AutoSwitchSource(
+          repository: ref.read(readerRepositoryProvider),
+        ).execute(
+          bookId: widget.bookId,
+          currentSourceId: currentSourceId,
+          currentDetailUrl: widget.detailUrl,
+          alternatives: usableAlternatives,
+          variables: _variables,
+        );
     if (!mounted) return;
 
     if (result == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('当前书源不可用，自动换源失败，请手动切换书源')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('当前书源不可用，自动换源失败，请手动切换书源')));
       return;
     }
 
+    HapticFeedback.mediumImpact();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('源 $currentName 失效，已自动切换到 ${result.sourceName}')),
     );
@@ -281,13 +228,15 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     final progress = await repo.loadProgress(widget.bookId);
     if (!mounted) return;
     final startChapter = progress?.chapterIndex ?? 0;
-    ref.read(readerProvider.notifier).loadChapter(
-      bookId: widget.bookId,
-      chapterIndex: startChapter,
-      sourceId: result.sourceId,
-      detailUrl: result.detailUrl,
-      variables: _variables,
-    );
+    ref
+        .read(readerProvider.notifier)
+        .loadChapter(
+          bookId: widget.bookId,
+          chapterIndex: startChapter,
+          sourceId: result.sourceId,
+          detailUrl: result.detailUrl,
+          variables: _variables,
+        );
   }
 
   Future<void> _openSourceSwitcher() async {
@@ -320,79 +269,29 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     );
     if (selected != null && mounted && selected.bookId.isNotEmpty) {
       // 切换到新书源（保留替代书源列表，参数做 URL 编码）
-      final alts = jsonEncode(_alternatives.map((a) => {
-        'bookId': a.bookId,
-        'sourceId': a.sourceId,
-        'sourceName': a.sourceName,
-        'detailUrl': a.detailUrl,
-      }).toList());
-      context.pushReplacement(
-        '/reader/${Uri.encodeComponent(selected.bookId)}'
-        '?sourceId=${Uri.encodeComponent(selected.sourceId)}'
-        '&detailUrl=${Uri.encodeComponent(selected.detailUrl ?? '')}'
-        '&alternatives=${Uri.encodeComponent(alts)}',
+      final alts = jsonEncode(
+        _alternatives
+            .map(
+              (a) => {
+                'bookId': a.bookId,
+                'sourceId': a.sourceId,
+                'sourceName': a.sourceName,
+                'detailUrl': a.detailUrl,
+              },
+            )
+            .toList(),
       );
-    }
-  }
-
-  Future<void> _addNote() async {
-    final state = ref.read(readerProvider);
-    final chapter = state.currentChapter;
-    if (chapter == null) return;
-
-    final controller = TextEditingController();
-    try {
-      final saved = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('添加笔记'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            maxLines: 4,
-            decoration: const InputDecoration(hintText: '写下你的想法...'),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('保存')),
-          ],
+      context.pushReplacement(
+        '/reader/${Uri.encodeComponent(selected.bookId)}',
+        extra: ReaderRouteArgs(
+          bookId: selected.bookId,
+          sourceId: selected.sourceId,
+          detailUrl: selected.detailUrl,
+          alternativesJson: alts,
+          variablesJson: jsonEncode(_variables),
         ),
       );
-      if (saved == true && controller.text.trim().isNotEmpty && mounted) {
-        await _noteService.add(ReadingNote(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
-          bookId: widget.bookId,
-          chapterIndex: chapter.index,
-          text: controller.text.trim(),
-          createdAt: DateTime.now(),
-        ));
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('笔记已保存')),
-        );
-      }
-    } finally {
-      // 对话框 pop 后 TextField 元素仍在路由退出动画中（~300ms），
-      // 立即 dispose 会让下一帧 didUpdateWidget 对已释放 controller
-      // 加监听而触发 debugAssertNotDisposed 崩溃。延迟到动画结束后释放；
-      // 局部短生命周期对象，延迟无副作用。
-      Future.delayed(const Duration(milliseconds: 500), controller.dispose);
     }
-  }
-
-  void _openNotes() {
-    showModalBottomSheet(
-      context: context,
-      builder: (_) => NoteSheet(bookId: widget.bookId),
-    );
-  }
-
-  void _openChapterSearch() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => const ChapterSearchSheet(),
-    );
   }
 
   void _openCatalog() {
@@ -403,42 +302,10 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     );
   }
 
-  Future<void> _toggleTts() async {
-    final state = ref.read(readerProvider);
-    if (state.currentChapter == null) return;
-
-    if (_isTtsPlaying) {
-      await _tts.stop();
-      if (mounted) setState(() => _isTtsPlaying = false);
-    } else {
-      // 先置位播放状态再 await：防快速连点重复启动朗读；
-      // 播放中再次点击会走上面的停止分支，不会吞掉停止操作
-      setState(() => _isTtsPlaying = true);
-      try {
-        // 朗读净化后的纯文本，避免把 HTML 标签读出来
-        await _tts.speak(
-          TtsService.toPlainText(state.currentChapter!.content),
-        );
-      } catch (_) {
-        // 平台朗读失败不阻塞阅读
-      } finally {
-        if (mounted) setState(() => _isTtsPlaying = false);
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(readerProvider);
 
-    // 切章（loadChapter 成功/失败）时先停止朗读，避免旧章节内容继续播放
-    ref.listen<ReaderState>(readerProvider, (previous, next) {
-      if (_isTtsPlaying &&
-          previous?.currentChapter?.id != next.currentChapter?.id) {
-        _tts.stop();
-        if (mounted) setState(() => _isTtsPlaying = false);
-      }
-    });
     // 章节加载失败（错误态出现）→ 自动换源。
     // _maybeAutoSwitchSource 内部有防循环标记：单次失败只自动换一次，
     // 自动换源后的再次失败（含手动重试）不再触发，需手动换源或重新进入。
@@ -448,152 +315,157 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       }
     });
 
-    // 图片/漫画章节渲染分流：加载完成且判定为图片章节时（翻页/滚动
-    // 模式均适用，图片章节无滚动语义）走 ImageReaderWidget 逐图阅读，
-    // 不再进入文本分页/滚动渲染；加载中/错误态仍由 ReaderPageView 处理
-    final showImageReader = state.currentChapter != null &&
-        state.isImageChapter &&
-        !state.isLoading &&
-        state.errorMessage == null;
+    // 沉浸式阅读：顶栏随设置面板一起显隐（点击正文中间呼出/收起）。
+    // 面板内提供返回按钮（见 ReaderSettingsPanel 头部），保证顶栏隐藏
+    // 时仍有返回途径。
+    final showChrome = state.showSettings;
+    // 状态栏图标随阅读主题适配：深色背景用浅色图标
+    final isDarkBg = state.theme.backgroundColor.computeLuminance() < 0.5;
 
-    return Scaffold(
-      backgroundColor: state.theme.backgroundColor,
-      body: SafeArea(
-        child: Stack(
-          children: [
-            Column(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  color: state.theme.backgroundColor,
-                  child: Row(
-                    children: [
-                      IconButton(
-                        icon: Icon(Icons.arrow_back, color: state.theme.textColor),
-                        onPressed: () => context.pop(),
-                      ),
-                      const Spacer(),
-                      if (state.currentChapter != null)
-                        Flexible(
-                          child: Text(
-                            state.currentChapter!.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: state.theme.textColor, fontSize: 14),
-                          ),
-                        ),
-                      const Spacer(),
-                      // TTS 听书按钮
-                      IconButton(
-                        icon: Icon(
-                          _isTtsPlaying ? Icons.stop_circle_outlined : Icons.play_circle_outline,
-                          color: _isTtsPlaying ? AppColors.tint : state.theme.textColor,
-                        ),
-                        onPressed: _toggleTts,
-                        tooltip: _isTtsPlaying ? '停止朗读' : '朗读本章',
-                      ),
-                      IconButton(
-                        icon: Icon(Icons.settings, color: state.theme.textColor),
-                        onPressed: () => ref.read(readerProvider.notifier).toggleSettings(),
-                      ),
-                      // 更多菜单
-                      PopupMenuButton<String>(
-                        icon: Icon(Icons.more_horiz, color: state.theme.textColor),
-                        color: Colors.white,
-                        onSelected: (value) {
-                          switch (value) {
-                            case 'prev':
-                              ref.read(readerProvider.notifier).prevChapter();
-                              break;
-                            case 'next':
-                              ref.read(readerProvider.notifier).nextChapter();
-                              break;
-                            case 'catalog':
-                              _openCatalog();
-                              break;
-                            case 'search':
-                              _openChapterSearch();
-                              break;
-                            case 'bookmark_add':
-                              _toggleBookmark();
-                              break;
-                            case 'bookmarks':
-                              _openBookmarks();
-                              break;
-                            case 'note_add':
-                              _addNote();
-                              break;
-                            case 'notes':
-                              _openNotes();
-                              break;
-                            case 'source':
-                              _openSourceSwitcher();
-                              break;
-                          }
-                        },
-                        itemBuilder: (context) => [
-                          PopupMenuItem(
-                            value: 'prev',
-                            enabled: ref.read(readerProvider.notifier).hasPrevChapter,
-                            child: const _MenuRow(icon: Icons.skip_previous, label: '上一章'),
-                          ),
-                          PopupMenuItem(
-                            value: 'next',
-                            enabled: ref.read(readerProvider.notifier).hasNextChapter,
-                            child: const _MenuRow(icon: Icons.skip_next, label: '下一章'),
-                          ),
-                          const PopupMenuDivider(),
-                          const PopupMenuItem(
-                            value: 'catalog',
-                            child: _MenuRow(icon: Icons.list, label: '章节目录'),
-                          ),
-                          const PopupMenuItem(
-                            value: 'search',
-                            child: _MenuRow(icon: Icons.search, label: '搜索本章'),
-                          ),
-                          if (_alternatives.isNotEmpty)
-                            const PopupMenuItem(
-                              value: 'source',
-                              child: _MenuRow(icon: Icons.swap_horiz, label: '切换书源'),
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness:
+            isDarkBg ? Brightness.light : Brightness.dark,
+        statusBarBrightness: isDarkBg ? Brightness.dark : Brightness.light,
+      ),
+      child: Scaffold(
+        backgroundColor: state.theme.backgroundColor,
+        body: SafeArea(
+          child: Stack(
+            children: [
+              Column(
+                children: [
+                  // 顶栏：随设置面板显隐（沉浸式阅读）
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeInOut,
+                    alignment: Alignment.topCenter,
+                    child: showChrome
+                        ? Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
                             ),
-                          const PopupMenuDivider(),
-                          const PopupMenuItem(
-                            value: 'bookmark_add',
-                            child: _MenuRow(icon: Icons.bookmark_add_outlined, label: '添加书签'),
-                          ),
-                          const PopupMenuItem(
-                            value: 'bookmarks',
-                            child: _MenuRow(icon: Icons.bookmarks_outlined, label: '书签列表'),
-                          ),
-                          const PopupMenuItem(
-                            value: 'note_add',
-                            child: _MenuRow(icon: Icons.sticky_note_2_outlined, label: '添加笔记'),
-                          ),
-                          const PopupMenuItem(
-                            value: 'notes',
-                            child: _MenuRow(icon: Icons.notes_outlined, label: '笔记列表'),
-                          ),
-                        ],
-                      ),
-                    ],
+                            color: state.theme.backgroundColor,
+                            child: Row(
+                              children: [
+                                IconButton(
+                                  icon: Icon(
+                                    Icons.arrow_back,
+                                    color: state.theme.textColor,
+                                  ),
+                                  onPressed: () => context.pop(),
+                                ),
+                                const Spacer(),
+                                if (state.currentChapter != null)
+                                  Flexible(
+                                    child: Text(
+                                      state.currentChapter!.title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        color: state.theme.textColor,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ),
+                                const Spacer(),
+                                IconButton(
+                                  icon: Icon(
+                                    Icons.settings,
+                                    color: state.theme.textColor,
+                                  ),
+                                  onPressed: () => ref
+                                      .read(readerProvider.notifier)
+                                      .toggleSettings(),
+                                ),
+                                // 更多菜单
+                                PopupMenuButton<String>(
+                                  icon: Icon(
+                                    Icons.more_horiz,
+                                    color: state.theme.textColor,
+                                  ),
+                                  color: Colors.white,
+                                  onSelected: (value) {
+                                    switch (value) {
+                                      case 'prev':
+                                        ref
+                                            .read(readerProvider.notifier)
+                                            .prevChapter();
+                                        break;
+                                      case 'next':
+                                        ref
+                                            .read(readerProvider.notifier)
+                                            .nextChapter();
+                                        break;
+                                      case 'catalog':
+                                        _openCatalog();
+                                        break;
+                                      case 'source':
+                                        _openSourceSwitcher();
+                                        break;
+                                    }
+                                  },
+                                  itemBuilder: (context) => [
+                                    PopupMenuItem(
+                                      value: 'prev',
+                                      enabled: ref
+                                          .read(readerProvider.notifier)
+                                          .hasPrevChapter,
+                                      child: const _MenuRow(
+                                        icon: Icons.skip_previous,
+                                        label: '上一章',
+                                      ),
+                                    ),
+                                    PopupMenuItem(
+                                      value: 'next',
+                                      enabled: ref
+                                          .read(readerProvider.notifier)
+                                          .hasNextChapter,
+                                      child: const _MenuRow(
+                                        icon: Icons.skip_next,
+                                        label: '下一章',
+                                      ),
+                                    ),
+                                    const PopupMenuDivider(),
+                                    const PopupMenuItem(
+                                      value: 'catalog',
+                                      child: _MenuRow(
+                                        icon: Icons.list,
+                                        label: '章节目录',
+                                      ),
+                                    ),
+                                    if (_alternatives.isNotEmpty)
+                                      const PopupMenuItem(
+                                        value: 'source',
+                                        child: _MenuRow(
+                                          icon: Icons.swap_horiz,
+                                          label: '切换书源',
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          )
+                        : const SizedBox(width: double.infinity),
                   ),
-                ),
-                Expanded(
-                  child: showImageReader
-                      ? const ImageReaderWidget()
-                      : const ReaderPageView(),
-                ),
-              ],
-            ),
-            if (state.showSettings)
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: ReaderSettingsPanel(ttsService: _tts),
+                  const Expanded(
+                    child: ReaderPageView(),
+                  ),
+                ],
               ),
-          ],
+              if (state.showSettings)
+                const Positioned(
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  child: ReaderSettingsPanel(),
+                ),
+            ],
+          ),
         ),
       ),
     );

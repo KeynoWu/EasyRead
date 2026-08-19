@@ -44,15 +44,6 @@ class ReaderState {
   final List<PageContent> pages;
   final int currentPage;
 
-  /// 图片章节的图片 URL 列表（过滤空值）：与 provider 内部 _imageUrlsOf 同逻辑，
-  /// 供图片阅读器直接使用，避免重复实现。
-  List<String> get imageUrls => [
-    for (final node in nodes)
-      if (node.type == NodeType.image &&
-          node.imageUrl != null &&
-          node.imageUrl!.isNotEmpty)
-        node.imageUrl!,
-  ];
   final ReadingProgress? progress;
   final ChapterCatalog? catalog;
   final LayoutConfig layoutConfig;
@@ -67,9 +58,6 @@ class ReaderState {
   final ChineseConversionMode chineseMode;
   /// 当前章节解析后的原始节点（滚动模式直接渲染，不经过分页分段）
   final List<TextNode> nodes;
-  /// 当前章节是否为图片/漫画章节（图片节点 ≥ 3 且占比 ≥ 80%）。
-  /// 图片章节不走文本分页：pages 保持为空，currentPage 语义 = 当前图片索引。
-  final bool isImageChapter;
 
   const ReaderState({
     this.readingMode = ReadingMode.page,
@@ -86,7 +74,6 @@ class ReaderState {
     this.errorMessage,
     this.viewportSize = const Size(400, 600),
     this.nodes = const [],
-    this.isImageChapter = false,
     this.chineseMode = ChineseConversionMode.original,
   });
 
@@ -107,7 +94,6 @@ class ReaderState {
     PageTurnStyle? pageTurnStyle,
     Size? viewportSize,
     List<TextNode>? nodes,
-    bool? isImageChapter,
     ChineseConversionMode? chineseMode,
   }) {
     return ReaderState(
@@ -129,7 +115,6 @@ class ReaderState {
       pageTurnStyle: pageTurnStyle ?? this.pageTurnStyle,
       viewportSize: viewportSize ?? this.viewportSize,
       nodes: nodes ?? this.nodes,
-      isImageChapter: isImageChapter ?? this.isImageChapter,
       chineseMode: chineseMode ?? this.chineseMode,
     );
   }
@@ -235,6 +220,13 @@ class ReaderNotifier extends Notifier<ReaderState> {
         ref.read(readerRepositoryProvider).setPipeline(value);
       }
     });
+    // 生命周期清理：provider 被销毁（自动/手动）时取消防抖定时器与挂起
+    // 的进度写入，避免 Timer 泄漏或 dispose 后仍写 Hive。
+    ref.onDispose(() {
+      _saveDebounce?.cancel();
+      _saveDebounce = null;
+      _pendingProgress = null;
+    });
     return const ReaderState();
   }
 
@@ -269,7 +261,6 @@ class ReaderNotifier extends Notifier<ReaderState> {
       currentChapter: null,
       pages: const [],
       nodes: const [],
-      isImageChapter: false,
       currentPage: 0,
       progress: null,
       catalog: null,
@@ -313,16 +304,13 @@ class ReaderNotifier extends Notifier<ReaderState> {
         ChineseConversion.convert(chapter.content, mode),
       );
       _currentNodes = nodes;
-      // 图片章节判定：纯图/漫画章节不走文本分页（pages 保持为空），
-      // 图片阅读器直接用 nodes 中的图片 URL 列表，currentPage 语义 = 图片索引
-      final isImageChapter = _isImageChapter(nodes);
 
       final progress = await _repository.loadProgress(bookId);
       if (seq != _loadSeq) return;
 
       // 视口未上报真实尺寸（首次打开）时延迟分页：等 setViewport 触发，避免双分页
       final viewportReady = _viewportReported;
-      final pages = (!isImageChapter && viewportReady)
+      final pages = viewportReady
           ? _paginate(nodes, chapter)
           : const <PageContent>[];
       // 进度属于当前章节才恢复页码：翻章后读回的 progress 可能仍是
@@ -330,16 +318,11 @@ class ReaderNotifier extends Notifier<ReaderState> {
       // 随机/末页打开。chapterIndex 不匹配时从首页开始。
       final pageIndex = (progress == null || progress.chapterIndex != chapter.index)
           ? 0
-          : _alignPage(
-              progress.pageIndex,
-              isImageChapter ? _imageUrlsOf(nodes).length : pages.length,
-              isImage: isImageChapter,
-            );
+          : _alignPage(progress.pageIndex, pages.length);
 
       state = state.copyWith(
         currentChapter: chapter,
         nodes: nodes,
-        isImageChapter: isImageChapter,
         pages: pages,
         currentPage: pageIndex,
         progress: progress,
@@ -376,7 +359,6 @@ class ReaderNotifier extends Notifier<ReaderState> {
         state = state.copyWith(
           currentChapter: null,
           nodes: const [],
-          isImageChapter: false,
           pages: const [],
           currentPage: 0,
           progress: null,
@@ -557,9 +539,13 @@ class ReaderNotifier extends Notifier<ReaderState> {
 
   /// 切换简繁转换并立即重新解析当前章节。
   Future<void> setChineseMode(ChineseConversionMode mode) async {
-    _chineseMode = mode;
+    final seq = _loadSeq;
     final box = await Hive.openBox<dynamic>(_settingsBoxName);
     await box.put(_settingsKey('chineseMode'), mode.index);
+    // awaiting 期间可能已 loadChapter/换书：seq 防护，让最新加载覆盖本次，
+    // 避免基于旧章节重排后被新加载覆盖（短暂显示旧内容）。
+    if (seq != _loadSeq) return;
+    _chineseMode = mode;
     final chapter = state.currentChapter;
     if (chapter == null) return;
     _pageCache.clear();
@@ -567,19 +553,12 @@ class ReaderNotifier extends Notifier<ReaderState> {
       ChineseConversion.convert(chapter.content, mode),
     );
     _currentNodes = nodes;
-    final isImage = _isImageChapter(nodes);
-    final pages = (!isImage && _viewportReported)
+    final pages = _viewportReported
         ? _paginate(nodes, chapter)
         : const <PageContent>[];
-    final imageCount = _imageUrlsOf(nodes).length;
-    final currentPage = isImage
-        ? (imageCount <= 0
-            ? 0
-            : state.currentPage.clamp(0, imageCount - 1).toInt())
-        : _alignPage(state.currentPage, pages.length);
+    final currentPage = _alignPage(state.currentPage, pages.length);
     state = state.copyWith(
       nodes: nodes,
-      isImageChapter: isImage,
       pages: pages,
       currentPage: currentPage,
       chineseMode: mode,
@@ -592,36 +571,14 @@ class ReaderNotifier extends Notifier<ReaderState> {
 
   /// 页码对齐：双栏模式下当前页必须是左栏（偶数页，页 0 起），
   /// 保证"当前页=左栏页、翻页整屏"的语义；竖屏退化为普通 clamp。
-  /// 图片章节无双栏语义（不参与文本分页），始终按 1 步长对齐。
-  int _alignPage(int page, int length, {bool isImage = false}) {
+  int _alignPage(int page, int length) {
     var p = page.clamp(0, length <= 0 ? 0 : length - 1).toInt();
-    if (_isDualColumn && !isImage) p = (p ~/ 2) * 2;
+    if (_isDualColumn) p = (p ~/ 2) * 2;
     return p;
   }
 
-  /// 图片章节判定：图片节点数量 ≥ 3 且占全部节点比例 ≥ 80%（纯图章节）。
-  /// 空节点列表不判定为图片章节。
-  bool _isImageChapter(List<TextNode> nodes) {
-    if (nodes.isEmpty) return false;
-    var imageCount = 0;
-    for (final node in nodes) {
-      if (node.type == NodeType.image) imageCount++;
-    }
-    return imageCount >= 3 && imageCount / nodes.length >= 0.8;
-  }
-
-  /// 提取节点中的图片 URL（过滤空值）：图片章节的"页"即一张图。
-  List<String> _imageUrlsOf(List<TextNode> nodes) => [
-        for (final node in nodes)
-          if (node.type == NodeType.image &&
-              node.imageUrl != null &&
-              node.imageUrl!.isNotEmpty)
-            node.imageUrl!,
-      ];
-
-  /// 当前章节可翻页数：图片章节 = 图片数（不走文本分页），文本章节 = 分页页数。
-  int get _pageCount =>
-      state.isImageChapter ? _imageUrlsOf(state.nodes).length : state.pages.length;
+  /// 当前章节可翻页数。
+  int get _pageCount => state.pages.length;
 
   /// 分页缓存 key：章节标识 + 书源 + LayoutConfig 各字段 + 视口尺寸。
   /// 必须含 sourceId：换源后同 bookId+chapterIndex 会命中旧源正文分页。
@@ -677,17 +634,6 @@ class ReaderNotifier extends Notifier<ReaderState> {
     final chapter = state.currentChapter;
     state = state.copyWith(viewportSize: Size(width, height));
     if (nodes == null || nodes.isEmpty || chapter == null) return;
-    if (state.isImageChapter) {
-      // 图片章节不参与文本分页：仅按图片数对齐当前索引（首次打开恢复进度）
-      final basePage = state.pages.isEmpty
-          ? (state.progress?.pageIndex ?? 0)
-          : state.currentPage;
-      final count = _imageUrlsOf(nodes).length;
-      state = state.copyWith(
-        currentPage: _alignPage(basePage, count, isImage: true),
-      );
-      return;
-    }
     final pages = _paginate(nodes, chapter);
     // 首次打开（pages 尚未分页）时以保存的进度页码为基准恢复，旋转时保持当前页
     final basePage = state.pages.isEmpty
@@ -701,12 +647,8 @@ class ReaderNotifier extends Notifier<ReaderState> {
   /// 翻到下一页（横屏双栏时一次翻一整屏 = 两页，当前页保持左栏；
   /// 图片章节始终一次换一张图）
   void nextPage() {
-    final step = (_isDualColumn && !state.isImageChapter) ? 2 : 1;
-    final next = _alignPage(
-      state.currentPage + step,
-      _pageCount,
-      isImage: state.isImageChapter,
-    );
+    final step = _isDualColumn ? 2 : 1;
+    final next = _alignPage(state.currentPage + step, _pageCount);
     if (next != state.currentPage) {
       state = state.copyWith(currentPage: next);
       _saveProgress();
@@ -715,12 +657,8 @@ class ReaderNotifier extends Notifier<ReaderState> {
 
   /// 翻到上一页（横屏双栏时一次回一整屏 = 两页）
   void prevPage() {
-    final step = (_isDualColumn && !state.isImageChapter) ? 2 : 1;
-    final prev = _alignPage(
-      state.currentPage - step,
-      _pageCount,
-      isImage: state.isImageChapter,
-    );
+    final step = _isDualColumn ? 2 : 1;
+    final prev = _alignPage(state.currentPage - step, _pageCount);
     if (prev != state.currentPage) {
       state = state.copyWith(currentPage: prev);
       _saveProgress();
@@ -732,7 +670,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
     final count = _pageCount;
     if (page >= 0 && page < count) {
       state = state.copyWith(
-        currentPage: _alignPage(page, count, isImage: state.isImageChapter),
+        currentPage: _alignPage(page, count),
       );
       _saveProgress();
     }
@@ -765,18 +703,21 @@ class ReaderNotifier extends Notifier<ReaderState> {
   }
 
   /// 更新排版配置（按旧页码/旧页数比例换算新页码，不再重置到 0；
-  /// 图片章节无排版分页，仅持久化配置）
-  void updateLayout(LayoutConfig config) {
+  /// 图片章节无排版分页，仅持久化配置）。
+  /// [persist] 为 false 时只实时重排预览、不写盘（设置面板滑块拖动中调用），
+  /// onChangeEnd 再以 persist:true 落盘最终值，避免拖动高频写 Hive。
+  void updateLayout(LayoutConfig config, {bool persist = true}) {
     final oldPage = state.currentPage;
     final oldLength = _pageCount;
     state = state.copyWith(layoutConfig: config);
-    _persistLayoutConfig(config);
+    if (persist) {
+      _persistLayoutConfig(config);
+    }
     final nodes = _currentNodes;
     final chapter = state.currentChapter;
     if (nodes == null || nodes.isEmpty || chapter == null || !_viewportReported) {
       return; // 视口未就绪时仅更新配置，分页由 setViewport 触发
     }
-    if (state.isImageChapter) return; // 图片章节不参与文本分页
     final pages = _paginate(nodes, chapter);
     final newPage = oldLength <= 0 || pages.isEmpty
         ? 0
@@ -793,38 +734,57 @@ class ReaderNotifier extends Notifier<ReaderState> {
     _persistTheme(theme);
   }
 
-  /// 切换阅读模式（各模式使用自己的进度维度；
-  /// 图片章节两种模式都进图片阅读器，共用图片索引，仅改模式标记）
-  void switchMode(ReadingMode mode) {
-    if (state.isImageChapter) {
-      state = state.copyWith(readingMode: mode);
-      _persistReadingMode(mode);
-      return;
-    }
-    if (mode == ReadingMode.page) {
-      final pages = state.pages;
-      final pageIndex = _alignPage(state.progress?.pageIndex ?? 0, pages.length);
-      state = state.copyWith(readingMode: mode, currentPage: pageIndex);
-    } else {
-      state = state.copyWith(readingMode: mode, currentPage: 0);
-    }
-    _persistReadingMode(mode);
+  /// 恢复默认排版/主题/阅读模式/翻页动画（写全局范围）。
+  void resetLayoutSettings() {
+    const layout = LayoutConfig();
+    state = state.copyWith(
+      layoutConfig: layout,
+      theme: ReaderThemes.defaultTheme,
+      readingMode: ReadingMode.page,
+      pageTurnStyle: PageTurnStyle.flip,
+    );
+    _persistLayoutConfig(layout);
+    _persistTheme(ReaderThemes.defaultTheme);
+    _persistReadingMode(ReadingMode.page);
+    _persistPageTurnStyle(PageTurnStyle.flip);
   }
 
-  /// 在章节内搜索关键词，返回命中页码列表
-  List<int> searchInChapter(String keyword) {
-    if (keyword.trim().isEmpty || state.pages.isEmpty) return [];
-    final results = <int>[];
-    for (int i = 0; i < state.pages.length; i++) {
-      final pageText = state.pages[i].nodes
-          .where((n) => n.type == NodeType.paragraph || n.type == NodeType.text || n.type == NodeType.heading)
-          .map((n) => n.text)
-          .join();
-      if (pageText.contains(keyword)) {
-        results.add(i);
+  /// 切换阅读模式（各模式使用自己的进度维度；
+  /// 图片章节两种模式都进图片阅读器，共用图片索引，仅改模式标记）。
+  /// 模式切换时按比例互算位置：滚动→翻页按 scrollOffset 换算页码，
+  /// 翻页→滚动按 pageIndex/页数换算 scrollOffset，避免回到章节开头。
+  void switchMode(ReadingMode mode) {
+    final progress = state.progress;
+    if (mode == ReadingMode.page) {
+      final pages = state.pages;
+      int base;
+      if (state.readingMode == ReadingMode.scroll &&
+          progress != null &&
+          progress.scrollOffset > 0 &&
+          pages.isNotEmpty) {
+        // 滚动 → 翻页：按 0~1 滚动位置换算页码
+        base = (progress.scrollOffset * pages.length).round();
+      } else {
+        base = progress?.pageIndex ?? 0;
       }
+      final pageIndex = _alignPage(base, pages.length);
+      state = state.copyWith(readingMode: mode, currentPage: pageIndex);
+    } else {
+      // 翻页 → 滚动：按页码比例换算滚动位置，滚动视图据此恢复
+      final count = _pageCount;
+      final converted = (state.readingMode == ReadingMode.page && count > 0)
+          ? (state.currentPage / count).clamp(0.0, 1.0).toDouble()
+          : null;
+      state = state.copyWith(
+        readingMode: mode,
+        currentPage: 0,
+        progress: progress?.copyWith(
+          scrollOffset: converted ?? progress.scrollOffset,
+          updatedAt: DateTime.now(),
+        ),
+      );
     }
-    return results;
+    _persistReadingMode(mode);
   }
 
   /// 加载章节目录
@@ -863,6 +823,18 @@ class ReaderNotifier extends Notifier<ReaderState> {
     await loadChapter(
       bookId: chapter.bookId,
       chapterIndex: chapterIndex,
+      sourceId: chapter.sourceId ?? 'default',
+      detailUrl: widgetDetailUrl,
+    );
+  }
+
+  /// 目录加载失败后重试：重新加载当前章节（内部会重新拉取目录）。
+  Future<void> reloadCatalog() async {
+    final chapter = state.currentChapter;
+    if (chapter == null) return;
+    await loadChapter(
+      bookId: chapter.bookId,
+      chapterIndex: chapter.index,
       sourceId: chapter.sourceId ?? 'default',
       detailUrl: widgetDetailUrl,
     );

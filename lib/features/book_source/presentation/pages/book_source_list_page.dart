@@ -98,12 +98,6 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
                 onTap: () => Navigator.pop(context, 'login'),
               ),
             ListTile(
-              leading: const Icon(Icons.science_outlined),
-              title: const Text('规则测试'),
-              subtitle: const Text('实时调试 CSS/JSONPath/JS/模板规则'),
-              onTap: () => Navigator.pop(context, 'ruleTester'),
-            ),
-            ListTile(
               leading: const Icon(Icons.checklist),
               title: const Text('进入多选'),
               onTap: () => Navigator.pop(context, 'select'),
@@ -136,8 +130,6 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
             const SnackBar(content: Text('登录 Cookie 已保存')),
           );
         }
-      case 'ruleTester':
-        await context.push('/book-source/rule-tester', extra: source);
     }
   }
 
@@ -383,16 +375,6 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
                   icon: const Icon(Icons.rule_folder_outlined),
                   onPressed: _openTestPage,
                   tooltip: '批量检测',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.rss_feed),
-                  onPressed: () => context.push('/book-source/subscription'),
-                  tooltip: '书源订阅',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.science_outlined),
-                  onPressed: () => context.push('/book-source/rule-tester'),
-                  tooltip: '规则测试',
                 ),
                 IconButton(
                   icon: const Icon(Icons.edit_outlined),

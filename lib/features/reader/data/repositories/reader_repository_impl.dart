@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:hive/hive.dart';
 import '../../../../core/database/hive_init.dart';
 import '../../../../core/data/cookie_jar_service.dart';
@@ -149,8 +148,7 @@ class ReaderRepositoryImpl implements ReaderRepository {
     final resolvedDetailUrl = _resolveUrl(source.bookSourceUrl, expandedDetailUrl);
     // bookUrlPattern 最小接线：不匹配仅告警，不阻塞流程
     if (!matchesBookUrlPattern(source.bookUrlPattern, resolvedDetailUrl)) {
-      debugPrint('[reader] bookUrlPattern 不匹配: '
-          'pattern=${source.bookUrlPattern} url=$resolvedDetailUrl，继续默认流程');
+      // 不匹配仅告警，不阻塞流程
     }
     final cacheKey =
         '${bookId}_${sourceId}_$resolvedDetailUrl|'
@@ -405,7 +403,6 @@ class ReaderRepositoryImpl implements ReaderRepository {
       } else {
         throw const ChapterLoadException('无法定位章节');
       }
-      debugPrint('[reader] contentUrl=$contentUrl chapterUrl=$chapterUrl detail=$resolvedDetailUrl');
       final headers = await _requestHeaders(source, sourceId);
       final html = await _getStringWithLoginCheck(
         source,
@@ -414,7 +411,6 @@ class ReaderRepositoryImpl implements ReaderRepository {
         headers,
         charset: source.responseCharset,
       );
-      debugPrint('[reader] html len=${html.length}');
 
       // 提取正文（支持 nextContentUrl 分页拼接）
       final contentParts = <String>[];
@@ -449,10 +445,9 @@ class ReaderRepositoryImpl implements ReaderRepository {
         );
       }
       var content = contentParts.join('\n');
-      if (content.isEmpty) {
-        // 兜底二：整页净化（含 quickjs JS 规则；iOS 无引擎时跳过 JS 规则）
-        content = html;
-      }
+      // 提取为空时不再整页 HTML 兜底：下面统一以 ChapterLoadException
+      // 明确报错，由 UI 展示错误+重试，避免把整页 HTML 当正文
+      // （"像 Web"体验的根源）。
 
       // ruleContent.replaceRegex：对提取的正文做正则替换。
       // 兼容 legado 格式：JSON 数组字符串 ["pattern","replacement"] 优先，
@@ -476,24 +471,31 @@ class ReaderRepositoryImpl implements ReaderRepository {
         }
       }
 
+      // 书名净化参数只允许使用当前书的详情，避免 _lastBookDetail 残留
+      // 上一本书（无 bookInfoRules 时不更新）导致净化规则用错书名。
+      final effectiveBookName =
+          _lastBookDetail != null && _lastBookDetail!.bookId == bookId
+              ? _lastBookDetail!.name
+              : null;
+
       // 无论规则提取还是兜底，统一经过净化管线；否则用户正则/JS 规则
       // 在成功提取正文时会被绕过。
       content = await _pipeline.purifyAsync(
         content,
-        bookName: _lastBookDetail?.name,
+        bookName: effectiveBookName,
         sourceName: source.name,
       );
       content = resolveImageUrls(content, contentUrl);
       content = _removeRepeatedTitle(content, effectiveTitle);
 
       if (content.trim().isEmpty) {
-        throw const ChapterLoadException('章节内容为空');
+        throw const ChapterLoadException('章节内容为空或解析失败，请重试或更换书源');
       }
 
       final rawTitle = effectiveTitle.isEmpty ? '第${chapterIndex + 1}章' : effectiveTitle;
       final title = await _pipeline.purifyTitle(
         rawTitle,
-        bookName: _lastBookDetail?.name,
+        bookName: effectiveBookName,
         sourceName: source.name,
       );
       final chapter = Chapter(
