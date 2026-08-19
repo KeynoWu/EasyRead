@@ -15,6 +15,9 @@ keystore.properties
 # Superpowers visual companion files
 .superpowers/
 
+# DSH 任务看板插件状态（不入库）
+.agent-teams/
+
 # OS files
 .DS_Store
 Thumbs.db
