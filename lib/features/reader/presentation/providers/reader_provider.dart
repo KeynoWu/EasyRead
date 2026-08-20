@@ -925,6 +925,9 @@ class ReaderNotifier extends Notifier<ReaderState> {
     double pageFraction,
     String? lastChapter,
   ) async {
+    // Riverpod 3：provider 销毁后（测试 teardown / App 重建）异步链仍在执行时，
+    // Ref 已不可用，必须先检查 ref.mounted 再访问 state，避免 UnmountedRefException
+    if (!ref.mounted) return;
     final catalogLength = state.catalog?.chapters.length;
     try {
       final book = await _bookshelfRepo.getById(progress.bookId);
