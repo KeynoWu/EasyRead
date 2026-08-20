@@ -30,6 +30,8 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
   ReadingProgress? _progress;
   bool _loading = true;
   bool _caching = false;
+  /// 目录默认折叠：进入详情页先看正文（简介/开始阅读），需要目录时再展开
+  bool _catalogExpanded = false;
   // 缓存进度走局部 ValueNotifier：每缓存一章只刷新按钮文本，
   // 避免 setState 高频重建包含整个目录 ListView 的页面。
   final ValueNotifier<int> _cachedCount = ValueNotifier<int>(0);
@@ -459,11 +461,33 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
                   ),
                 ],
                 const SizedBox(height: 20),
-                Text(
-                  '目录（${_catalog?.chapters.length ?? 0}）',
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
+                // 目录：默认折叠，点击标题行展开/收起（与正文分开，需要时才显示）
+                InkWell(
+                  onTap: (_catalog == null || _catalog!.chapters.isEmpty)
+                      ? null
+                      : () => setState(() => _catalogExpanded = !_catalogExpanded),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Row(
+                      children: [
+                        Text(
+                          '目录（${_catalog?.chapters.length ?? 0}）',
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const Spacer(),
+                        if (_catalog != null && _catalog!.chapters.isNotEmpty)
+                          Icon(
+                            _catalogExpanded
+                                ? Icons.expand_less
+                                : Icons.expand_more,
+                            size: 20,
+                            color: AppColors.textSecondary,
+                          ),
+                      ],
+                    ),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -495,7 +519,7 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
                       ),
                     ),
                   )
-                else
+                else if (_catalogExpanded)
                   // 目录独立滚动区域 + 惰性构建：千章书籍不再一次性构建全部 ListTile
                   SizedBox(
                     height: MediaQuery.sizeOf(context).height * 0.5,

@@ -374,6 +374,14 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                                 const Spacer(),
                                 IconButton(
                                   icon: Icon(
+                                    Icons.list,
+                                    color: state.theme.textColor,
+                                  ),
+                                  onPressed: _openCatalog,
+                                  tooltip: '章节目录',
+                                ),
+                                IconButton(
+                                  icon: Icon(
                                     Icons.settings,
                                     color: state.theme.textColor,
                                   ),
