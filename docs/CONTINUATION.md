@@ -20,8 +20,12 @@
 
 ### 待办
 - [x] M1 冒烟：widget 级 2/2 + macOS 桌面集成测试通过（quickjs 链接修复后）。
-- [ ] M1-5 真实书源端到端验收（模拟器/真机 + 真实书源如天域）：导入→搜索→详情→阅读，确认不再整页 HTML。
-- [ ] M2（可选）：拆 js_rule_executor(2553)/rule_engine(1277)/reader_repository_impl(~1250)。
+- [x] M1-5 真实书源端到端验收（2026-08-20，macOS + iOS 模拟器双平台通过）：
+  - 新增 `integration_test/real_source_e2e_test.dart`：真实 URL 导入（aoaostar 71e56d4f.json，22 源）→ 搜索《诡秘之主》命中独步小说网 → 目录 1404 章 → 正文 2777 字符，断言无整页 HTML 兜底（无 html/doctype/head/body 结构）。
+  - **验收发现并修复引擎缺口**（rule_engine.dart getElementText）：Legado 裸字段规则 `text`（取元素自身文本）与 `href`（取元素自身属性）此前被当 CSS 标签查询返回 null，导致独步等源目录解析全空。修复：裸标识符命中伪属性（text/ownText/textNodes/html/all）或元素实际存在的属性时取元素值，标签名（a/ul/li 等）仍落回 CSS 路径。新增 4 个单测覆盖。
+  - 71e56d4f/XIU2 源集多数已失效（CF 拦截/改版）：独步小说网、天天看小说、阅友小说实测可用（偏好源优先逻辑）。
+  - 验证：`flutter analyze` 0 + `flutter test` 361 全绿 + iOS 模拟器端到端通过。
+- [x] M2（可选）：拆 js_rule_executor(2553)/rule_engine(1277)/reader_repository_impl(~1250)。（2026-08-20 完成，见 docs/M2_SPLIT_PLAN.md，6 commit 已推送）
 - [ ] 提交决策：工作区含历史安全修复(52 文件) + 本次 M0/M1，建议分 2 个 commit。
 
 ---

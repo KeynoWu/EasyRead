@@ -48,5 +48,33 @@ void main() {
       final src = RuleEngine.getElementText(items[0], 'img.cover@src');
       expect(src, 'http://example.com/a.jpg');
     });
+
+    test('getElementText bare text rule returns element own text', () {
+      // Legado 裸字段规则：chapterName: 'text' 取元素自身文本
+      final items = RuleEngine.extractElements(sampleHtml, 'div.item');
+      final titles = RuleEngine.extractElements(items[0].outerHtml, 'h3.title');
+      final text = RuleEngine.getElementText(titles.first, 'text');
+      expect(text, '书籍A');
+    });
+
+    test('getElementText bare attr rule returns element attribute', () {
+      // Legado 裸属性规则：chapterUrl: 'href' 取元素自身 href（元素确有该属性）
+      final items = RuleEngine.extractElements(sampleHtml, 'div.item');
+      final links = RuleEngine.extractElements(items[0].outerHtml, 'a.detail');
+      final href = RuleEngine.getElementText(links.first, 'href');
+      expect(href, 'http://example.com/a');
+    });
+
+    test('getElementText bare tag name falls back to css query', () {
+      // 标签名不是属性：chapterName: 'a' 仍是 CSS 子元素查询，不取元素属性
+      final items = RuleEngine.extractElements(sampleHtml, 'div.item');
+      final name = RuleEngine.getElementText(items[0], 'a');
+      expect(name, '详情');
+    });
+
+    test('getElementText bare unknown ident returns null', () {
+      final items = RuleEngine.extractElements(sampleHtml, 'div.item');
+      expect(RuleEngine.getElementText(items[0], 'nonexistent'), isNull);
+    });
   });
 }

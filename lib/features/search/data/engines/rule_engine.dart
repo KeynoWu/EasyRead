@@ -195,6 +195,19 @@ class RuleEngine {
       if (attrOnly != null) {
         return SelectorEngine.extractValue(element, attrOnly.group(1));
       }
+      // Legado 裸字段规则：`text`/`ownText`/`textNodes`/`html`/`all`
+      // 取元素自身值；纯属性名且元素具有该属性时取属性值
+      // （如独步小说网 chapterName: 'text'、chapterUrl: 'href'）。
+      // 标签名（a/ul/li 等）不是属性 → 落回下方 CSS 查询路径。
+      final bare =
+          RegExp(r'^[a-zA-Z][a-zA-Z0-9_]*$').firstMatch(rule.trim());
+      if (bare != null) {
+        final attr = bare.group(0);
+        const pseudoAttrs = {'text', 'ownText', 'textNodes', 'html', 'all'};
+        if (pseudoAttrs.contains(attr) || element.attributes.containsKey(attr)) {
+          return SelectorEngine.extractValue(element, attr);
+        }
+      }
     }
     if (RuleParser.isJsRule(rule)) {
       // 字段级 JS 规则：在元素 HTML 上下文中执行
