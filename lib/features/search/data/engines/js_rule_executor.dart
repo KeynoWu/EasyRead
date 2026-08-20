@@ -1,17 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
-import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
-import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:easy_quickjs/quickjs.dart';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as parser;
-import 'package:pointycastle/export.dart' as pc;
 import '../../../../core/network/dio_client.dart';
 import '../../../settings/domain/entities/chinese_conversion.dart';
 import 'json_path.dart';
+import 'js_crypto.dart';
 import 'rule_engine.dart';
 
 /// 完整 JS 规则执行器（阶段 5，基于 quickjs 沙箱引擎）。
@@ -988,21 +985,21 @@ globalThis.java = {
       engine,
       '__base64DecodeByte',
     );
-    final hmacArgs = await _readHmacArgs(engine, '__hmac');
-    final hmacBase64Args = await _readHmacArgs(engine, '__hmacBase64');
-    final aesArgs = await _readAesArgs(engine, '__aesDecode');
-    final aesBase64Args = await _readAesArgs(engine, '__aesBase64Decode');
-    final aesEncodeBase64Args = await _readAesArgs(engine, '__aesEncodeBase64');
+    final hmacArgs = await JsCrypto.readHmacArgs(engine, '__hmac');
+    final hmacBase64Args = await JsCrypto.readHmacArgs(engine, '__hmacBase64');
+    final aesArgs = await JsCrypto.readAesArgs(engine, '__aesDecode');
+    final aesBase64Args = await JsCrypto.readAesArgs(engine, '__aesBase64Decode');
+    final aesEncodeBase64Args = await JsCrypto.readAesArgs(engine, '__aesEncodeBase64');
     final hexEncodeArgs = await _readStringList(engine, '__hexEncode');
     final hexDecodeArgs = await _readStringList(engine, '__hexDecode');
     final uriArgs = await _readStringList(engine, '__uri');
-    final timeArgs = await _readTimeArgs(engine);
+    final timeArgs = await JsCrypto.readTimeArgs(engine);
     final caches = _TemplateCaches(
       jsonCache: {
-        for (final path in jsonPaths) path: _queryJsonPath(json, path),
+        for (final path in jsonPaths) path: JsCrypto.queryJsonPath(json, path),
       },
       htmlCache: {
-        for (final path in htmlPaths) path: _queryHtmlPath(html ?? '', path),
+        for (final path in htmlPaths) path: JsCrypto.queryHtmlPath(html ?? '', path),
       },
       md5Cache: {
         for (final arg in md5Args)
@@ -1012,30 +1009,30 @@ globalThis.java = {
         for (final arg in base64Args) arg: base64Encode(utf8.encode(arg)),
       },
       base64DecodeCache: {
-        for (final arg in base64DecodeArgs) arg: _base64DecodeToString(arg),
+        for (final arg in base64DecodeArgs) arg: JsCrypto.base64DecodeToString(arg),
       },
       base64DecodeByteCache: {
         for (final arg in base64DecodeByteArgs)
-          arg: jsonEncode(_base64DecodeToBytes(arg)),
+          arg: jsonEncode(JsCrypto.base64DecodeToBytes(arg)),
       },
-      hmacCache: {for (final arg in hmacArgs) arg.cacheKey: _hmacHex(arg)},
+      hmacCache: {for (final arg in hmacArgs) arg.cacheKey: JsCrypto.hmacHex(arg)},
       hmacBase64Cache: {
-        for (final arg in hmacBase64Args) arg.cacheKey: _hmacBase64(arg),
+        for (final arg in hmacBase64Args) arg.cacheKey: JsCrypto.hmacBase64(arg),
       },
       aesCache: {
         for (final arg in aesArgs)
-          arg.cacheKey: _aesDecodeToString(arg, base64Input: false),
+          arg.cacheKey: JsCrypto.aesDecodeToString(arg, base64Input: false),
       },
       aesBase64Cache: {
         for (final arg in aesBase64Args)
-          arg.cacheKey: _aesDecodeToString(arg, base64Input: true),
+          arg.cacheKey: JsCrypto.aesDecodeToString(arg, base64Input: true),
       },
       aesEncodeBase64Cache: {
         for (final arg in aesEncodeBase64Args)
-          arg.cacheKey: _aesEncodeToBase64(arg),
+          arg.cacheKey: JsCrypto.aesEncodeToBase64(arg),
       },
-      hexEncodeCache: {for (final arg in hexEncodeArgs) arg: _hexEncode(arg)},
-      hexDecodeCache: {for (final arg in hexDecodeArgs) arg: _hexDecode(arg)},
+      hexEncodeCache: {for (final arg in hexEncodeArgs) arg: JsCrypto.hexEncode(arg)},
+      hexDecodeCache: {for (final arg in hexDecodeArgs) arg: JsCrypto.hexDecode(arg)},
       uriCache: {
         for (final arg in uriArgs)
           arg: Uri.encodeComponent(arg).replaceAll('%20', '+'),
@@ -1051,9 +1048,9 @@ globalThis.java = {
             ChineseConversionMode.traditional,
           ),
       },
-      uuidCache: List.generate(uuidCount, (_) => _uuid4()),
+      uuidCache: List.generate(uuidCount, (_) => JsCrypto.uuid4()),
       putCache: await _readPutMap(engine),
-      timeCache: {for (final arg in timeArgs) arg.key: _formatTimestamp(arg)},
+      timeCache: {for (final arg in timeArgs) arg.key: JsCrypto.formatTimestamp(arg)},
     );
     return caches;
   }
@@ -1137,455 +1134,6 @@ globalThis.java = {
     }
   }
 
-  static String _uuid4() {
-    final random = Random();
-    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
-        '${hex.substring(12, 16)}-${hex.substring(16, 20)}-'
-        '${hex.substring(20)}';
-  }
-
-  static Future<List<_TimeArg>> _readTimeArgs(JsEngine engine) async {
-    try {
-      final decoded = jsonDecode(
-        (await engine.eval('JSON.stringify(__time)').timeout(evalTimeout))
-            .value,
-      );
-      return [
-        for (final raw in decoded as List)
-          _TimeArg(
-            timestamp: raw is List && raw.isNotEmpty ? raw[0].toString() : '0',
-            format: raw is List && raw.length > 1 ? raw[1].toString() : '',
-            shift: raw is List && raw.length > 2 ? raw[2].toString() : '0',
-          ),
-      ];
-    } catch (_) {
-      return [];
-    }
-  }
-
-  static Future<List<_HmacArg>> _readHmacArgs(
-    JsEngine engine,
-    String name,
-  ) async {
-    try {
-      final decoded = jsonDecode(
-        (await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value,
-      );
-      return [
-        for (final raw in decoded as List)
-          _HmacArg(
-            data: raw is List && raw.isNotEmpty ? raw[0].toString() : '',
-            algorithm: raw is List && raw.length > 1 ? raw[1].toString() : '',
-            key: raw is List && raw.length > 2 ? raw[2].toString() : '',
-          ),
-      ];
-    } catch (_) {
-      return [];
-    }
-  }
-
-  static Future<List<_AesArg>> _readAesArgs(
-    JsEngine engine,
-    String name,
-  ) async {
-    try {
-      final decoded = jsonDecode(
-        (await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value,
-      );
-      return [
-        for (final raw in decoded as List)
-          _AesArg(
-            data: raw is List && raw.isNotEmpty ? raw[0].toString() : '',
-            key: raw is List && raw.length > 1 ? raw[1].toString() : '',
-            transformation: raw is List && raw.length > 2
-                ? raw[2].toString()
-                : '',
-            iv: raw is List && raw.length > 3 ? raw[3].toString() : '',
-          ),
-      ];
-    } catch (_) {
-      return [];
-    }
-  }
-
-  static String _hmacHex(_HmacArg arg) {
-    try {
-      final hmac = Hmac(_hashForAlgorithm(arg.algorithm), utf8.encode(arg.key));
-      return hmac.convert(utf8.encode(arg.data)).toString();
-    } catch (_) {
-      return '';
-    }
-  }
-
-  static String _hmacBase64(_HmacArg arg) {
-    try {
-      final hmac = Hmac(_hashForAlgorithm(arg.algorithm), utf8.encode(arg.key));
-      return base64Encode(hmac.convert(utf8.encode(arg.data)).bytes);
-    } catch (_) {
-      return '';
-    }
-  }
-
-  static Hash _hashForAlgorithm(String algorithm) {
-    final normalized = algorithm
-        .toUpperCase()
-        .replaceAll('HMAC', '')
-        .replaceAll('-', '');
-    switch (normalized) {
-      case 'MD5':
-        return md5;
-      case 'SHA1':
-        return sha1;
-      case 'SHA256':
-        return sha256;
-      case 'SHA512':
-        return sha512;
-      default:
-        return sha256;
-    }
-  }
-
-  static Future<List<_DigestArg>> _readDigestArgs(
-    JsEngine engine,
-    String name,
-  ) async {
-    try {
-      final decoded = jsonDecode(
-        (await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value,
-      );
-      return [
-        for (final raw in decoded as List)
-          _DigestArg(
-            data: raw is List && raw.isNotEmpty ? raw[0].toString() : '',
-            algorithm: raw is List && raw.length > 1 ? raw[1].toString() : '',
-          ),
-      ];
-    } catch (_) {
-      return [];
-    }
-  }
-
-  static String _digestHex(_DigestArg arg) {
-    try {
-      return _hashForAlgorithm(
-        arg.algorithm,
-      ).convert(utf8.encode(arg.data)).toString();
-    } catch (_) {
-      return '';
-    }
-  }
-
-  static String _aesDecodeToString(_AesArg arg, {required bool base64Input}) {
-    try {
-      final transformation = arg.transformation.toUpperCase();
-      final useCbc = transformation.contains('/CBC/');
-      final key = encrypt.Key(_aesKeyBytes(arg.key));
-      final iv = encrypt.IV(_aesIvBytes(arg.iv, useCbc: useCbc));
-      final mode = useCbc ? encrypt.AESMode.cbc : encrypt.AESMode.ecb;
-      final encrypter = encrypt.Encrypter(
-        encrypt.AES(key, mode: mode, padding: 'PKCS7'),
-      );
-      final data = base64Input
-          ? base64Decode(arg.data)
-          : _decodeAesData(arg.data);
-      final decrypted = encrypter.decryptBytes(
-        encrypt.Encrypted(data),
-        iv: useCbc ? iv : null,
-      );
-      return utf8.decode(decrypted, allowMalformed: true);
-    } catch (_) {
-      return '';
-    }
-  }
-
-  static String _aesEncodeToBase64(_AesArg arg) {
-    try {
-      final transformation = arg.transformation.toUpperCase();
-      final useCbc = transformation.contains('/CBC/');
-      final key = encrypt.Key(_aesKeyBytes(arg.key));
-      final iv = encrypt.IV(_aesIvBytes(arg.iv, useCbc: useCbc));
-      final mode = useCbc ? encrypt.AESMode.cbc : encrypt.AESMode.ecb;
-      final encrypter = encrypt.Encrypter(
-        encrypt.AES(key, mode: mode, padding: 'PKCS7'),
-      );
-      final encrypted = encrypter.encryptBytes(
-        Uint8List.fromList(utf8.encode(arg.data)),
-        iv: useCbc ? iv : null,
-      );
-      return base64Encode(encrypted.bytes);
-    } catch (_) {
-      return '';
-    }
-  }
-
-  static Uint8List _aesKeyBytes(String key) {
-    final bytes = utf8.encode(key);
-    if (bytes.length == 16 || bytes.length == 24 || bytes.length == 32) {
-      return Uint8List.fromList(bytes);
-    }
-    return Uint8List.fromList(md5.convert(utf8.encode(key)).bytes);
-  }
-
-  static Uint8List _aesIvBytes(String iv, {required bool useCbc}) {
-    if (!useCbc) return Uint8List(0);
-    final bytes = utf8.encode(iv);
-    if (bytes.length == 16) return Uint8List.fromList(bytes);
-    if (bytes.length > 16) return Uint8List.fromList(bytes.sublist(0, 16));
-    return Uint8List.fromList(md5.convert(utf8.encode(iv)).bytes);
-  }
-
-  static Uint8List _decodeAesData(String data) {
-    final trimmed = data.trim();
-    if (RegExp(r'^[0-9a-fA-F]+$').hasMatch(trimmed) &&
-        trimmed.length.isEven &&
-        trimmed.length >= 32 &&
-        trimmed.length % 32 == 0) {
-      final bytes = <int>[];
-      for (var i = 0; i + 1 < trimmed.length; i += 2) {
-        bytes.add(int.parse(trimmed.substring(i, i + 2), radix: 16));
-      }
-      return Uint8List.fromList(bytes);
-    }
-    return Uint8List.fromList(base64Decode(trimmed));
-  }
-
-  static Future<List<_SymmetricArg>> _readSymmetricArgs(
-    JsEngine engine,
-    String name,
-  ) async {
-    try {
-      final decoded = jsonDecode(
-        (await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value,
-      );
-      return [
-        for (final raw in decoded as List)
-          _SymmetricArg(
-            id: raw is List && raw.isNotEmpty
-                ? int.tryParse(raw[0].toString()) ?? 0
-                : 0,
-            transformation: raw is List && raw.length > 1
-                ? raw[1].toString()
-                : '',
-            key: raw is List && raw.length > 2 ? raw[2].toString() : '',
-            iv: raw is List && raw.length > 3 ? raw[3].toString() : '',
-          ),
-      ];
-    } catch (_) {
-      return [];
-    }
-  }
-
-  static Future<List<_SymmetricOp>> _readSymmetricOps(
-    JsEngine engine,
-    String name,
-  ) async {
-    try {
-      final decoded = jsonDecode(
-        (await engine.eval('JSON.stringify($name)').timeout(evalTimeout)).value,
-      );
-      return [
-        for (final raw in decoded as List)
-          _SymmetricOp(
-            id: raw is List && raw.isNotEmpty
-                ? int.tryParse(raw[0].toString()) ?? 0
-                : 0,
-            data: raw is List && raw.length > 1 ? raw[1].toString() : '',
-          ),
-      ];
-    } catch (_) {
-      return [];
-    }
-  }
-
-  static String _symmetricDecryptToString(_SymmetricArg arg, String data) {
-    try {
-      return utf8.decode(
-        _symmetricDecryptToBytes(arg, data),
-        allowMalformed: true,
-      );
-    } catch (_) {
-      return '';
-    }
-  }
-
-  static Uint8List _symmetricDecryptToBytes(_SymmetricArg arg, String data) {
-    return _symmetricProcess(arg, _decodeAesData(data), encrypting: false);
-  }
-
-  static Uint8List _symmetricEncryptToBytes(_SymmetricArg arg, String data) {
-    return _symmetricProcess(
-      arg,
-      Uint8List.fromList(utf8.encode(data)),
-      encrypting: true,
-    );
-  }
-
-  static Uint8List _symmetricProcess(
-    _SymmetricArg arg,
-    Uint8List input, {
-    required bool encrypting,
-  }) {
-    try {
-      final segments = arg.transformation.toUpperCase().trim().split('/');
-      if (segments.length < 2) return Uint8List(0);
-      final algorithm = segments[0];
-      final mode = segments[1];
-      if (mode != 'ECB' && mode != 'CBC') return Uint8List(0);
-      final padding = segments.length > 2 ? segments[2] : 'PKCS7PADDING';
-      String blockName;
-      if (algorithm == 'AES') {
-        blockName = 'AES';
-      } else if (algorithm == 'DESEDE' || algorithm == '3DES') {
-        blockName = 'DESede';
-      } else {
-        // pointycastle 未内置单 DES，保持与旧桥一致的“不支持”行为。
-        return Uint8List(0);
-      }
-      final key = _symmetricKeyBytes(algorithm, arg.key);
-      final iv = _symmetricIvBytes(algorithm, arg.iv);
-      pc.CipherParameters params = mode == 'CBC'
-          ? pc.ParametersWithIV(pc.KeyParameter(key), iv)
-          : pc.KeyParameter(key);
-      final normalizedPadding = padding.replaceAll(
-        'PKCS5PADDING',
-        'PKCS7PADDING',
-      );
-      if (normalizedPadding == 'NOPADDING') {
-        final cipher = pc.BlockCipher('$blockName/$mode');
-        cipher.init(encrypting, params);
-        return cipher.process(input);
-      }
-      final cipher = pc.PaddedBlockCipher('$blockName/$mode/PKCS7');
-      cipher.init(
-        encrypting,
-        pc.PaddedBlockCipherParameters<
-          pc.CipherParameters?,
-          pc.CipherParameters?
-        >(params, null),
-      );
-      return cipher.process(input);
-    } catch (_) {
-      return Uint8List(0);
-    }
-  }
-
-  static Uint8List _symmetricKeyBytes(String algorithm, String key) {
-    if (algorithm == 'AES') return _aesKeyBytes(key);
-    final bytes = utf8.encode(key);
-    if (bytes.length == 24) return Uint8List.fromList(bytes);
-    if (bytes.length > 24) {
-      return Uint8List.fromList(bytes.sublist(0, 24));
-    }
-    if (bytes.length == 16) {
-      return Uint8List.fromList([...bytes, ...bytes.sublist(0, 8)]);
-    }
-    if (bytes.length == 8) {
-      return Uint8List.fromList([...bytes, ...bytes, ...bytes]);
-    }
-    final digest = md5.convert(utf8.encode(key)).bytes;
-    return Uint8List.fromList([...digest, ...digest.sublist(0, 8)]);
-  }
-
-  static Uint8List _symmetricIvBytes(String algorithm, String iv) {
-    if (algorithm == 'AES') return _aesIvBytes(iv, useCbc: true);
-    final bytes = utf8.encode(iv);
-    if (bytes.length == 8) return Uint8List.fromList(bytes);
-    if (bytes.length > 8) {
-      return Uint8List.fromList(bytes.sublist(0, 8));
-    }
-    final digest = md5.convert(utf8.encode(iv)).bytes;
-    return Uint8List.fromList(digest.sublist(0, 8));
-  }
-
-  static String _bytesToHex(Uint8List bytes) {
-    return bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
-  }
-
-  static String _queryJsonPath(Map<String, dynamic>? json, String path) {
-    if (json == null || path.isEmpty) return '';
-    var normalized = path;
-    if (!normalized.startsWith(r'$') && !normalized.startsWith('.')) {
-      normalized = '.$normalized';
-    }
-    final values = JsonPathEngine.instance.query(json, normalized);
-    if (values.isEmpty) return '';
-    final value = values.first;
-    if (value == null) return '';
-    if (value is String) return value;
-    return jsonEncode(value);
-  }
-
-  static String _queryHtmlPath(String html, String path) {
-    if (html.isEmpty || path.isEmpty) return '';
-    if (path == 'url') return '';
-    try {
-      final elements = RuleEngine.queryIn(parser.parse(html), path);
-      return elements.isEmpty
-          ? ''
-          : (RuleEngine.valueOf(elements.first, null) ?? '');
-    } catch (_) {
-      return '';
-    }
-  }
-
-  static String _hexEncode(String value) {
-    return utf8
-        .encode(value)
-        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
-        .join();
-  }
-
-  static String _hexDecode(String hex) {
-    try {
-      final bytes = <int>[];
-      for (var i = 0; i + 1 < hex.length; i += 2) {
-        bytes.add(int.parse(hex.substring(i, i + 2), radix: 16));
-      }
-      return utf8.decode(bytes);
-    } catch (_) {
-      return '';
-    }
-  }
-
-  static String _base64DecodeToString(String value) {
-    try {
-      return utf8.decode(base64Decode(value));
-    } catch (_) {
-      return '';
-    }
-  }
-
-  static List<int> _base64DecodeToBytes(String value) {
-    try {
-      return base64Decode(value);
-    } catch (_) {
-      return [];
-    }
-  }
-
-  static String _formatTimestamp(_TimeArg arg) {
-    final timestamp = int.tryParse(arg.timestamp) ?? 0;
-    final shift = int.tryParse(arg.shift) ?? 0;
-    final date = DateTime.fromMillisecondsSinceEpoch(
-      timestamp,
-      isUtc: shift != 0,
-    ).add(Duration(hours: shift));
-    final pattern = arg.format.isEmpty ? 'yyyy-MM-dd HH:mm:ss' : arg.format;
-    return pattern
-        .replaceAll('yyyy', _pad(date.year, 4))
-        .replaceAll('MM', _pad(date.month, 2))
-        .replaceAll('dd', _pad(date.day, 2))
-        .replaceAll('HH', _pad(date.hour, 2))
-        .replaceAll('mm', _pad(date.minute, 2))
-        .replaceAll('ss', _pad(date.second, 2));
-  }
-
-  static String _pad(int value, int width) =>
-      value.toString().padLeft(width, '0');
 
   /// 预提取 java.get('字面量'[, 'attr']) → 查询缓存。
   /// 特殊键 'url'（Legado 取当前页 URL）返回 baseUrl。
@@ -2112,77 +1660,6 @@ globalThis.java.htmlFormat = (s) => {
   }
 }
 
-class _TimeArg {
-  final String timestamp;
-  final String format;
-  final String shift;
-
-  const _TimeArg({
-    required this.timestamp,
-    required this.format,
-    required this.shift,
-  });
-
-  String get key => '$timestamp|$format|$shift';
-}
-
-class _HmacArg {
-  final String data;
-  final String algorithm;
-  final String key;
-
-  const _HmacArg({
-    required this.data,
-    required this.algorithm,
-    required this.key,
-  });
-
-  String get cacheKey => '$data|$algorithm|$key';
-}
-
-class _AesArg {
-  final String data;
-  final String key;
-  final String transformation;
-  final String iv;
-
-  const _AesArg({
-    required this.data,
-    required this.key,
-    required this.transformation,
-    required this.iv,
-  });
-
-  String get cacheKey => '$data|$key|$transformation|$iv';
-}
-
-class _SymmetricArg {
-  final int id;
-  final String transformation;
-  final String key;
-  final String iv;
-
-  const _SymmetricArg({
-    required this.id,
-    required this.transformation,
-    required this.key,
-    required this.iv,
-  });
-}
-
-class _SymmetricOp {
-  final int id;
-  final String data;
-
-  const _SymmetricOp({required this.id, required this.data});
-}
-
-class _DigestArg {
-  final String data;
-  final String algorithm;
-
-  const _DigestArg({required this.data, required this.algorithm});
-}
 
 class _TemplateCaches {
   final Map<String, String> jsonCache;
@@ -2329,17 +1806,17 @@ class _JsCryptoCaches {
       engine,
       '__base64DecodeByte',
     );
-    final hmacArgs = await JsRuleExecutor._readHmacArgs(engine, '__hmac');
-    final hmacBase64Args = await JsRuleExecutor._readHmacArgs(
+    final hmacArgs = await JsCrypto.readHmacArgs(engine, '__hmac');
+    final hmacBase64Args = await JsCrypto.readHmacArgs(
       engine,
       '__hmacBase64',
     );
-    final digestArgs = await JsRuleExecutor._readDigestArgs(
+    final digestArgs = await JsCrypto.readDigestArgs(
       engine,
       '__digestHex',
     );
-    final aesArgs = await JsRuleExecutor._readAesArgs(engine, '__aesDecode');
-    final aesBase64Args = await JsRuleExecutor._readAesArgs(
+    final aesArgs = await JsCrypto.readAesArgs(engine, '__aesDecode');
+    final aesBase64Args = await JsCrypto.readAesArgs(
       engine,
       '__aesBase64Decode',
     );
@@ -2355,36 +1832,36 @@ class _JsCryptoCaches {
     final t2sArgs = await JsRuleExecutor._readStringList(engine, '__t2s');
     final s2tArgs = await JsRuleExecutor._readStringList(engine, '__s2t');
     final uuidCount = await JsRuleExecutor._readInt(engine, '__uuidCount');
-    final timeArgs = await JsRuleExecutor._readTimeArgs(engine);
-    final symmetricArgs = await JsRuleExecutor._readSymmetricArgs(
+    final timeArgs = await JsCrypto.readTimeArgs(engine);
+    final symmetricArgs = await JsCrypto.readSymmetricArgs(
       engine,
       '__symmetric',
     );
     final symmetricById = {for (final arg in symmetricArgs) arg.id: arg};
-    final decryptStrOps = await JsRuleExecutor._readSymmetricOps(
+    final decryptStrOps = await JsCrypto.readSymmetricOps(
       engine,
       '__symmetricDecryptStr',
     );
-    final decryptOps = await JsRuleExecutor._readSymmetricOps(
+    final decryptOps = await JsCrypto.readSymmetricOps(
       engine,
       '__symmetricDecrypt',
     );
-    final encryptOps = await JsRuleExecutor._readSymmetricOps(
+    final encryptOps = await JsCrypto.readSymmetricOps(
       engine,
       '__symmetricEncrypt',
     );
-    final encryptBase64Ops = await JsRuleExecutor._readSymmetricOps(
+    final encryptBase64Ops = await JsCrypto.readSymmetricOps(
       engine,
       '__symmetricEncryptBase64',
     );
-    final encryptHexOps = await JsRuleExecutor._readSymmetricOps(
+    final encryptHexOps = await JsCrypto.readSymmetricOps(
       engine,
       '__symmetricEncryptHex',
     );
 
     Map<String, String> symmetricResults(
-      List<_SymmetricOp> ops,
-      String Function(_SymmetricArg arg, String data) compute,
+      List<SymmetricOp> ops,
+      String Function(SymmetricArg arg, String data) compute,
     ) {
       return {
         for (final op in ops)
@@ -2407,42 +1884,42 @@ class _JsCryptoCaches {
       },
       base64DecodeCache: {
         for (final arg in base64DecodeArgs)
-          arg: JsRuleExecutor._base64DecodeToString(arg),
+          arg: JsCrypto.base64DecodeToString(arg),
       },
       base64DecodeByteCache: {
         for (final arg in base64DecodeByteArgs)
-          arg: jsonEncode(JsRuleExecutor._base64DecodeToBytes(arg)),
+          arg: jsonEncode(JsCrypto.base64DecodeToBytes(arg)),
       },
       hmacCache: {
-        for (final arg in hmacArgs) arg.cacheKey: JsRuleExecutor._hmacHex(arg),
+        for (final arg in hmacArgs) arg.cacheKey: JsCrypto.hmacHex(arg),
       },
       hmacBase64Cache: {
         for (final arg in hmacBase64Args)
-          arg.cacheKey: JsRuleExecutor._hmacBase64(arg),
+          arg.cacheKey: JsCrypto.hmacBase64(arg),
       },
       digestHexCache: {
         for (final arg in digestArgs)
-          '${arg.data}|${arg.algorithm}': JsRuleExecutor._digestHex(arg),
+          '${arg.data}|${arg.algorithm}': JsCrypto.digestHex(arg),
       },
       aesCache: {
         for (final arg in aesArgs)
-          arg.cacheKey: JsRuleExecutor._aesDecodeToString(
+          arg.cacheKey: JsCrypto.aesDecodeToString(
             arg,
             base64Input: false,
           ),
       },
       aesBase64Cache: {
         for (final arg in aesBase64Args)
-          arg.cacheKey: JsRuleExecutor._aesDecodeToString(
+          arg.cacheKey: JsCrypto.aesDecodeToString(
             arg,
             base64Input: true,
           ),
       },
       hexEncodeCache: {
-        for (final arg in hexEncodeArgs) arg: JsRuleExecutor._hexEncode(arg),
+        for (final arg in hexEncodeArgs) arg: JsCrypto.hexEncode(arg),
       },
       hexDecodeCache: {
-        for (final arg in hexDecodeArgs) arg: JsRuleExecutor._hexDecode(arg),
+        for (final arg in hexDecodeArgs) arg: JsCrypto.hexDecode(arg),
       },
       uriCache: {
         for (final arg in uriArgs)
@@ -2459,34 +1936,34 @@ class _JsCryptoCaches {
             ChineseConversionMode.traditional,
           ),
       },
-      uuidCache: List.generate(uuidCount, (_) => JsRuleExecutor._uuid4()),
+      uuidCache: List.generate(uuidCount, (_) => JsCrypto.uuid4()),
       timeCache: {
         for (final arg in timeArgs)
-          arg.key: JsRuleExecutor._formatTimestamp(arg),
+          arg.key: JsCrypto.formatTimestamp(arg),
       },
       symmetricDecryptStrCache: symmetricResults(
         decryptStrOps,
-        (arg, data) => JsRuleExecutor._symmetricDecryptToString(arg, data),
+        (arg, data) => JsCrypto.symmetricDecryptToString(arg, data),
       ),
       symmetricDecryptCache: symmetricResults(
         decryptOps,
         (arg, data) =>
-            jsonEncode(JsRuleExecutor._symmetricDecryptToBytes(arg, data)),
+            jsonEncode(JsCrypto.symmetricDecryptToBytes(arg, data)),
       ),
       symmetricEncryptCache: symmetricResults(
         encryptOps,
         (arg, data) =>
-            jsonEncode(JsRuleExecutor._symmetricEncryptToBytes(arg, data)),
+            jsonEncode(JsCrypto.symmetricEncryptToBytes(arg, data)),
       ),
       symmetricEncryptBase64Cache: symmetricResults(
         encryptBase64Ops,
         (arg, data) =>
-            base64Encode(JsRuleExecutor._symmetricEncryptToBytes(arg, data)),
+            base64Encode(JsCrypto.symmetricEncryptToBytes(arg, data)),
       ),
       symmetricEncryptHexCache: symmetricResults(
         encryptHexOps,
-        (arg, data) => JsRuleExecutor._bytesToHex(
-          JsRuleExecutor._symmetricEncryptToBytes(arg, data),
+        (arg, data) => JsCrypto.bytesToHex(
+          JsCrypto.symmetricEncryptToBytes(arg, data),
         ),
       ),
     );
