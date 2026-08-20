@@ -4,6 +4,7 @@ import 'package:easy_quickjs/quickjs.dart';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as parser;
 import 'rule_engine.dart';
+import 'js_bridge.dart';
 import 'js_crypto.dart';
 import 'js_rule_executor.dart';
 import '../../../settings/domain/entities/chinese_conversion.dart';
@@ -91,8 +92,8 @@ class JsRecordReplay {
     int? page,
   ) {
     return '''
-globalThis.result = ${JsRuleExecutor.quote(html)};
-globalThis.baseUrl = ${JsRuleExecutor.quote(baseUrl)};
+globalThis.result = ${JsBridge.quote(html)};
+globalThis.baseUrl = ${JsBridge.quote(baseUrl)};
 globalThis.page = ${page ?? 'undefined'};
 globalThis.__jsonPaths = [];
 globalThis.__htmlPaths = [];
