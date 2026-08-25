@@ -44,11 +44,10 @@ class JsRuleExecutor {
   /// 单次 ajax 请求超时
   static const Duration ajaxTimeout = Duration(seconds: 8);
 
-  /// 可注入的请求实现（测试用）；null 时走 DioClient
-  @visibleForTesting
+  /// 可注入的请求实现；null 时走 DioClient。
+  /// js_network 的并发抓取复用此注入点（生产依赖，非测试专用）。
   static Future<String> Function(String url)? fetcher;
 
-  @visibleForTesting
   static DioClient? networkClient;
 
   /// 当前 manager 中存活的 engine 数（测试断言释放用）
