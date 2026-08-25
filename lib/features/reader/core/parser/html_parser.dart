@@ -5,6 +5,13 @@ import 'node_tree.dart';
 class HtmlContentParser {
   static const _blockTags = {'p', 'div', 'section', 'article', 'li', 'blockquote'};
 
+  /// 中文段落首行缩进：两个全角空格。缩进作为文本内容的一部分，使分页
+  /// 测量（TextPainter）与渲染（Text）天然一致；长段落跨页切分的续段
+  /// 不带缩进（与纸书排版一致：续接行顶格）。
+  static const String _indent = '\u3000\u3000';
+
+  String _indented(String text) => text.isEmpty ? text : '$_indent$text';
+
   List<TextNode> parse(String html) {
     final doc = parser.parse(html);
     final body = doc.body;
@@ -24,7 +31,7 @@ class HtmlContentParser {
         // 帧结束：flush 该帧局部 buffer（等价原递归返回前的 flush）
         final text = frame.buffer.toString().trim();
         if (text.isNotEmpty) {
-          nodes.add(TextNode(type: NodeType.paragraph, text: text));
+          nodes.add(TextNode(type: NodeType.paragraph, text: _indented(text)));
         }
         stack.removeLast();
         continue;
@@ -36,7 +43,7 @@ class HtmlContentParser {
           if (src.isNotEmpty) {
             final text = frame.buffer.toString().trim();
             if (text.isNotEmpty) {
-              nodes.add(TextNode(type: NodeType.paragraph, text: text));
+              nodes.add(TextNode(type: NodeType.paragraph, text: _indented(text)));
             }
             frame.buffer.clear();
             nodes.add(TextNode(type: NodeType.image, imageUrl: src));
@@ -48,7 +55,7 @@ class HtmlContentParser {
           // flush 当前帧 buffer 后，将块级子元素作为新帧压栈（等价 _parseElement 递归）
           final text = frame.buffer.toString().trim();
           if (text.isNotEmpty) {
-            nodes.add(TextNode(type: NodeType.paragraph, text: text));
+            nodes.add(TextNode(type: NodeType.paragraph, text: _indented(text)));
           }
           frame.buffer.clear();
           switch (child.localName) {
@@ -70,7 +77,7 @@ class HtmlContentParser {
               } else {
                 final text = child.text.trim();
                 if (text.isNotEmpty) {
-                  nodes.add(TextNode(type: NodeType.paragraph, text: text));
+                  nodes.add(TextNode(type: NodeType.paragraph, text: _indented(text)));
                 }
               }
           }

@@ -300,9 +300,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
       if (seq != _loadSeq) return; // 已被更新的请求取代
 
       final mode = await _loadChineseMode();
-      final nodes = _parser.parse(
-        ChineseConversion.convert(chapter.content, mode),
-      );
+      final nodes = _parseChapterContent(chapter, mode);
       _currentNodes = nodes;
 
       final progress = await _repository.loadProgress(bookId);
@@ -381,6 +379,25 @@ class ReaderNotifier extends Notifier<ReaderState> {
         index.clamp(0, ChineseConversionMode.values.length - 1)];
     _chineseMode = mode;
     return mode;
+  }
+
+  /// 解析章节正文并插入章节标题：正文本身不含标题时在开头插入 heading 节点，
+  /// 翻页/滚动模式顶部都显示当前章节名，便于定位。标题与正文走同一简繁转换，
+  /// 去重比较基于转换后的 title（否则繁体模式下"首段即章节名"的书会重复
+  /// 插入一个未转繁的标题）。
+  List<TextNode> _parseChapterContent(
+    Chapter chapter,
+    ChineseConversionMode mode,
+  ) {
+    var nodes = _parser.parse(ChineseConversion.convert(chapter.content, mode));
+    final title = ChineseConversion.convert(chapter.title, mode).trim();
+    if (title.isNotEmpty && !nodes.any((n) => n.text.trim() == title)) {
+      nodes = [
+        TextNode(type: NodeType.heading, text: title, headingLevel: 1),
+        ...nodes,
+      ];
+    }
+    return nodes;
   }
 
   /// 恢复持久化的排版/主题/阅读模式设置（进入阅读页时调用一次）。
@@ -549,9 +566,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
     final chapter = state.currentChapter;
     if (chapter == null) return;
     _pageCache.clear();
-    final nodes = _parser.parse(
-      ChineseConversion.convert(chapter.content, mode),
-    );
+    final nodes = _parseChapterContent(chapter, mode);
     _currentNodes = nodes;
     final pages = _viewportReported
         ? _paginate(nodes, chapter)

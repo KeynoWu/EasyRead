@@ -17,17 +17,33 @@ class ReaderPageView extends ConsumerStatefulWidget {
   ConsumerState<ReaderPageView> createState() => _ReaderPageViewState();
 }
 
-class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
+class _ReaderPageViewState extends ConsumerState<ReaderPageView>
+    with SingleTickerProviderStateMixin {
   PageController? _controller;
   /// 上次上报的视口尺寸：仅尺寸变化时才注册 postFrame，避免每次 build 都上报
   Size? _lastReportedSize;
   /// 底部栏时间显示：每分钟刷新
   DateTime _now = DateTime.now();
   Timer? _clockTimer;
+  /// 章节切换淡入动画：切章后新内容从透明淡入，避免生硬跳变。
+  /// 与 AnimatedSwitcher 不同，PageView 实例不重建（controller 串行 attach），
+  /// 仅 Opacity 过渡，不会引发页码/滚动位置错乱。
+  late final AnimationController _chapterFade;
+  /// 持有单一 CurvedAnimation：内联构造会在每次 build 向 controller 注册
+  /// 一个 status listener 且无法移除（缓慢泄漏），故在 initState 创建一次。
+  late final CurvedAnimation _chapterFadeCurve;
+  int? _lastChapterIndex;
 
   @override
   void initState() {
     super.initState();
+    _chapterFade = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+      value: 1.0,
+    );
+    _chapterFadeCurve =
+        CurvedAnimation(parent: _chapterFade, curve: Curves.easeOut);
     // 底部时间每分钟刷新
     _clockTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       if (mounted) setState(() => _now = DateTime.now());
@@ -37,6 +53,8 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
   @override
   void dispose() {
     _clockTimer?.cancel();
+    _chapterFadeCurve.dispose();
+    _chapterFade.dispose();
     _controller?.dispose();
     super.dispose();
   }
@@ -142,11 +160,19 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
       );
     }
 
-    // 滚动模式：由 ReaderScrollView 自行处理加载 / 空内容，
+        // 滚动模式：由 ReaderScrollView 自行处理加载 / 空内容，
     // 不依赖分页产物（延迟分页时 pages 可能为空但 nodes 已有内容）
     if (state.readingMode == ReadingMode.scroll) {
       return const ReaderScrollView();
     }
+
+    // 章节切换淡入：章节 index 变化时新内容从透明淡入（首次加载同样生效，
+    // 内容就绪后柔和呈现）；PageView 实例不重建，避免页码/滚动位置错乱。
+    final chapterIndex = state.currentChapter?.index;
+    if (_lastChapterIndex != chapterIndex) {
+      _chapterFade.forward(from: 0);
+    }
+    _lastChapterIndex = chapterIndex;
 
     return Stack(
       children: [
@@ -208,18 +234,21 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
                   // 注意：此处不再包裹 SelectionArea——它注册的 tap 手势会与
                   // 三区点击竞争并拦截点击，导致"点中间呼不出菜单"。
                   // 选词复制（UX-09）需改用不与点击冲突的方案（见报告）。
-                  child: PageView.builder(
-                    controller: _controller,
-                    itemCount: _screenCount(state),
-                    onPageChanged: (index) {
-                      // 双栏：屏幕序号 → 左栏页码（每屏两页）；竖屏：索引即页码
-                      final page = _isDualColumn(state) ? index * 2 : index;
-                      if (page != state.currentPage) {
-                        notifier.jumpToPage(page);
-                      }
-                    },
-                    itemBuilder: (context, index) =>
-                        _buildScreen(state, index),
+                  child: FadeTransition(
+                    opacity: _chapterFadeCurve,
+                    child: PageView.builder(
+                      controller: _controller,
+                      itemCount: _screenCount(state),
+                      onPageChanged: (index) {
+                        // 双栏：屏幕序号 → 左栏页码（每屏两页）；竖屏：索引即页码
+                        final page = _isDualColumn(state) ? index * 2 : index;
+                        if (page != state.currentPage) {
+                          notifier.jumpToPage(page);
+                        }
+                      },
+                      itemBuilder: (context, index) =>
+                          _buildScreen(state, index),
+                    ),
                   ),
                 ),
               );
@@ -257,12 +286,92 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
                       ),
                     ),
                   ),
+                  // 章节导航：上一章 / 下一章（与滚动模式底部导航能力对齐）。
+                  // 加载中禁用：防止快速连点对同一章节发起重复网络请求
+                  // （_loadSeq 只丢弃过期结果，不合并请求）。
+                  // 显式 icon color 会覆盖 IconButton 的禁用色，故按可用态
+                  // 手动降透明度以提供视觉区分。
+                  Builder(
+                    builder: (context) {
+                      final prevEnabled =
+                          notifier.hasPrevChapter && !state.isLoading;
+                      final nextEnabled =
+                          notifier.hasNextChapter && !state.isLoading;
+                      final textColor = state.theme.textColor;
+                      return Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: Icon(
+                              Icons.skip_previous,
+                              size: 20,
+                              color: prevEnabled
+                                  ? textColor.withValues(alpha: 0.7)
+                                  : textColor.withValues(alpha: 0.25),
+                            ),
+                            onPressed:
+                                prevEnabled ? notifier.prevChapter : null,
+                            visualDensity: VisualDensity.compact,
+                            tooltip: '上一章',
+                          ),
+                          IconButton(
+                            icon: Icon(
+                              Icons.skip_next,
+                              size: 20,
+                              color: nextEnabled
+                                  ? textColor.withValues(alpha: 0.7)
+                                  : textColor.withValues(alpha: 0.25),
+                            ),
+                            onPressed:
+                                nextEnabled ? notifier.nextChapter : null,
+                            visualDensity: VisualDensity.compact,
+                            tooltip: '下一章',
+                          ),
+                        ],
+                      );
+                    },
+                  ),
                 ],
               ),
             ),
           ],
         ),
       ),
+        // 竖屏末页提示：本章最后一页显示"本章完"，点击直接进入下一章。
+        // 双栏末屏已有右栏占位（_buildChapterEndPlaceholder），不再重复。
+        if (!_isDualColumn(state) &&
+            state.pages.isNotEmpty &&
+            state.currentPage >= state.pages.length - 1 &&
+            notifier.hasNextChapter &&
+            !state.isLoading)
+          Positioned(
+            left: 24,
+            right: 24,
+            bottom: 56,
+            child: Center(
+              child: Material(
+                color: state.theme.textColor.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(16),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: notifier.nextChapter,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    child: Text(
+                      '本章完 · 点击进入下一章',
+                      style: TextStyle(
+                        color: state.theme.textColor.withValues(alpha: 0.7),
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
         // 切章加载中：顶部细进度条提示，不打断旧内容阅读
         if (state.isLoading)
           const Positioned(
@@ -304,15 +413,26 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView> {
               );
             case NodeType.heading:
               return Padding(
-                padding: EdgeInsets.only(bottom: state.layoutConfig.paragraphSpacing),
-                child: Text(
-                  node.text,
-                  style: TextStyle(
-                    fontSize: state.layoutConfig.fontSize + 4,
-                    fontWeight: FontWeight.w700,
-                    color: state.theme.textColor,
-                    fontFamily: state.layoutConfig.fontFamily,
-                    fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
+                // 与分页引擎 heading 测量一致：top 4 + bottom 段落距 ×1.2
+                padding: EdgeInsets.only(
+                  top: 4,
+                  bottom: state.layoutConfig.paragraphSpacing * 1.2,
+                ),
+                // Column 为 start 对齐：Text 按固有宽度布局时 textAlign 无效，
+                // 必须拉满整宽才能让标题真正水平居中（与滚动模式 ListView 行为一致）
+                child: SizedBox(
+                  width: double.infinity,
+                  child: Text(
+                    node.text,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: state.layoutConfig.fontSize + 6,
+                      fontWeight: FontWeight.w700,
+                      height: state.layoutConfig.lineHeight,
+                      color: state.theme.textColor,
+                      fontFamily: state.layoutConfig.fontFamily,
+                      fontFamilyFallback: state.layoutConfig.fontFamily != null ? ['serif'] : null,
+                    ),
                   ),
                 ),
               );

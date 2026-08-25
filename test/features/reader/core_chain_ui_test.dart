@@ -20,7 +20,7 @@ import 'package:easy_read/features/reader/domain/entities/reading_progress.dart'
 import 'package:easy_read/features/reader/presentation/providers/reader_provider.dart';
 import 'package:easy_read/features/bookshelf/presentation/providers/bookshelf_provider.dart';
 import 'package:easy_read/features/book_source/presentation/providers/book_source_provider.dart';
-import 'package:flutter/material.dart' show Icons;
+import 'package:flutter/material.dart' show Icons, Scaffold;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -236,8 +236,24 @@ void main() {
       () => Future.delayed(const Duration(milliseconds: 500)),
     );
     await tester.pumpAndSettle(const Duration(milliseconds: 100));
-    expect(find.textContaining('这是第一章的正文内容'), findsWidgets);
-    expect(find.textContaining('章节内容为空或解析失败'), findsNothing);
+    // 章节标题插入正文顶部（_parseChapterContent 的 heading 节点）
+    expect(find.text('第一章 起'), findsOneWidget);
+    // 段落首行缩进：两个全角空格前缀
+    expect(find.textContaining('　　这是第一章的正文内容'), findsWidgets);
+    // 底部章节导航按钮（上一章/下一章）
+    expect(find.byIcon(Icons.skip_previous), findsOneWidget);
+    expect(find.byIcon(Icons.skip_next), findsOneWidget);
+    // 标题几何居中（防回归：Column start 对齐曾使 Text 的 textAlign 失效）。
+    // 默认测试表面 800x600 为横屏双栏：标题在左栏（半宽）内居中。
+    final scaffoldSize = tester.getSize(find.byType(Scaffold));
+    final expectedCenterX =
+        scaffoldSize.width > scaffoldSize.height
+            ? scaffoldSize.width / 4
+            : scaffoldSize.width / 2;
+    expect(
+      tester.getCenter(find.text('第一章 起')).dx,
+      closeTo(expectedCenterX, 1.5),
+    );
 
     // 退出阅读器：让 ReaderPage.dispose 的进度同步在 provider 存活期完成，
     // 避免 teardown 时 ProviderScope dispose 与未完成回调竞争（Riverpod 3 限制）

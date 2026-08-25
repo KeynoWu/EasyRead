@@ -239,12 +239,18 @@ class _ReaderScrollViewState extends ConsumerState<ReaderScrollView> {
         );
       case NodeType.heading:
         return Padding(
-          padding: EdgeInsets.only(bottom: state.layoutConfig.paragraphSpacing),
+          // 与分页引擎 heading 测量一致：top 4 + bottom 段落距 ×1.2
+          padding: EdgeInsets.only(
+            top: 4,
+            bottom: state.layoutConfig.paragraphSpacing * 1.2,
+          ),
           child: Text(
             node.text,
+            textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: state.layoutConfig.fontSize + 4,
+              fontSize: state.layoutConfig.fontSize + 6,
               fontWeight: FontWeight.w700,
+              height: state.layoutConfig.lineHeight,
               color: state.theme.textColor,
               fontFamily: state.layoutConfig.fontFamily,
               fontFamilyFallback: state.layoutConfig.fontFamily != null

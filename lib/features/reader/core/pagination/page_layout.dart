@@ -123,10 +123,11 @@ class PageLayout {
       case NodeType.heading:
         textPainter.text = TextSpan(
           text: node.text,
-          style: _textStyle().copyWith(fontSize: config.fontSize + 4, fontWeight: FontWeight.w700),
+          style: _headingStyle(),
         );
         textPainter.layout(maxWidth: width);
-        return textPainter.height + config.paragraphSpacing;
+        // 与渲染层 heading 的 padding 一致：top 4 + bottom 段落距 ×1.2
+        return textPainter.height + config.paragraphSpacing * 1.2 + 4;
       case NodeType.lineBreak:
         return config.fontSize * config.lineHeight * 0.5;
       case NodeType.image:
@@ -191,4 +192,10 @@ class PageLayout {
       fontFamilyFallback: config.fontFamily != null ? ['serif'] : null,
     );
   }
+
+  /// 章节标题样式：居中标题更大一号字重，渲染层保持一致。
+  TextStyle _headingStyle() => _textStyle().copyWith(
+        fontSize: config.fontSize + 6,
+        fontWeight: FontWeight.w700,
+      );
 }
