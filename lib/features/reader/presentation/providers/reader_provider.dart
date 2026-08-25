@@ -50,6 +50,9 @@ class ReaderState {
   final ReaderThemeConfig theme;
   final bool isLoading;
   final bool showSettings;
+  /// 菜单模式：顶栏 + 底部工具栏显隐（点击正文中间呼出）。
+  /// 与 showSettings 两级分离：菜单是轻量入口层，设置面板是二级弹层。
+  final bool showMenu;
   final String? errorMessage;
   final ReadingMode readingMode;
   /// 翻页动画样式
@@ -71,6 +74,7 @@ class ReaderState {
     this.theme = ReaderThemes.defaultTheme,
     this.isLoading = false,
     this.showSettings = false,
+    this.showMenu = false,
     this.errorMessage,
     this.viewportSize = const Size(400, 600),
     this.nodes = const [],
@@ -89,6 +93,7 @@ class ReaderState {
     ReaderThemeConfig? theme,
     bool? isLoading,
     bool? showSettings,
+    bool? showMenu,
     Object? errorMessage = _unset,
     ReadingMode? readingMode,
     PageTurnStyle? pageTurnStyle,
@@ -108,6 +113,7 @@ class ReaderState {
       theme: theme ?? this.theme,
       isLoading: isLoading ?? this.isLoading,
       showSettings: showSettings ?? this.showSettings,
+      showMenu: showMenu ?? this.showMenu,
       errorMessage: errorMessage == _unset
           ? this.errorMessage
           : errorMessage as String?,
@@ -712,9 +718,22 @@ class ReaderNotifier extends Notifier<ReaderState> {
     _saveProgress();
   }
 
-  /// 切换设置面板
-  void toggleSettings() {
-    state = state.copyWith(showSettings: !state.showSettings);
+  /// 切换菜单模式（顶栏 + 底部工具栏）；打开时收起设置面板。
+  void toggleMenu() {
+    state = state.copyWith(
+      showMenu: !state.showMenu,
+      showSettings: false,
+    );
+  }
+
+  /// 打开设置面板（二级入口；菜单保持显示）。
+  void openSettings() {
+    state = state.copyWith(showSettings: true);
+  }
+
+  /// 关闭设置面板，回到菜单层。
+  void closeSettings() {
+    state = state.copyWith(showSettings: false);
   }
 
   /// 更新排版配置（按旧页码/旧页数比例换算新页码，不再重置到 0；

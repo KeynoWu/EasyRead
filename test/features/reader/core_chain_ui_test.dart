@@ -257,6 +257,7 @@ void main() {
 
     // 退出阅读器：让 ReaderPage.dispose 的进度同步在 provider 存活期完成，
     // 避免 teardown 时 ProviderScope dispose 与未完成回调竞争（Riverpod 3 限制）
+    // 点正文中间呼出菜单（顶栏随之显示，返回按钮可用）
     await tester.tapAt(const Offset(400, 300));
     await tester.pump();
     await tester.tap(find.byIcon(Icons.arrow_back).first);

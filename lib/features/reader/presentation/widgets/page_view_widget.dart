@@ -119,7 +119,7 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView>
         notifier.nextPage();
       }
     } else {
-      notifier.toggleSettings();
+      notifier.toggleMenu();
     }
   }
 
@@ -255,8 +255,10 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView>
             }),
           ),
             // 进度条（pages 为空：初始/视口未上报/空章节——显示 0/0 不除零，
-            // LinearProgressIndicator 在 debug 下对 >1 的值断言崩溃）
-            Container(
+            // LinearProgressIndicator 在 debug 下对 >1 的值断言崩溃）。
+            // 菜单打开时隐藏，避免与底部工具栏视觉叠层。
+            if (!state.showMenu)
+              Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               color: state.theme.backgroundColor,
               child: Row(

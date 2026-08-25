@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../providers/reader_provider.dart';
 
-/// 章节目录面板 — 打开时自动滚动到当前章节；目录加载失败可重试
+/// 章节目录面板 — 打开时自动滚动到当前章节；目录加载失败可重试。
+/// 视觉与正文明确区分：面板用独立的 surface 底色（浅色=白卡、深色=深灰），
+/// 当前章节以琥珀色高亮，不再复用阅读主题背景导致"目录像另一页正文"。
 class ChapterCatalogSheet extends ConsumerStatefulWidget {
   const ChapterCatalogSheet({super.key});
 
@@ -23,6 +25,17 @@ class _ChapterCatalogSheetState extends ConsumerState<ChapterCatalogSheet> {
     final notifier = ref.read(readerProvider.notifier);
     final catalog = state.catalog;
     final currentChapter = state.currentChapter;
+
+    // 面板配色：跟随阅读主题明暗，但与正文背景拉开层次
+    final isDark =
+        state.theme.backgroundColor.computeLuminance() < 0.5;
+    final surfaceBg = isDark ? AppColors.darkSurface : AppColors.surface;
+    final primaryFg =
+        isDark ? AppColors.darkTextPrimary : AppColors.textPrimary;
+    final secondaryFg =
+        isDark ? AppColors.darkTextSecondary : AppColors.textSecondary;
+    final accent = isDark ? AppColors.darkTint : AppColors.tint;
+    final divider = isDark ? AppColors.darkSeparator : AppColors.separator;
 
     return DraggableScrollableSheet(
       expand: false,
@@ -47,24 +60,30 @@ class _ChapterCatalogSheetState extends ConsumerState<ChapterCatalogSheet> {
 
         return Container(
           decoration: BoxDecoration(
-            color: Theme.of(context).scaffoldBackgroundColor,
+            color: surfaceBg,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
           ),
           child: Column(
             children: [
-              const Padding(
-                padding: EdgeInsets.all(12),
+              Padding(
+                padding: const EdgeInsets.all(12),
                 child: Text(
                   '章节目录',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: primaryFg,
+                  ),
                 ),
               ),
-              const Divider(height: 1),
+              Divider(height: 1, color: divider),
               Expanded(
                 child: catalog == null
-                    ? _buildCatalogError(notifier)
+                    ? _buildCatalogError(notifier, secondaryFg)
                     : catalog.chapters.isEmpty
-                    ? const Center(child: Text('暂无目录'))
+                    ? Center(
+                        child: Text('暂无目录', style: TextStyle(color: secondaryFg)),
+                      )
                     : ListView.builder(
                         controller: scrollController,
                         itemExtent: _itemExtent,
@@ -85,9 +104,12 @@ class _ChapterCatalogSheetState extends ConsumerState<ChapterCatalogSheet> {
                                 fontWeight: isCurrent
                                     ? FontWeight.w600
                                     : FontWeight.w400,
-                                color: isCurrent ? Colors.blue : null,
+                                color: isCurrent ? accent : primaryFg,
                               ),
                             ),
+                            trailing: isCurrent
+                                ? Icon(Icons.play_arrow, size: 18, color: accent)
+                                : null,
                             onTap: () {
                               Navigator.pop(context);
                               notifier.jumpToChapter(index);
@@ -103,21 +125,14 @@ class _ChapterCatalogSheetState extends ConsumerState<ChapterCatalogSheet> {
     );
   }
 
-  Widget _buildCatalogError(ReaderNotifier notifier) {
+  Widget _buildCatalogError(ReaderNotifier notifier, Color fg) {
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(
-            Icons.error_outline,
-            color: AppColors.textSecondary,
-            size: 40,
-          ),
+          Icon(Icons.error_outline, color: fg, size: 40),
           const SizedBox(height: 12),
-          const Text(
-            '目录加载失败',
-            style: TextStyle(color: AppColors.textSecondary),
-          ),
+          Text('目录加载失败', style: TextStyle(color: fg)),
           const SizedBox(height: 12),
           FilledButton.icon(
             onPressed: notifier.reloadCatalog,

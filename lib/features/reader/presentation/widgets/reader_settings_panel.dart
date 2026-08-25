@@ -106,7 +106,7 @@ class _ReaderSettingsPanelState extends ConsumerState<ReaderSettingsPanel> {
                       Icons.keyboard_arrow_down,
                       color: state.theme.textColor,
                     ),
-                    onPressed: notifier.toggleSettings,
+                    onPressed: notifier.closeSettings,
                     tooltip: '收起',
                   ),
                 ],

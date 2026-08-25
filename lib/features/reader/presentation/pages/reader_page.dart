@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:screen_brightness/screen_brightness.dart';
-import '../../../../core/theme/app_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'
     show HapticFeedback, SystemUiOverlayStyle;
@@ -315,11 +314,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       }
     });
 
-    // 沉浸式阅读：顶栏随设置面板一起显隐（点击正文中间呼出/收起）。
-    // 面板内提供返回按钮（见 ReaderSettingsPanel 头部），保证顶栏隐藏
-    // 时仍有返回途径。
-    final showChrome = state.showSettings;
-    // 状态栏图标随阅读主题适配：深色背景用浅色图标
+    // 沉浸式阅读：菜单模式或设置面板打开时显示顶栏/底栏（点击正文中间呼出菜单）。
+    final showChrome = state.showMenu || state.showSettings;
     final isDarkBg = state.theme.backgroundColor.computeLuminance() < 0.5;
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -336,7 +332,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
             children: [
               Column(
                 children: [
-                  // 顶栏：随设置面板显隐（沉浸式阅读）
+                  // 顶栏：菜单模式或设置面板打开时显示（点击正文中间呼出菜单）。
+                  // 只保留导航职责：返回 + 章节标题；操作入口在底部工具栏。
                   AnimatedSize(
                     duration: const Duration(milliseconds: 200),
                     curve: Curves.easeInOut,
@@ -372,89 +369,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                                     ),
                                   ),
                                 const Spacer(),
-                                IconButton(
-                                  icon: Icon(
-                                    Icons.list,
-                                    color: state.theme.textColor,
-                                  ),
-                                  onPressed: _openCatalog,
-                                  tooltip: '章节目录',
-                                ),
-                                IconButton(
-                                  icon: Icon(
-                                    Icons.settings,
-                                    color: state.theme.textColor,
-                                  ),
-                                  onPressed: () => ref
-                                      .read(readerProvider.notifier)
-                                      .toggleSettings(),
-                                ),
-                                // 更多菜单
-                                PopupMenuButton<String>(
-                                  icon: Icon(
-                                    Icons.more_horiz,
-                                    color: state.theme.textColor,
-                                  ),
-                                  color: Colors.white,
-                                  onSelected: (value) {
-                                    switch (value) {
-                                      case 'prev':
-                                        ref
-                                            .read(readerProvider.notifier)
-                                            .prevChapter();
-                                        break;
-                                      case 'next':
-                                        ref
-                                            .read(readerProvider.notifier)
-                                            .nextChapter();
-                                        break;
-                                      case 'catalog':
-                                        _openCatalog();
-                                        break;
-                                      case 'source':
-                                        _openSourceSwitcher();
-                                        break;
-                                    }
-                                  },
-                                  itemBuilder: (context) => [
-                                    PopupMenuItem(
-                                      value: 'prev',
-                                      enabled: ref
-                                          .read(readerProvider.notifier)
-                                          .hasPrevChapter,
-                                      child: const _MenuRow(
-                                        icon: Icons.skip_previous,
-                                        label: '上一章',
-                                      ),
-                                    ),
-                                    PopupMenuItem(
-                                      value: 'next',
-                                      enabled: ref
-                                          .read(readerProvider.notifier)
-                                          .hasNextChapter,
-                                      child: const _MenuRow(
-                                        icon: Icons.skip_next,
-                                        label: '下一章',
-                                      ),
-                                    ),
-                                    const PopupMenuDivider(),
-                                    const PopupMenuItem(
-                                      value: 'catalog',
-                                      child: _MenuRow(
-                                        icon: Icons.list,
-                                        label: '章节目录',
-                                      ),
-                                    ),
-                                    if (_alternatives.isNotEmpty)
-                                      const PopupMenuItem(
-                                        value: 'source',
-                                        child: _MenuRow(
-                                          icon: Icons.swap_horiz,
-                                          label: '切换书源',
-                                        ),
-                                      ),
-                                  ],
-                                ),
+                                // 占位保持标题视觉居中
+                                const SizedBox(width: 48),
                               ],
                             ),
                           )
@@ -465,6 +381,15 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                   ),
                 ],
               ),
+              // 底部工具栏：菜单模式的操作层。上一章/全书进度滑块/下一章
+              // + 入口行（目录/设置/换源）。设置面板打开时覆盖在其上方。
+              if (state.showMenu)
+                Positioned(
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  child: _buildBottomBar(state),
+                ),
               if (state.showSettings)
                 const Positioned(
                   bottom: 0,
@@ -478,23 +403,126 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       ),
     );
   }
+
+  /// 底部工具栏：配色跟随阅读主题（深浅自适应），与正文形成层次。
+  Widget _buildBottomBar(ReaderState state) {
+    final notifier = ref.read(readerProvider.notifier);
+    final catalog = state.catalog;
+    final chapterCount = catalog?.chapters.length ?? 0;
+    final hasCatalog = catalog != null && chapterCount > 0;
+    final progress = hasCatalog && state.currentChapter != null
+        ? (state.currentChapter!.index + 1) / chapterCount
+        : null;
+    final fg = state.theme.textColor;
+
+    return Container(
+      decoration: BoxDecoration(color: state.theme.backgroundColor),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 行1：章节导航 + 全书进度滑块
+          Row(
+            children: [
+              TextButton(
+                onPressed:
+                    notifier.hasPrevChapter ? notifier.prevChapter : null,
+                child: Text(
+                  '上一章',
+                  style: TextStyle(fontSize: 13, color: fg.withValues(alpha: 0.8)),
+                ),
+              ),
+              Expanded(
+                child: Slider(
+                  value: progress ?? 0,
+                  onChanged: progress == null
+                      ? null
+                      : (v) {
+                          // 拖动结束跳章：滑块值映射回 0 基章节索引
+                          final target =
+                              (v * chapterCount).round().clamp(1, chapterCount);
+                          notifier.jumpToChapter(target - 1);
+                        },
+                ),
+              ),
+              Text(
+                hasCatalog && state.currentChapter != null
+                    ? '${state.currentChapter!.index + 1}/$chapterCount'
+                    : '-/-',
+                style: TextStyle(fontSize: 12, color: fg.withValues(alpha: 0.7)),
+              ),
+              TextButton(
+                onPressed:
+                    notifier.hasNextChapter ? notifier.nextChapter : null,
+                child: Text(
+                  '下一章',
+                  style: TextStyle(fontSize: 13, color: fg.withValues(alpha: 0.8)),
+                ),
+              ),
+            ],
+          ),
+          // 行2：功能入口（颜色继承阅读主题前景色）
+          IconTheme.merge(
+            data: IconThemeData(color: fg.withValues(alpha: 0.85)),
+            child: DefaultTextStyle.merge(
+              style: TextStyle(
+                color: fg.withValues(alpha: 0.85),
+                fontSize: 12,
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _MenuRow(
+                    icon: Icons.menu_book,
+                    label: '目录',
+                    onTap: _openCatalog,
+                  ),
+                  _MenuRow(
+                    icon: Icons.tune,
+                    label: '设置',
+                    onTap: () =>
+                        ref.read(readerProvider.notifier).openSettings(),
+                  ),
+                  if (_alternatives.isNotEmpty)
+                    _MenuRow(
+                      icon: Icons.swap_horiz,
+                      label: '换源',
+                      onTap: _openSourceSwitcher,
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
-/// 弹出菜单行
+/// 底部工具栏入口：竖排图标 + 文字；颜色继承上层 IconTheme/DefaultTextStyle
 class _MenuRow extends StatelessWidget {
   final IconData icon;
   final String label;
+  final VoidCallback? onTap;
 
-  const _MenuRow({required this.icon, required this.label});
+  const _MenuRow({required this.icon, required this.label, this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, size: 20, color: AppColors.textSecondary),
-        const SizedBox(width: 12),
-        Text(label, style: const TextStyle(fontSize: 14)),
-      ],
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 22),
+            const SizedBox(height: 4),
+            Text(label, style: const TextStyle(fontSize: 12)),
+          ],
+        ),
+      ),
     );
   }
 }

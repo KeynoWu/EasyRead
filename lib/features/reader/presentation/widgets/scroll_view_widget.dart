@@ -120,7 +120,7 @@ class _ReaderScrollViewState extends ConsumerState<ReaderScrollView> {
             children: [
               Expanded(
                 child: GestureDetector(
-                  onTap: notifier.toggleSettings,
+                  onTap: notifier.toggleMenu,
                   // 与翻页模式一致：不包裹 SelectionArea（其 tap 手势会拦截
                   // 点击呼出菜单），选词复制待无冲突方案（见报告）。
                   child: ListView.builder(
@@ -135,8 +135,10 @@ class _ReaderScrollViewState extends ConsumerState<ReaderScrollView> {
                   ),
                 ),
               ),
-              // 章节导航栏：本章滚动进度条 + 上一章/标题/下一章
-              Container(
+              // 章节导航栏：本章滚动进度条 + 上一章/标题/下一章。
+              // 菜单打开时隐藏，避免与底部工具栏功能重复、视觉叠层。
+              if (!state.showMenu)
+                Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 color: state.theme.backgroundColor,
                 child: Column(
