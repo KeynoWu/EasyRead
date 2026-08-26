@@ -179,9 +179,13 @@ class BookCacheService {
     final updatedAt = <String, DateTime>{};
     for (final k in metaKeys) {
       final v = box.get(k);
-      final ms = v is Map ? v['updatedAt'] : null;
-      updatedAt[k.toString()] =
-          ms is int ? DateTime.fromMillisecondsSinceEpoch(ms) : DateTime.fromMillisecondsSinceEpoch(0);
+      final raw = v is Map ? v['updatedAt'] : null;
+      // 写入侧存的是 DateTime（Hive 内置 DateTimeAdapter），读回需同时兼容 int
+      updatedAt[k.toString()] = switch (raw) {
+        DateTime dt => dt,
+        int ms => DateTime.fromMillisecondsSinceEpoch(ms),
+        _ => DateTime.fromMillisecondsSinceEpoch(0),
+      };
     }
     final oldest = metaKeys.map((k) => k.toString()).toList()
       ..sort((a, b) => updatedAt[a]!.compareTo(updatedAt[b]!));

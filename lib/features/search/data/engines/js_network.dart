@@ -35,7 +35,7 @@ class JsNetwork {
           final resolved = resolveUrl(baseUrl, url);
           if (!isSameSite(baseUrl, resolved)) {
             results[url] = '';
-            return;
+            continue;
           }
           final html = JsRuleExecutor.fetcher != null
               ? await JsRuleExecutor.fetcher!(resolved).timeout(JsRuleExecutor.ajaxTimeout)
@@ -127,7 +127,7 @@ class JsNetwork {
               'cookies': '',
               'body': '',
             };
-            return;
+            continue;
           }
           final headers = op.headers;
           final Map<String, List<String>> responseHeaders;

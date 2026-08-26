@@ -123,6 +123,10 @@ class _FakeReaderRepo extends ReaderRepositoryImpl {
 
   @override
   Future<ReadingProgress?> loadProgress(String bookId) async => null;
+  // 详情页点任意章节（含第 1 章）都会先 saveProgress 再进阅读器；
+  // 假仓库不落盘：避免 fake 时钟下真实 Hive 写 Future 挂起导致 Hive.close() 死等
+  @override
+  Future<void> saveProgress(ReadingProgress progress) async {}
 
   @override
   Future<Chapter> getChapter({

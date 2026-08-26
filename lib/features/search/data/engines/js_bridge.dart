@@ -34,15 +34,30 @@ class JsBridge {
   /// （如 'ev'+'al('、'_'+'ffi'+'Notify'）。仍是纵深防御一层——
   /// QuickJS 侧无 registerBridge、默认不绑定定时器，逃逸面已收窄。
   static bool unsupported(String body) {
-    if (unsupportedMarkers.any(body.contains)) return true;
+    // 先解码 \uXXXX/\xXX 转义：'\u0065val('、'_ffi\u004eotify' 可绕过字面匹配
+    final unescaped = _decodeJsEscapes(body);
+    if (unsupportedMarkers.any(unescaped.contains)) return true;
     // 剥离空白/引号/加号/点号等符号后再检查，防 'ev'+'al('、
     // '_ffi'+'Notify' 之类字符串拼接绕过（仍是纵深防御一层，
     // QuickJS 侧无 registerBridge、默认不绑定定时器，逃逸面已收窄）。
-    final normalized = body.replaceAll(RegExp(r'[^A-Za-z0-9_()]'), '');
+    final normalized = unescaped.replaceAll(RegExp(r'[^A-Za-z0-9_()]'), '');
     return normalized.contains('_ffiNotify') ||
         normalized.contains('eval(') ||
         normalized.contains('startBrowser') ||
         normalized.contains('setTimeout');
+  }
+  /// 解码 JS 字符串转义（\uXXXX / \xXX），用于黑名单匹配前归一化。
+  static String _decodeJsEscapes(String s) {
+    if (!s.contains(r'\')) return s;
+    return s
+        .replaceAllMapped(
+          RegExp(r'\\u([0-9a-fA-F]{4})'),
+          (m) => String.fromCharCode(int.parse(m.group(1)!, radix: 16)),
+        )
+        .replaceAllMapped(
+          RegExp(r'\\x([0-9a-fA-F]{2})'),
+          (m) => String.fromCharCode(int.parse(m.group(1)!, radix: 16)),
+        );
   }
   static Map<String, String> extractLiterals(
     String html,
@@ -273,6 +288,7 @@ ${cookieBridge(cookies ?? const {}, seed: true)}''';
   /// 最终执行环境：get 按记录顺序消费提取值表，setContent 为 no-op
   static const finalPrelude = '''
 globalThis.__getIdx = 0;
+globalThis.__getSelectors = [];
 globalThis.java = {
   put: (key, value) => { __putMap[String(key)] = String(value); return ''; },
   getString: (path) => __putMap[String(path)] || __getStringCache[String(path)] || __jsonPathGet(String(path), result) || '',
@@ -280,16 +296,19 @@ globalThis.java = {
   get: (sel, attr) => {
     if (__putMap.hasOwnProperty(String(sel))) return __putMap[String(sel)];
     if (String(sel) === 'url') return baseUrl;
+    __getSelectors.push('g|' + String(sel) + '|' + (attr === undefined || attr === null ? '' : String(attr)));
     const v = __getValues[__getIdx++];
     return v === undefined || v === null ? '' : v;
   },
   getElement: (sel, attr) => {
     if (__putMap.hasOwnProperty(String(sel))) return __putMap[String(sel)];
     if (String(sel) === 'url') return baseUrl;
+    __getSelectors.push('g|' + String(sel) + '|' + (attr === undefined || attr === null ? '' : String(attr)));
     const v = __getValues[__getIdx++];
     return v === undefined || v === null ? '' : v;
   },
   getElements: (sel) => {
+    __getSelectors.push('e|' + String(sel));
     const items = __elementCaches[__getElementsIdx++] || [];
     const arr = items.map((snapshot) => ({
       html: () => snapshot.html,

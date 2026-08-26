@@ -76,7 +76,12 @@ final class JsEngineManager {
     final send = (await receiving.first) as SendPort;
     final data = receiving.cast<Map<String, dynamic>>();
     final manager = JsEngineManager._(recv, notified, isolate, send, verbose);
-    data.listen(manager._onDataArrived);
+    data.listen(
+      manager._onDataArrived,
+      // 引擎 isolate 因 FFI 致命错误终止时端口关闭：让所有挂起请求
+      // 快速失败，避免 createEngine/eval 永久等待
+      onDone: manager._failPending,
+    );
     notified.cast<Map<String, dynamic>>().listen(manager._onNotified);
     return manager;
   }
@@ -188,5 +193,14 @@ final class JsEngineManager {
   void _onDataArrived(Map<String, dynamic> data) {
     final c = _futures.removeAt(0);
     c.complete(data);
+  }
+  /// isolate 死亡/接收端口关闭时，以错误完成所有挂起请求。
+  void _failPending() {
+    for (final c in _futures) {
+      if (!c.isCompleted) {
+        c.completeError(StateError('JS 引擎 isolate 已终止'));
+      }
+    }
+    _futures.clear();
   }
 }

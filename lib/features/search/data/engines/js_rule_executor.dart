@@ -109,6 +109,21 @@ class JsRuleExecutor {
       } catch (_) {}
     }
   }
+  /// 创建引擎（带超时与失败回收）：引擎 isolate 死亡/挂死时
+  /// createEngine 会永久等待，超时或以错误完成后回收允许下次重建
+  static Future<JsEngine?> _createEngine(
+    JsEngineManager manager,
+    String prefix,
+  ) async {
+    try {
+      return await manager
+          .createEngine('$prefix${_engineSeq++}')
+          .timeout(evalTimeout);
+    } catch (_) {
+      await _recycle();
+      return null;
+    }
+  }
 
   /// 执行 JS 规则，返回提取值；不支持/超时/异常返回 null
   static Future<String?> execute(
@@ -131,7 +146,8 @@ class JsRuleExecutor {
 
     final manager = await _getManager();
     if (manager == null) return null;
-    final engine = await manager.createEngine('jsrule${_engineSeq++}');
+    final engine = await _createEngine(manager, 'jsrule');
+    if (engine == null) return null;
     var recycled = false;
     try {
       if (!hasSetContent && !hasGetElements) {
@@ -196,10 +212,19 @@ class JsRuleExecutor {
         }
 
         if (hasCrypto) {
+          // crypto 参数常依赖 ajax 真实结果（第一遍占位 '' 记录的参数有误）：
+          // 真实网络桥装好后热身重录（cryptoRecordBridge 重置记录数组），
+          // 再按真实参数重建缓存
+          await engine.eval(JsBridge.cryptoRecordBridge).timeout(evalTimeout);
+          await engine.eval('globalThis.__putMap = {};').timeout(evalTimeout);
+          await engine.eval('try { $body } catch (e) {}').timeout(evalTimeout);
           final crypto = await JsCryptoCaches.fromEngine(engine);
           await engine.eval(crypto.realBridge).timeout(evalTimeout);
         }
 
+        // 第二遍前重置 putMap：之前各遍占位桥（ajax/crypto 返回 ''）
+        // 推导的键值若残留，get/getString 会优先命中旧值而不重算
+        await engine.eval('globalThis.__putMap = {};').timeout(evalTimeout);
         // 第二遍：执行取最终值
         final result = await engine.eval(body).timeout(evalTimeout);
         final value = result.value.trim();
@@ -294,12 +319,33 @@ class JsRuleExecutor {
           .eval(JsBridge.cookieBridge(cookies ?? const {}, seed: false))
           .timeout(evalTimeout);
       if (hasCrypto) {
+        // crypto 参数常依赖提取值/ajax 真实结果（记录遍占位 '' 的参数有误）：
+        // finalPrelude 装好后热身重录，按真实参数重建缓存
+        await engine.eval(JsBridge.cryptoRecordBridge).timeout(evalTimeout);
+        await engine.eval('globalThis.__putMap = {};').timeout(evalTimeout);
+        await engine.eval('try { $body } catch (e) {}').timeout(evalTimeout);
         final crypto = await JsCryptoCaches.fromEngine(engine);
         await engine.eval(crypto.realBridge).timeout(evalTimeout);
       }
 
+      // 最终遍前复位：记录/热身遍消耗的提取值表索引、消费日志与
+      // putMap 占位推导值都不能带入最终遍
+      await engine
+          .eval(
+            'globalThis.__putMap = {};'
+            'globalThis.__getIdx = 0;'
+            'globalThis.__getElementsIdx = 0;'
+            'globalThis.__getSelectors = [];',
+          )
+          .timeout(evalTimeout);
+
       // 最终遍：执行取最终值
       final result = await engine.eval(body).timeout(evalTimeout);
+      // 一致性校验：最终遍实际消费的 get/getElements 序列与记录遍不一致
+      // （控制流依赖占位 '' 结果）时，值表已错位，结果不可信 → 降级
+      if (await JsRecordReplay.isGetSequenceMismatch(engine, ops)) {
+        return null;
+      }
       final value = result.value.trim();
       await JsRecordReplay.mergePutMap(engine, variables);
       await JsRecordReplay.mergeCookies(engine, cookies);
@@ -407,10 +453,14 @@ class JsRuleExecutor {
     if (matches.isEmpty) return template;
     final expressions = [for (final match in matches) match.group(1)!.trim()];
     final body = 'JSON.stringify([${expressions.join(',')}])';
+        // 模板表达式来自书源（可控）：与 execute() 一致先过黑名单，
+        // 防 {{java.get('x') + (_ffiNotify('a','b'), '')}} 类注入
+        if (JsBridge.unsupported(body)) return template;
 
     final manager = await _getManager();
     if (manager == null) return template;
-    final engine = await manager.createEngine('jstemplate${_engineSeq++}');
+    final engine = await _createEngine(manager, 'jstemplate');
+    if (engine == null) return template;
     var recycled = false;
     try {
       final recordPrelude = JsRecordReplay.templateRecordPrelude(

@@ -90,11 +90,63 @@ Future<Box<T>> _openSensitiveBoxWithKey<T>(String name, List<int> key) async {
     await box.putAll(data);
     return box;
   }
+    // 打开前 CRC 预检测：密钥不匹配/盒损坏时 openBox 会抛 HiveError 击穿启动
+    // （且 Hive 2.2.3 openBox 失败会 completeError+rethrow 双发，不能靠 catch 兜底）。
+    // 与明文迁移同理，用帧 CRC 预检替代异常：首帧对不上 → 备份原文件开新盒；
+    // 尾部损坏（写盘崩溃截断）→ 截断到最后一个完整帧，保住前缀数据。
+    await _repairEncryptedBoxIfNeeded(name, key);
   return Hive.openBox<T>(
     name,
     encryptionCipher: HiveAesCipher(key),
     crashRecovery: false,
   );
+}
+/// 加密盒打开前预检与修复（不依赖 openBox 异常，见上方注释）。
+///
+/// - 首帧 CRC 用密钥派生种子校验失败（密钥不匹配/文件头损坏）：
+///   数据在当前密钥下不可读，备份为 `.corrupt-<时间戳>.bak` 后由调用方开新盒。
+///   原文件保留，密钥恢复后可人工还原。
+/// - 帧链走查发现中途截断/损坏（崩溃截断）：就地截断到最后一个完整帧，
+///   保住前缀数据（等效 crashRecovery 的截断语义，但不改变打开参数）。
+Future<void> _repairEncryptedBoxIfNeeded(String name, List<int> key) async {
+  if (kIsWeb) return;
+  final dynamic hiveImpl = Hive;
+  final homePath = hiveImpl.homePath as String?;
+  if (homePath == null) return;
+  final file = File('$homePath/${name.toLowerCase()}.hive');
+  if (!await file.exists()) return;
+  final bytes = await file.readAsBytes();
+  if (bytes.length < 12) return; // 空/新建盒：可正常打开
+  // 明文盒由 _isPlainBoxOnDisk 的迁移路径处理，此处不重复判断
+
+  final seed = HiveAesCipher(key).calculateKeyCrc();
+  final view = ByteData.sublistView(bytes);
+  var offset = 0;
+  while (offset < bytes.length) {
+    if (offset + 8 > bytes.length) break; // 尾部不足最小帧：截断
+    final frameLength = view.getUint32(offset, Endian.little);
+    if (frameLength < 8 || offset + frameLength > bytes.length) break;
+    final storedCrc = view.getUint32(offset + frameLength - 4, Endian.little);
+    final expected = _crc32(bytes, offset: offset, length: frameLength - 4, seed: seed);
+    if (storedCrc != expected) break;
+    offset += frameLength;
+  }
+  if (offset == bytes.length) return; // 帧链完整
+
+  if (offset == 0) {
+    // 首帧即不可读：密钥不匹配或文件头损坏，备份后开新盒
+    final backup = '${file.path}.corrupt-${DateTime.now().millisecondsSinceEpoch}.bak';
+    debugPrint('[hive] 加密盒 $name 首帧校验失败（密钥不匹配或已损坏），备份到 $backup 并开新盒');
+    await file.rename(backup);
+    return;
+  }
+  debugPrint('[hive] 加密盒 $name 尾部损坏，截断到最后一个完整帧（$offset/${bytes.length} 字节）');
+  final raf = await file.open(mode: FileMode.writeOnlyAppend);
+  try {
+    await raf.truncate(offset);
+  } finally {
+    await raf.close();
+  }
 }
 
 /// 检测磁盘上的盒文件是否为旧版明文盒（未加密）。

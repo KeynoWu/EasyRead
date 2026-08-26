@@ -209,22 +209,26 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   Future<void> _refreshAllBooks() async {
     if (_refreshingAll) return;
     setState(() => _refreshingAll = true);
-    final repo = ref.read(bookshelfRepositoryProvider);
-    final books = await repo.getAll();
-    final candidates = books.where((b) => b.sourceId != null).toList();
-    // 分批并发（每批 4 个），避免大批量书籍请求风暴
-    const batchSize = 4;
-    for (var i = 0; i < candidates.length; i += batchSize) {
-      final batch = candidates.skip(i).take(batchSize);
-      await Future.wait(
-        batch.map((b) => _refreshBookDetail(b, showFeedback: false)),
+    try {
+      final repo = ref.read(bookshelfRepositoryProvider);
+      final books = await repo.getAll();
+      final candidates = books.where((b) => b.sourceId != null).toList();
+      // 分批并发（每批 4 个），避免大批量书籍请求风暴
+      const batchSize = 4;
+      for (var i = 0; i < candidates.length; i += batchSize) {
+        final batch = candidates.skip(i).take(batchSize);
+        await Future.wait(
+          batch.map((b) => _refreshBookDetail(b, showFeedback: false)),
+        );
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已尝试更新全部书籍详情（${candidates.length} 本）')),
       );
+    } finally {
+      // 异常路径也必须复位，否则刷新按钮永久禁用
+      if (mounted) setState(() => _refreshingAll = false);
     }
-    if (!mounted) return;
-    setState(() => _refreshingAll = false);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已尝试更新全部书籍详情（${candidates.length} 本）')),
-    );
   }
 
   Future<void> _clearBookCache(Book book) async {
@@ -337,16 +341,17 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
               child: Text(g),
             ),
           SimpleDialogOption(
-            onPressed: () => Navigator.pop(context, null),
+            onPressed: () => Navigator.pop(context, ''), // 哨兵：区分「取消」(null) 与「不分组」
             child: const Text('不分组', style: TextStyle(color: AppColors.textSecondary)),
           ),
         ],
       ),
     );
 
-    if (!mounted) return;
+    if (!mounted || group == null) return; // 用户取消：不动分组
+    final target = group.isEmpty ? null : group;
     for (final id in _selectedIds) {
-      await groupManager.setGroup(id, group);
+      await groupManager.setGroup(id, target);
     }
     if (!mounted) return;
     setState(() {

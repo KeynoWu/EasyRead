@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:easy_read/features/search/data/engines/rule_engine.dart';
-
 void main() {
   group('RuleEngine 级联选择器（Legado 兼容）', () {
     const listHtml = '''
@@ -153,6 +152,22 @@ void main() {
       expect(
         RuleEngine.extractTextList(html, 'class.list@children.2@text'),
         ['c'],
+      );
+    });
+    test('旧式索引 step=0 被拒绝（不死循环、按无匹配处理）', () {
+      const html = '''
+        <div class="list">
+          <span>a</span><span>b</span><span>c</span><span>d</span>
+        </div>
+      ''';
+      // 修复前：parseLegacyIndexes 不拦 step==0，expandIndexes "i += 0" 死循环
+      expect(
+        RuleEngine.extractTextList(html, 'class.list@tag.span.1:0:0@text'),
+        isEmpty,
+      );
+      expect(
+        RuleEngine.extractTextList(html, 'class.list@children.1:0:0@text'),
+        isEmpty,
       );
     });
 

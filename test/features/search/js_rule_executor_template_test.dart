@@ -16,6 +16,11 @@ void main() {
       );
       expect(result, '/x?v=aGVsbG8=');
     });
+    test('模板表达式注入 _ffiNotify 被黑名单拦截（原样返回）', () async {
+      const template = "{{java.getString('a') + _ffiNotify('x','y')}}";
+      final result = await JsRuleExecutor.evalTemplate(template);
+      expect(result, template);
+    });
 
     test('getString 从 JSON 上下文取值并支持三目表达式', () async {
       final result = await JsRuleExecutor.evalTemplate(

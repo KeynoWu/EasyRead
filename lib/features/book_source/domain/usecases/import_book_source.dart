@@ -30,6 +30,9 @@ class ImportBookSource {
 
   /// 空闲超时：下载停顿超过该时长判定挂起
   final Duration idleTimeout;
+    /// 首字节超时：连接建立后超过该时长未收到任何数据判定服务器挂起。
+    /// 必须大于 Dio 连接+重试最坏耗时（10s×4 + 退避 ≈ 46s），避免误杀合法重试。
+    final Duration firstByteTimeout;
   /// 总时限：整个下载不能超过该时长
   final Duration totalLimit;
   /// 单个书源文件最大字节数，防止恶意/异常大文件耗尽内存
@@ -40,6 +43,7 @@ class ImportBookSource {
     required this.parser,
     DioClient? client,
     this.idleTimeout = const Duration(seconds: 20),
+        this.firstByteTimeout = const Duration(seconds: 60),
     this.totalLimit = const Duration(minutes: 10),
   }) : _client = client ?? DioClient();
 
@@ -118,14 +122,16 @@ class ImportBookSource {
     final completer = Completer<String>();
     final internalToken = CancelToken();
     cancelToken?.whenCancel.then((_) => internalToken.cancel());
-    var lastActivity = DateTime.now();
+    DateTime? lastActivity; // null = 尚未收到首字节，空闲计时未启动
     var sizeExceeded = false;
     late final Timer idleTimer;
     late final Timer totalTimer;
+        late final Timer firstByteTimer;
 
     void finish() {
       idleTimer.cancel();
       totalTimer.cancel();
+            firstByteTimer.cancel();
     }
 
     // 空闲检查周期：随 idleTimeout 自适应（1/4，限 100ms~3s），保证检测精度
@@ -133,14 +139,32 @@ class ImportBookSource {
       milliseconds: (idleTimeout.inMilliseconds / 4).clamp(100, 3000).round(),
     );
     idleTimer = Timer.periodic(checkInterval, (_) {
-      if (DateTime.now().difference(lastActivity) > idleTimeout) {
+      // 空闲窗口从首字节到达起算：连接/重试阶段不占空闲额度，
+      // 避免慢服务器合法重试（最坏 ~46s）被 20s 空闲窗口误杀
+      final activity = lastActivity;
+      if (activity != null &&
+          DateTime.now().difference(activity) > idleTimeout) {
         internalToken.cancel();
         finish();
         if (!completer.isCompleted) {
-          completer.completeError(TimeoutException('下载中断：${idleTimeout.inSeconds} 秒无数据'));
+          completer.completeError(
+            ImportLimitExceeded('下载中断：${idleTimeout.inSeconds} 秒无数据'),
+          );
         }
       }
     });
+        // 连接成功但服务器一直不发首字节：不受 Dio connectTimeout 约束，
+        // 由首字节超时兜底（否则要等满 totalLimit）
+        firstByteTimer = Timer(firstByteTimeout, () {
+          if (lastActivity != null) return; // 已有数据流入，转交空闲计时
+          internalToken.cancel();
+          finish();
+          if (!completer.isCompleted) {
+            completer.completeError(
+              ImportLimitExceeded('服务器 ${firstByteTimeout.inSeconds} 秒未发送数据'),
+            );
+          }
+        });
     totalTimer = Timer(totalLimit, () {
       internalToken.cancel();
       finish();

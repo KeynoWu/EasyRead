@@ -95,6 +95,32 @@ class _SlowDownloadClient implements DioClient {
 }
 
 /// 模拟 DioClient：下载中途停顿（超过空闲超时）
+/// 模拟 DioClient：连接成功但从不发送数据（首字节超时场景）
+class _NeverSendsClient extends _StalledClient {
+  _NeverSendsClient() : super(const Duration(seconds: 30));
+
+  @override
+  Future<String> getStringWithProgress(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? charset,
+    Map<String, dynamic>? extra,
+    void Function(int received, int total)? onProgress,
+    CancelToken? cancelToken,
+  }) async {
+    // 从不调用 onProgress；轮询取消状态以便测试及时断言
+    for (var i = 0; i < 300; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      if (cancelToken?.isCancelled ?? false) {
+        sawCancelled = true;
+        break;
+      }
+    }
+    return '[]';
+  }
+}
+
 class _StalledClient implements DioClient {
   final Duration stall;
   bool sawCancelled = false;
@@ -247,9 +273,26 @@ void main() {
       );
       final result = await useCase.fromUrl('https://example.com/sources.json');
       expect(result.isLeft, isTrue);
-      result.fold((l) => expect(l, contains('网络请求失败')), (r) => fail('不应成功'));
+      // 空闲超时现在以 ImportLimitExceeded 给出明确文案，不再伪装成网络请求失败
+      result.fold((l) => expect(l, contains('下载中断')), (r) => fail('不应成功'));
       await Future<void>.delayed(const Duration(milliseconds: 400));
       expect(client.sawCancelled, isTrue, reason: '空闲超时后应取消底层下载');
+    });
+
+    test('should fail when server never sends first byte', () async {
+      final client = _NeverSendsClient();
+      final useCase = ImportBookSource(
+        repository: _MockSourceRepo(),
+        parser: ParseBookSourceRule(),
+        client: client,
+        firstByteTimeout: const Duration(milliseconds: 100),
+        totalLimit: const Duration(seconds: 10),
+      );
+      final result = await useCase.fromUrl('https://example.com/sources.json');
+      expect(result.isLeft, isTrue);
+      result.fold((l) => expect(l, contains('未发送数据')), (r) => fail('不应成功'));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(client.sawCancelled, isTrue, reason: '首字节超时后应取消底层下载');
     });
 
     test('should report cancellation', () async {

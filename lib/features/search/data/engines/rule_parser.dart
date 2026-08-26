@@ -317,6 +317,9 @@ static CascadeStep? parseStep(String segment) {
     return ([parts[0]], separator == '!');
   }
   final step = parts.length > 2 ? parts[2] : 1;
+  // 与 parseIndexSet 对齐：step=0 会在 expandIndexes 中形成 "i += 0"
+  // 死循环冻结主 isolate（如 `.5:0:0` 这类用户可控规则），按无索引处理。
+  if (step == 0) return null;
   return ([
     IndexRange(
       start: parts[0],

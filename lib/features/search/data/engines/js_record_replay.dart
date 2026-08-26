@@ -66,6 +66,28 @@ class JsRecordReplay {
     };
   }
 
+  /// 最终遍实际消费的 get/getElements 序列与记录遍不一致（控制流依赖
+  /// 记录遍占位 '' 结果而走了不同分支）时返回 true：值表已错位，
+  /// 结果不可信，调用方应降级返回 null。
+  static Future<bool> isGetSequenceMismatch(
+    JsEngine engine,
+    List<List<dynamic>> ops,
+  ) async {
+    final expected = <String>[
+      for (final op in ops)
+        if (op[0] == 'get')
+          'g|${op[1]}|${op[2] ?? ''}'
+        else if (op[0] == 'getElements')
+          'e|${op[1]}',
+    ];
+    final actual = await readStringList(engine, '__getSelectors');
+    if (actual.length != expected.length) return true;
+    for (var i = 0; i < expected.length; i++) {
+      if (actual[i] != expected[i]) return true;
+    }
+    return false;
+  }
+
   /// 解析 JSON 数组 URL 列表
   static List<String> parseUrls(String json) {
     try {

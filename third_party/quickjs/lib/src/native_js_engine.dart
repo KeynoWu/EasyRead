@@ -305,8 +305,16 @@ final class _EngineManager {
     final engine = _notifyEngineDict[ctx.address];
     final func = onDartNotified ?? _onNotifiedDefault;
     if (engine != null) {
-      final map = json.decode(d);
-      func.call(engine, m, map);
+      // JS 侧可传任意字符串：非法 JSON / 非对象 JSON 不能让 FFI 回调
+      // 抛异常（errorsAreFatal 下会终止整个引擎 isolate）
+      Object? decoded;
+      try {
+        decoded = json.decode(d);
+      } catch (_) {
+        decoded = null;
+      }
+      func.call(
+          engine, m, decoded is Map ? Map<String, dynamic>.from(decoded) : {});
     } else {
       final warning = engine == null
           ? 'Engine instance not found!'

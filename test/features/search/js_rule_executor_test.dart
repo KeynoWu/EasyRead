@@ -48,6 +48,13 @@ void main() {
     expect(await JsRuleExecutor.execute(html, "<js>eval('1');</js>"), isNull);
     expect(await JsRuleExecutor.execute(html, "<js>cookie.set('a','b');</js>"), isNull);
     expect(await JsRuleExecutor.execute(html, "<js>setTimeout(()=>{}, 0); 'x'</js>"), isNull);
+    // JS 允许标识符内反斜杠u转义：0065val 即 eval，黑名单解码后必须命中。
+    // 用 fromCharCode 拼出反斜杠，避免源码中的转义序列被工具链改写
+    final bsu = String.fromCharCodes([92, 117]); // 反斜杠 + u
+    expect(
+      await JsRuleExecutor.execute(html, "<js>${bsu}0065val('1')</js>"),
+      isNull,
+    );
   });
 
   test('正常执行后 engine 释放（无泄漏）', () async {

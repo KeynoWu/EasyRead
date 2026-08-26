@@ -123,16 +123,15 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
       ]),
       variablesJson: jsonEncode(result.variables),
     );
-    if (chapterIndex > 0) {
-      await readerRepo.saveProgress(
-        ReadingProgress(
-          bookId: result.bookId,
-          chapterIndex: chapterIndex,
-          pageIndex: 0,
-          updatedAt: now,
-        ),
-      );
-    }
+    // 任意章节（含第 1 章）都写入进度，否则阅读器按旧进度续读
+    await readerRepo.saveProgress(
+      ReadingProgress(
+        bookId: result.bookId,
+        chapterIndex: chapterIndex,
+        pageIndex: 0,
+        updatedAt: now,
+      ),
+    );
     ref.invalidate(bookshelfListProvider);
     if (!mounted) return;
     context.push(
