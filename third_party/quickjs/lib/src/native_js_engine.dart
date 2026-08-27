@@ -32,13 +32,14 @@ enum EvalType {
   global,
   module,
 }
-/// QuickJS 指令级中断（防 JS 死循环持续烧核）：interrupt handler 每
-/// ~65536 条指令回调一次；超过 [kInterruptThreshold] 次（≈6500 万条
-/// 指令）返回 1 中断当前 eval，使其以 interrupted 异常快速返回——
-/// 不再依赖 Dart 侧 3s 超时（超时无法抢占同步 FFI 中的原生线程）。
-/// 正常书源规则执行量（几千~几十万条指令）远低于阈值。
-/// 计数器在每次 eval 前复位（同一 engine isolate 串行执行 eval）。
-const int kInterruptThreshold = 1000;
+/// QuickJS 指令级中断（防 JS 死循环持续烧核）。实际轮询点来自
+/// quickjs.c JS_INTERRUPT_COUNTER_INIT=10000：interrupt handler 每
+/// 1 万条指令回调一次；超过 [kInterruptThreshold] 次（= 3000 万条指令，
+/// 死循环约 1~3s 内中断）返回 1 中断当前 eval，使其以 interrupted 异常
+/// 快速返回——不再依赖 Dart 侧 3s 超时（超时无法抢占同步 FFI 中的
+/// 原生线程）。合法书源规则（目录解析/逐项循环，通常远低于千万条指令）
+/// 保留充足预算。计数器在每次 eval 前复位（同一 isolate 串行执行 eval）。
+const int kInterruptThreshold = 3000;
 int _interruptCounter = 0;
 
 int _dartInterruptHandler(

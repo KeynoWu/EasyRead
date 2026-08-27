@@ -114,22 +114,25 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       // 读取保存的进度，续读到正确章节
       final repo = ref.read(readerRepositoryProvider);
       final progress = await repo.loadProgress(widget.bookId);
-      // 进度记录了书源且与当前源不同 → 从第 1 章读（换源后旧索引会错章）
+      // 实际加载用的源（widget.sourceId 为空时兜底 'default'）：
+      // 比较对象必须与生效源一致，否则进度追踪真实源而入口无源时会错章
+      final effectiveSourceId =
+          (widget.sourceId != null && widget.sourceId!.isNotEmpty)
+              ? widget.sourceId
+              : 'default';
+      // 进度记录了书源且与当前生效源不同 → 从第 1 章读（换源后旧索引会错章）
       final sameSource = progress?.sourceId == null ||
-          progress!.sourceId == widget.sourceId ||
-          (widget.sourceId == null || widget.sourceId!.isEmpty);
+          progress!.sourceId == effectiveSourceId;
       final startChapter = (progress != null && sameSource)
           ? progress.chapterIndex
           : 0;
-      final sourceId = (widget.sourceId != null && widget.sourceId!.isNotEmpty)
-          ? widget.sourceId
-          : 'default';
+      final sourceId = effectiveSourceId!;
       ref
           .read(readerProvider.notifier)
           .loadChapter(
             bookId: widget.bookId,
             chapterIndex: startChapter,
-            sourceId: sourceId!,
+            sourceId: sourceId,
             detailUrl: widget.detailUrl,
             variables: _variables,
           );

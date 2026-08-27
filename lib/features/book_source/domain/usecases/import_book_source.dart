@@ -148,23 +148,24 @@ class ImportBookSource {
         finish();
         if (!completer.isCompleted) {
           completer.completeError(
-            ImportLimitExceeded('下载中断：${idleTimeout.inSeconds} 秒无数据'),
+            ImportLimitExceeded('下载中断：${_durationText(idleTimeout)}无数据'),
           );
         }
       }
     });
-        // 连接成功但服务器一直不发首字节：不受 Dio connectTimeout 约束，
-        // 由首字节超时兜底（否则要等满 totalLimit）
-        firstByteTimer = Timer(firstByteTimeout, () {
-          if (lastActivity != null) return; // 已有数据流入，转交空闲计时
-          internalToken.cancel();
-          finish();
-          if (!completer.isCompleted) {
-            completer.completeError(
-              ImportLimitExceeded('服务器 ${firstByteTimeout.inSeconds} 秒未发送数据'),
-            );
-          }
-        });
+    // 连接成功但服务器一直不发首字节：不受 Dio connectTimeout 约束，
+    // 由首字节超时兜底（否则要等满 totalLimit）
+    // 首字节超时：收到首字节（onProgress）即 cancel，回调只可能在首字节
+    // 前触发，无需再检查 lastActivity
+    firstByteTimer = Timer(firstByteTimeout, () {
+      internalToken.cancel();
+      finish();
+      if (!completer.isCompleted) {
+        completer.completeError(
+          ImportLimitExceeded('服务器 ${_durationText(firstByteTimeout)}未发送数据'),
+        );
+      }
+    });
     totalTimer = Timer(totalLimit, () {
       internalToken.cancel();
       finish();
@@ -178,6 +179,7 @@ class ImportBookSource {
           url,
           onProgress: (received, total) {
             lastActivity = DateTime.now();
+            firstByteTimer.cancel();
             if (received > maxSourceBytes) {
               sizeExceeded = true;
               internalToken.cancel();
@@ -247,6 +249,12 @@ class ImportBookSource {
     final content = utf8.decode(bytes, allowMalformed: true);
     return content.startsWith('\uFEFF') ? content.substring(1) : content;
   }
+  /// 时长文案：亚秒级超时（测试/短配置）显示毫秒，避免出现"0 秒"
+  static String _durationText(Duration d) {
+    return d.inMilliseconds < 1000
+        ? '${d.inMilliseconds} 毫秒'
+        : '${d.inSeconds} 秒';
+  }
 
   /// 解析内容（支持单个书源对象或书源数组）。
   /// 大文件数组解码下沉 worker isolate（compute），避免阻塞主 isolate；
@@ -265,8 +273,9 @@ class ImportBookSource {
         final seen = <String>{};
         for (final item in list) {
           if (item is! Map) continue;
-          final parsed =
-              parser.executeMap(Map<String, dynamic>.from(item));
+          // decode 结果已是 Map<String,dynamic>（_fromMap 内部会再拷贝一次
+          // 供 remove 使用），此处直接透传，避免逐项重复浅拷贝
+          final parsed = parser.executeMap(item as Map<String, dynamic>);
           parsed.fold((l) => null, (r) {
             // 按 URL 去重：同一书源重复导入不累积（无 URL 时按稳定 id）
             final key = r.bookSourceUrl?.trim().toLowerCase() ?? r.id;
@@ -292,7 +301,11 @@ class ImportBookSource {
 /// 单个书源 JSON 超过该长度（字节）时，数组解码下沉 worker isolate。
 /// 常见书源列表几百 KB，isolate 往返开销不值得；21MB 级大列表驻留主 isolate
 /// 会阻塞 UI 数秒。
-const int _isolateDecodeThreshold = 1024 * 1024;
+/// 单个书源 JSON 超过该长度时，数组解码下沉 worker isolate。
+/// 按 UTF-16 字符数判断（ASCII 1 字符=1 字节，CJK 1 字符≈3 字节）：
+/// 512K 字符 ≈ 0.5MB(ASCII)~1.5MB(CJK)，覆盖 1MB+ 字节的常见大列表；
+/// 小列表 isolate 往返开销不值得。
+const int _isolateDecodeThreshold = 512 * 1024;
 
 /// 在 worker isolate 中解码书源 JSON 数组（compute 要求顶层函数）
 List<dynamic> _decodeArrayJson(String text) => jsonDecode(text) as List;

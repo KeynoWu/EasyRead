@@ -77,7 +77,9 @@ class ReadingProgressModelAdapter extends TypeAdapter<ReadingProgressModel> {
     // schema 版本标记：旧数据无该字节则跳过，向后兼容。
     if (reader.availableBytes > 0) {
       final version = reader.readInt();
-      if (version >= kProgressSchemaVersion) {
+      // 阈值必须引用「sourceId 引入版本」而非「当前版本」：
+      // 未来 schema 升到 3 时，v2 存量数据的 sourceId 不能被误判缺失
+      if (version >= kSourceIdSchemaVersion) {
         sourceId = reader.readString();
       }
     }
@@ -103,7 +105,8 @@ class ReadingProgressModelAdapter extends TypeAdapter<ReadingProgressModel> {
     writer.writeInt(obj.updatedAt.millisecondsSinceEpoch);
     // schema 版本：v2 起在版本字节后追加 sourceId
     writer.writeInt(kProgressSchemaVersion);
-    if (kProgressSchemaVersion >= 2) {
+    // sourceId 在 v2 引入：写侧按固定引入版本保护，读侧阈值同源
+    if (kSourceIdSchemaVersion >= 2) {
       writer.writeString(obj.sourceId ?? '');
     }
   }
@@ -111,3 +114,6 @@ class ReadingProgressModelAdapter extends TypeAdapter<ReadingProgressModel> {
 
 /// ReadingProgressModelAdapter 写入的 schema 版本。
 const int kProgressSchemaVersion = 2;
+/// sourceId 字段引入的 schema 版本（区别于「当前版本」：作为读写两侧的
+/// 固定阈值，避免未来升级时存量 v2 数据的 sourceId 被静默判缺失）
+const int kSourceIdSchemaVersion = 2;

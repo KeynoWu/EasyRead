@@ -361,6 +361,7 @@ globalThis.java.head = (url, headers) => {
 };
 ''';
   static const cryptoRecordBridge = '''
+globalThis.__cryptoSeq = [];
 globalThis.__md5 = [];
 globalThis.__md5Short = [];
 globalThis.__base64 = [];
@@ -384,38 +385,39 @@ globalThis.__symmetricDecrypt = [];
 globalThis.__symmetricEncrypt = [];
 globalThis.__symmetricEncryptBase64 = [];
 globalThis.__symmetricEncryptHex = [];
-globalThis.java.md5Encode = (str) => { __md5.push(String(str)); return ''; };
-globalThis.java.md5Encode16 = (str) => { __md5Short.push(String(str)); return ''; };
-globalThis.java.base64Encode = (str) => { __base64.push(String(str)); return ''; };
-globalThis.java.base64Decode = (str) => { __base64Decode.push(String(str)); return ''; };
-globalThis.java.base64DecodeToByteArray = (str) => { __base64DecodeByte.push(String(str)); return []; };
-globalThis.java.HMacHex = (data, algorithm, key) => { __hmac.push([String(data), String(algorithm), String(key)]); return ''; };
-globalThis.java.HMacBase64 = (data, algorithm, key) => { __hmacBase64.push([String(data), String(algorithm), String(key)]); return ''; };
-globalThis.java.digestHex = (data, algorithm) => { __digestHex.push([String(data), String(algorithm)]); return ''; };
-globalThis.java.aesDecodeToString = (data, key, transformation, iv) => { __aesDecode.push([String(data), String(key), String(transformation), iv === undefined || iv === null ? '' : String(iv)]); return ''; };
-globalThis.java.aesBase64DecodeToString = (data, key, transformation, iv) => { __aesBase64Decode.push([String(data), String(key), String(transformation), iv === undefined || iv === null ? '' : String(iv)]); return ''; };
-globalThis.java.hexEncodeToString = (str) => { __hexEncode.push(String(str)); return ''; };
-globalThis.java.hexDecodeToString = (hex) => { __hexDecode.push(String(hex)); return ''; };
-globalThis.java.encodeURI = (str) => { __uri.push(String(str)); return ''; };
-globalThis.java.t2s = (str) => { __t2s.push(String(str)); return ''; };
-globalThis.java.s2t = (str) => { __s2t.push(String(str)); return ''; };
-globalThis.java.randomUUID = () => { __uuidCount++; return ''; };
-globalThis.java.timeFormat = (time, format) => { __time.push([String(time), format || '', 0]); return ''; };
-globalThis.java.timeFormatUTC = (time, format, shift) => { __time.push([String(time), format || '', shift || 0]); return ''; };
+globalThis.java.md5Encode = (str) => { __cryptoSeq.push('md5Encode');  __md5.push(String(str)); return ''; };
+globalThis.java.md5Encode16 = (str) => { __cryptoSeq.push('md5Encode16');  __md5Short.push(String(str)); return ''; };
+globalThis.java.base64Encode = (str) => { __cryptoSeq.push('base64Encode');  __base64.push(String(str)); return ''; };
+globalThis.java.base64Decode = (str) => { __cryptoSeq.push('base64Decode');  __base64Decode.push(String(str)); return ''; };
+globalThis.java.base64DecodeToByteArray = (str) => { __cryptoSeq.push('base64DecodeToByteArray');  __base64DecodeByte.push(String(str)); return []; };
+globalThis.java.HMacHex = (data, algorithm, key) => { __cryptoSeq.push('HMacHex');  __hmac.push([String(data), String(algorithm), String(key)]); return ''; };
+globalThis.java.HMacBase64 = (data, algorithm, key) => { __cryptoSeq.push('HMacBase64');  __hmacBase64.push([String(data), String(algorithm), String(key)]); return ''; };
+globalThis.java.digestHex = (data, algorithm) => { __cryptoSeq.push('digestHex');  __digestHex.push([String(data), String(algorithm)]); return ''; };
+globalThis.java.aesDecodeToString = (data, key, transformation, iv) => { __cryptoSeq.push('aesDecodeToString');  __aesDecode.push([String(data), String(key), String(transformation), iv === undefined || iv === null ? '' : String(iv)]); return ''; };
+globalThis.java.aesBase64DecodeToString = (data, key, transformation, iv) => { __cryptoSeq.push('aesBase64DecodeToString');  __aesBase64Decode.push([String(data), String(key), String(transformation), iv === undefined || iv === null ? '' : String(iv)]); return ''; };
+globalThis.java.hexEncodeToString = (str) => { __cryptoSeq.push('hexEncodeToString');  __hexEncode.push(String(str)); return ''; };
+globalThis.java.hexDecodeToString = (hex) => { __cryptoSeq.push('hexDecodeToString');  __hexDecode.push(String(hex)); return ''; };
+globalThis.java.encodeURI = (str) => { __cryptoSeq.push('encodeURI');  __uri.push(String(str)); return ''; };
+globalThis.java.t2s = (str) => { __cryptoSeq.push('t2s');  __t2s.push(String(str)); return ''; };
+globalThis.java.s2t = (str) => { __cryptoSeq.push('s2t');  __s2t.push(String(str)); return ''; };
+globalThis.java.randomUUID = () => { __cryptoSeq.push('randomUUID');  __uuidCount++; return ''; };
+globalThis.java.timeFormat = (time, format) => { __cryptoSeq.push('timeFormat');  __time.push([String(time), format || '', 0]); return ''; };
+globalThis.java.timeFormatUTC = (time, format, shift) => { __cryptoSeq.push('timeFormatUTC');  __time.push([String(time), format || '', shift || 0]); return ''; };
 globalThis.java.createSymmetricCrypto = (transformation, key, iv) => {
+  __cryptoSeq.push('createSymmetricCrypto');
   const id = ++__symmetricSeq;
   __symmetric.push([id, String(transformation), key === undefined || key === null ? '' : String(key), iv === undefined || iv === null ? '' : String(iv)]);
   return {
-    decryptStr: (data) => { __symmetricDecryptStr.push([id, String(data)]); return ''; },
-    decrypt: (data) => { __symmetricDecrypt.push([id, String(data)]); return []; },
-    encrypt: (data) => { __symmetricEncrypt.push([id, String(data)]); return []; },
-    encryptBase64: (data) => { __symmetricEncryptBase64.push([id, String(data)]); return ''; },
-    encryptHex: (data) => { __symmetricEncryptHex.push([id, String(data)]); return ''; }
+    decryptStr: (data) => { __cryptoSeq.push('sym.decryptStr');  __symmetricDecryptStr.push([id, String(data)]); return ''; },
+    decrypt: (data) => { __cryptoSeq.push('sym.decrypt');  __symmetricDecrypt.push([id, String(data)]); return []; },
+    encrypt: (data) => { __cryptoSeq.push('sym.encrypt');  __symmetricEncrypt.push([id, String(data)]); return []; },
+    encryptBase64: (data) => { __cryptoSeq.push('sym.encryptBase64');  __symmetricEncryptBase64.push([id, String(data)]); return ''; },
+    encryptHex: (data) => { __cryptoSeq.push('sym.encryptHex');  __symmetricEncryptHex.push([id, String(data)]); return ''; }
   };
 };
-globalThis.java.desDecodeToString = (data, key, transformation, iv) => java.createSymmetricCrypto(transformation, key, iv).decryptStr(data);
+globalThis.java.desDecodeToString = (data, key, transformation, iv) => (__cryptoSeq.push('desDecodeToString'), java.createSymmetricCrypto(transformation, key, iv).decryptStr(data));
 globalThis.java.desBase64DecodeToString = (data, key, transformation, iv) => java.createSymmetricCrypto(transformation, key, iv).decryptStr(data);
-globalThis.java.desEncodeToBase64String = (data, key, transformation, iv) => java.createSymmetricCrypto(transformation, key, iv).encryptBase64(data);
+globalThis.java.desEncodeToBase64String = (data, key, transformation, iv) => (__cryptoSeq.push('desEncodeToBase64String'), java.createSymmetricCrypto(transformation, key, iv).encryptBase64(data));
 globalThis.java.aesEncodeToBase64String = (data, key, transformation, iv) => java.createSymmetricCrypto(transformation, key, iv).encryptBase64(data);
 ''';
   static String cookieBridge(
@@ -808,6 +810,7 @@ class JsCryptoCaches {
 
   String get realBridge =>
       '''
+globalThis.__cryptoSeq = [];
 globalThis.__md5Cache = ${jsonEncode(md5Cache)};
 globalThis.__md5ShortCache = ${jsonEncode(md5ShortCache)};
 globalThis.__base64Cache = ${jsonEncode(base64Cache)};
@@ -831,37 +834,38 @@ globalThis.__symmetricEncryptCache = ${jsonEncode(symmetricEncryptCache)};
 globalThis.__symmetricEncryptBase64Cache = ${jsonEncode(symmetricEncryptBase64Cache)};
 globalThis.__symmetricEncryptHexCache = ${jsonEncode(symmetricEncryptHexCache)};
 globalThis.__symmetricCreateIdx = 0;
-globalThis.java.md5Encode = (str) => __md5Cache[String(str)] || '';
-globalThis.java.md5Encode16 = (str) => __md5ShortCache[String(str)] || '';
-globalThis.java.base64Encode = (str) => __base64Cache[String(str)] || '';
-globalThis.java.base64Decode = (str) => __base64DecodeCache[String(str)] || '';
-globalThis.java.base64DecodeToByteArray = (str) => __base64DecodeByteCache[String(str)] ? JSON.parse(__base64DecodeByteCache[String(str)]) : [];
-globalThis.java.HMacHex = (data, algorithm, key) => __hmacCache[String(data) + '|' + String(algorithm) + '|' + String(key)] || '';
-globalThis.java.HMacBase64 = (data, algorithm, key) => __hmacBase64Cache[String(data) + '|' + String(algorithm) + '|' + String(key)] || '';
-globalThis.java.digestHex = (data, algorithm) => __digestHexCache[String(data) + '|' + String(algorithm)] || '';
-globalThis.java.aesDecodeToString = (data, key, transformation, iv) => __aesCache[String(data) + '|' + String(key) + '|' + String(transformation) + '|' + (iv === undefined || iv === null ? '' : String(iv))] || '';
-globalThis.java.aesBase64DecodeToString = (data, key, transformation, iv) => __aesBase64Cache[String(data) + '|' + String(key) + '|' + String(transformation) + '|' + (iv === undefined || iv === null ? '' : String(iv))] || '';
-globalThis.java.hexEncodeToString = (str) => __hexEncodeCache[String(str)] || '';
-globalThis.java.hexDecodeToString = (hex) => __hexDecodeCache[String(hex)] || '';
-globalThis.java.encodeURI = (str) => __uriCache[String(str)] || '';
-globalThis.java.t2s = (str) => __t2sCache[String(str)] || '';
-globalThis.java.s2t = (str) => __s2tCache[String(str)] || '';
-globalThis.java.randomUUID = () => __uuidCache[__uuidIdx++] || '';
-globalThis.java.timeFormat = (time, format) => __timeCache[String(time) + '|' + (format || '') + '|0'] || '';
-globalThis.java.timeFormatUTC = (time, format, shift) => __timeCache[String(time) + '|' + (format || '') + '|' + (shift || 0)] || '';
+globalThis.java.md5Encode = (str) =>  { __cryptoSeq.push('md5Encode'); return __md5Cache[String(str)] || ''; };
+globalThis.java.md5Encode16 = (str) =>  { __cryptoSeq.push('md5Encode16'); return __md5ShortCache[String(str)] || ''; };
+globalThis.java.base64Encode = (str) =>  { __cryptoSeq.push('base64Encode'); return __base64Cache[String(str)] || ''; };
+globalThis.java.base64Decode = (str) =>  { __cryptoSeq.push('base64Decode'); return __base64DecodeCache[String(str)] || ''; };
+globalThis.java.base64DecodeToByteArray = (str) =>  { __cryptoSeq.push('base64DecodeToByteArray'); return __base64DecodeByteCache[String(str)] ? JSON.parse(__base64DecodeByteCache[String(str)]) : []; };
+globalThis.java.HMacHex = (data, algorithm, key) =>  { __cryptoSeq.push('HMacHex'); return __hmacCache[String(data) + '|' + String(algorithm) + '|' + String(key)] || ''; };
+globalThis.java.HMacBase64 = (data, algorithm, key) =>  { __cryptoSeq.push('HMacBase64'); return __hmacBase64Cache[String(data) + '|' + String(algorithm) + '|' + String(key)] || ''; };
+globalThis.java.digestHex = (data, algorithm) =>  { __cryptoSeq.push('digestHex'); return __digestHexCache[String(data) + '|' + String(algorithm)] || ''; };
+globalThis.java.aesDecodeToString = (data, key, transformation, iv) =>  { __cryptoSeq.push('aesDecodeToString'); return __aesCache[String(data) + '|' + String(key) + '|' + String(transformation) + '|' + (iv === undefined || iv === null ? '' : String(iv))] || ''; };
+globalThis.java.aesBase64DecodeToString = (data, key, transformation, iv) =>  { __cryptoSeq.push('aesBase64DecodeToString'); return __aesBase64Cache[String(data) + '|' + String(key) + '|' + String(transformation) + '|' + (iv === undefined || iv === null ? '' : String(iv))] || ''; };
+globalThis.java.hexEncodeToString = (str) =>  { __cryptoSeq.push('hexEncodeToString'); return __hexEncodeCache[String(str)] || ''; };
+globalThis.java.hexDecodeToString = (hex) =>  { __cryptoSeq.push('hexDecodeToString'); return __hexDecodeCache[String(hex)] || ''; };
+globalThis.java.encodeURI = (str) =>  { __cryptoSeq.push('encodeURI'); return __uriCache[String(str)] || ''; };
+globalThis.java.t2s = (str) =>  { __cryptoSeq.push('t2s'); return __t2sCache[String(str)] || ''; };
+globalThis.java.s2t = (str) =>  { __cryptoSeq.push('s2t'); return __s2tCache[String(str)] || ''; };
+globalThis.java.randomUUID = () =>  { __cryptoSeq.push('randomUUID'); return __uuidCache[__uuidIdx++] || ''; };
+globalThis.java.timeFormat = (time, format) =>  { __cryptoSeq.push('timeFormat'); return __timeCache[String(time) + '|' + (format || '') + '|0'] || ''; };
+globalThis.java.timeFormatUTC = (time, format, shift) =>  { __cryptoSeq.push('timeFormatUTC'); return __timeCache[String(time) + '|' + (format || '') + '|' + (shift || 0)] || ''; };
 globalThis.java.createSymmetricCrypto = (transformation, key, iv) => {
+  __cryptoSeq.push('createSymmetricCrypto');
   const id = ++__symmetricCreateIdx;
   return {
-    decryptStr: (data) => __symmetricDecryptStrCache[id + '|' + String(data)] || '',
-    decrypt: (data) => __symmetricDecryptCache[id + '|' + String(data)] ? JSON.parse(__symmetricDecryptCache[id + '|' + String(data)]) : [],
-    encrypt: (data) => __symmetricEncryptCache[id + '|' + String(data)] ? JSON.parse(__symmetricEncryptCache[id + '|' + String(data)]) : [],
-    encryptBase64: (data) => __symmetricEncryptBase64Cache[id + '|' + String(data)] || '',
-    encryptHex: (data) => __symmetricEncryptHexCache[id + '|' + String(data)] || ''
+    decryptStr: (data) => { __cryptoSeq.push('sym.decryptStr'); return __symmetricDecryptStrCache[id + '|' + String(data)] || ''; },
+    decrypt: (data) => { __cryptoSeq.push('sym.decrypt'); return __symmetricDecryptCache[id + '|' + String(data)] ? JSON.parse(__symmetricDecryptCache[id + '|' + String(data)]) : []; },
+    encrypt: (data) => { __cryptoSeq.push('sym.encrypt'); return __symmetricEncryptCache[id + '|' + String(data)] ? JSON.parse(__symmetricEncryptCache[id + '|' + String(data)]) : []; },
+    encryptBase64: (data) => { __cryptoSeq.push('sym.encryptBase64'); return __symmetricEncryptBase64Cache[id + '|' + String(data)] || ''; },
+    encryptHex: (data) => { __cryptoSeq.push('sym.encryptHex'); return __symmetricEncryptHexCache[id + '|' + String(data)] || ''; }
   };
 };
-globalThis.java.desDecodeToString = (data, key, transformation, iv) => java.createSymmetricCrypto(transformation, key, iv).decryptStr(data);
+globalThis.java.desDecodeToString = (data, key, transformation, iv) => (__cryptoSeq.push('desDecodeToString'), java.createSymmetricCrypto(transformation, key, iv).decryptStr(data));
 globalThis.java.desBase64DecodeToString = (data, key, transformation, iv) => java.createSymmetricCrypto(transformation, key, iv).decryptStr(data);
-globalThis.java.desEncodeToBase64String = (data, key, transformation, iv) => java.createSymmetricCrypto(transformation, key, iv).encryptBase64(data);
+globalThis.java.desEncodeToBase64String = (data, key, transformation, iv) => (__cryptoSeq.push('desEncodeToBase64String'), java.createSymmetricCrypto(transformation, key, iv).encryptBase64(data));
 globalThis.java.aesEncodeToBase64String = (data, key, transformation, iv) => java.createSymmetricCrypto(transformation, key, iv).encryptBase64(data);
 ''';
 }

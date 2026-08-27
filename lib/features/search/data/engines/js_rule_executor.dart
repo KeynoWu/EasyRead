@@ -124,6 +124,14 @@ class JsRuleExecutor {
       return null;
     }
   }
+  /// 逐元素比对两组调用序列（readStringList 可能跨 isolate 类型化差异）
+  static bool _sameList(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
 
   /// 执行 JS 规则，返回提取值；不支持/超时/异常返回 null
   static Future<String?> execute(
@@ -152,6 +160,7 @@ class JsRuleExecutor {
     try {
       if (!hasSetContent && !hasGetElements) {
         // 无 setContent：静态预提取 java.get 字面量 + 两遍 ajax
+        List<String> warmSeq = const []; // 热身遍 crypto 调用序列（hasCrypto 时填充）
         final cache = JsBridge.extractLiterals(html, baseUrl ?? '', body);
         final getStringCache = JsBridge.extractGetStringCache(html, body);
         final getStringListCache = JsBridge.extractGetStringListCache(html, body);
@@ -219,6 +228,9 @@ class JsRuleExecutor {
           await engine.eval('globalThis.__putMap = {};').timeout(evalTimeout);
           await engine.eval('try { $body } catch (e) {}').timeout(evalTimeout);
           final crypto = await JsCryptoCaches.fromEngine(engine);
+          // 记录热身遍 crypto 调用序列（realBridge 装入时 __cryptoSeq 会重置）
+          warmSeq =
+              await JsRecordReplay.readStringList(engine, '__cryptoSeq');
           await engine.eval(crypto.realBridge).timeout(evalTimeout);
         }
 
@@ -227,6 +239,13 @@ class JsRuleExecutor {
         await engine.eval('globalThis.__putMap = {};').timeout(evalTimeout);
         // 第二遍：执行取最终值
         final result = await engine.eval(body).timeout(evalTimeout);
+        // 最终遍 crypto 调用序列与热身遍不一致（控制流依赖 crypto 结果时
+        // 调用次数/顺序变化 → symmetric id 错位）→ 降级，不静默给错值
+        if (hasCrypto) {
+          final finalSeq =
+              await JsRecordReplay.readStringList(engine, '__cryptoSeq');
+          if (!_sameList(warmSeq, finalSeq)) return null;
+        }
         final value = result.value.trim();
         await JsRecordReplay.mergePutMap(engine, variables);
         await JsRecordReplay.mergeCookies(engine, cookies);
@@ -318,6 +337,7 @@ class JsRuleExecutor {
       await engine
           .eval(JsBridge.cookieBridge(cookies ?? const {}, seed: false))
           .timeout(evalTimeout);
+      List<String> warmSeq = const []; // 热身遍 crypto 调用序列（hasCrypto 时填充）
       if (hasCrypto) {
         // crypto 参数常依赖提取值/ajax 真实结果（记录遍占位 '' 的参数有误）：
         // finalPrelude 装好后热身重录，按真实参数重建缓存
@@ -325,6 +345,9 @@ class JsRuleExecutor {
         await engine.eval('globalThis.__putMap = {};').timeout(evalTimeout);
         await engine.eval('try { $body } catch (e) {}').timeout(evalTimeout);
         final crypto = await JsCryptoCaches.fromEngine(engine);
+        // 记录热身遍 crypto 调用序列（realBridge 装入时 __cryptoSeq 会重置）
+        warmSeq =
+            await JsRecordReplay.readStringList(engine, '__cryptoSeq');
         await engine.eval(crypto.realBridge).timeout(evalTimeout);
       }
 
@@ -345,6 +368,13 @@ class JsRuleExecutor {
       // （控制流依赖占位 '' 结果）时，值表已错位，结果不可信 → 降级
       if (await JsRecordReplay.isGetSequenceMismatch(engine, ops)) {
         return null;
+      }
+      // crypto 调用序列一致性：控制流依赖 crypto 结果导致两遍调用次数/
+      // 顺序不同 → symmetric id 错位 → 降级，不静默给错值
+      if (hasCrypto) {
+        final finalSeq =
+            await JsRecordReplay.readStringList(engine, '__cryptoSeq');
+        if (!_sameList(warmSeq, finalSeq)) return null;
       }
       final value = result.value.trim();
       await JsRecordReplay.mergePutMap(engine, variables);
@@ -451,11 +481,22 @@ class JsRuleExecutor {
   }) async {
     final matches = _templateExprPattern.allMatches(template).toList();
     if (matches.isEmpty) return template;
+    // 逐表达式过黑名单：命中的表达式不参与求值（占位 ""），最终拼接时
+    // 该项保留模板原文——合法数据字面量（如字段名含 setTimeout/_ffi）
+    // 不再误伤整模板；`_ffiNotify` 类注入表达式也拿不到执行机会
     final expressions = [for (final match in matches) match.group(1)!.trim()];
-    final body = 'JSON.stringify([${expressions.join(',')}])';
-        // 模板表达式来自书源（可控）：与 execute() 一致先过黑名单，
-        // 防 {{java.get('x') + (_ffiNotify('a','b'), '')}} 类注入
-        if (JsBridge.unsupported(body)) return template;
+    final blocked = <int>{};
+    final bodyParts = <String>[];
+    for (var i = 0; i < expressions.length; i++) {
+      final expr = expressions[i];
+      if (JsBridge.unsupported(expr)) {
+        blocked.add(i);
+        bodyParts.add('""');
+      } else {
+        bodyParts.add(expr);
+      }
+    }
+    final body = 'JSON.stringify([${bodyParts.join(',')}])';
 
     final manager = await _getManager();
     if (manager == null) return template;
@@ -548,7 +589,10 @@ class JsRuleExecutor {
       for (var i = 0; i < matches.length; i++) {
         final match = matches[i];
         buffer.write(template.substring(cursor, match.start));
-        buffer.write(decoded[i]?.toString() ?? '');
+        // 被黑名单拦下的表达式：保留模板原文（含 {{}}），其余正常插值
+        buffer.write(blocked.contains(i)
+            ? template.substring(match.start, match.end)
+            : (decoded[i]?.toString() ?? ''));
         cursor = match.end;
       }
       buffer.write(template.substring(cursor));

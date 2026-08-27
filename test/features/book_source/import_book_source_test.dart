@@ -50,7 +50,7 @@ class _SlowDownloadClient implements DioClient {
     return {};
   }
 
-      @override
+  @override
   Future<Map<String, List<String>>> postFormHeaders(
     String url, {
     Map<String, String>? headers,
@@ -61,7 +61,7 @@ class _SlowDownloadClient implements DioClient {
     return {};
   }
 
-@override
+  @override
   Future<String> postForm(
     String url, {
     Map<String, String>? headers,
@@ -73,7 +73,7 @@ class _SlowDownloadClient implements DioClient {
     return '';
   }
 
-@override
+  @override
   Future<String> getStringWithProgress(
     String url, {
     Map<String, String>? headers,
@@ -94,7 +94,6 @@ class _SlowDownloadClient implements DioClient {
   }
 }
 
-/// 模拟 DioClient：下载中途停顿（超过空闲超时）
 /// 模拟 DioClient：连接成功但从不发送数据（首字节超时场景）
 class _NeverSendsClient extends _StalledClient {
   _NeverSendsClient() : super(const Duration(seconds: 30));

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as parser;
+import 'package:flutter/foundation.dart' show debugPrint;
 import '../../../../core/purification/purify_pattern_guard.dart';
 import '../../../book_source/domain/entities/book_source.dart';
 import '../../../search/data/engines/js_rule_executor.dart';
@@ -215,6 +216,7 @@ class ContentExtractor {
       // 与净化规则/选择器内联正则一致的 ReDoS 预检：书源可控 pattern 在
       // 主 isolate 同步执行，灾难性回溯会卡死阅读页
       if (PurifyPatternGuard.hasCatastrophicBacktracking(pattern)) {
+        debugPrint('[ContentExtractor] 跳过有灾难性回溯风险的正则: $pattern');
         return content;
       }
       final regex = RegExp(pattern);

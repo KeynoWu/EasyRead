@@ -192,13 +192,29 @@ final List<int> _crcTable = List<int>.generate(256, (i) {
   return c;
 });
 
-/// 初始化 Hive 存储
+/// 初始化 Hive 存储。
+/// 注册幂等：StartupErrorApp 重试会再次调用 main()→initHive()，
+/// Hive 对已注册 typeId 重复注册会抛 HiveError（type_registry_impl.dart:112）。
 Future<void> initHive() async {
   await Hive.initFlutter();
-  Hive.registerAdapter(BookModelAdapter());
-  Hive.registerAdapter(BookSourceModelAdapter());
-  Hive.registerAdapter(ChapterModelAdapter());
-  Hive.registerAdapter(ReadingProgressModelAdapter());
+  _registerAdapters();
+  await _openAllBoxes();
+}
+
+/// 注册业务适配器（typeId: Book=0, BookSource=1, Chapter=2, Progress=3）
+void _registerAdapters() {
+  if (!Hive.isAdapterRegistered(0)) Hive.registerAdapter(BookModelAdapter());
+  if (!Hive.isAdapterRegistered(1)) {
+    Hive.registerAdapter(BookSourceModelAdapter());
+  }
+  if (!Hive.isAdapterRegistered(2)) Hive.registerAdapter(ChapterModelAdapter());
+  if (!Hive.isAdapterRegistered(3)) {
+    Hive.registerAdapter(ReadingProgressModelAdapter());
+  }
+}
+
+/// 打开全部存储盒（可重入：重试时仅重新开盒）
+Future<void> _openAllBoxes() async {
   await Hive.openBox<BookModel>(HiveBoxes.bookshelf);
   // 书源/订阅/设置盒含 Cookie、订阅凭据等敏感数据，加密存储
   await openSensitiveBox<BookSourceModel>(HiveBoxes.bookSources);

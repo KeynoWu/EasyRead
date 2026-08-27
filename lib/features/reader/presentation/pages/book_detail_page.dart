@@ -88,14 +88,26 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
     }
   }
 
-  Future<void> _openAt(int chapterIndex) async {
+  Future<void> _openAt(int chapterIndex, {bool overwriteProgress = false}) async {
     final detail = _detail;
     final catalog = _catalog;
     final now = DateTime.now();
     final bookshelfRepo = ref.read(bookshelfRepositoryProvider);
     final detailService = ref.read(bookDetailServiceProvider);
     final readerRepo = ref.read(readerRepositoryProvider);
-
+    // 目录点击（含第 1 章）覆盖进度写入；「开始阅读」为续读入口，
+    // 不写进度（否则点一下预览就把深进度重置回第 1 章）
+    if (overwriteProgress) {
+      await readerRepo.saveProgress(
+        ReadingProgress(
+          bookId: result.bookId,
+          chapterIndex: chapterIndex,
+          pageIndex: 0,
+          updatedAt: now,
+          sourceId: result.sourceId,
+        ),
+      );
+    }
     await bookshelfRepo.save(
       Book(
         id: result.bookId,
@@ -122,16 +134,6 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
           },
       ]),
       variablesJson: jsonEncode(result.variables),
-    );
-    // 任意章节（含第 1 章）都写入进度，否则阅读器按旧进度续读
-    await readerRepo.saveProgress(
-      ReadingProgress(
-        bookId: result.bookId,
-        chapterIndex: chapterIndex,
-        pageIndex: 0,
-        updatedAt: now,
-        sourceId: result.sourceId,
-      ),
     );
     ref.invalidate(bookshelfListProvider);
     if (!mounted) return;
@@ -537,7 +539,8 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
                             overflow: TextOverflow.ellipsis,
                           ),
                           trailing: const Icon(Icons.chevron_right, size: 18),
-                          onTap: () => _openAt(chapter.index),
+                          // 目录跳转：任意章（含第 1 章）都覆盖进度，确保点第 1 章真的跳转
+                          onTap: () => _openAt(chapter.index, overwriteProgress: true),
                         );
                       },
                     ),

@@ -39,19 +39,19 @@ class RetryInterceptor extends Interceptor {
 
   static bool _isRetryable(DioException err) {
     if (err.type == DioExceptionType.cancel) return false;
+    // POST 请求体可能已在服务端生效（侧效应）：任何服务端响应类失败
+    // （含 408/429/5xx——响应本身即证明请求已处理）与收发超时都不该重发
+    final method = err.requestOptions.method.toUpperCase();
+    final postNonRetryable = method == 'POST' &&
+        (err.type == DioExceptionType.badResponse ||
+            err.type == DioExceptionType.receiveTimeout ||
+            err.type == DioExceptionType.sendTimeout);
+    if (postNonRetryable) return false;
     if (err.type == DioExceptionType.badResponse) {
       final statusCode = err.response?.statusCode ?? 0;
       return statusCode == 408 || statusCode == 429 || statusCode >= 500;
     }
-    // POST 在服务端可能已处理（侧效应）：响应/发送超时重试会重发请求体
-    // 造成重复副作用，故 POST 仅重试"请求未到达服务端"的连接类错误；
     // 幂等方法（GET 等）保持原有重试语义
-    final method = err.requestOptions.method.toUpperCase();
-    if (method == 'POST' &&
-        (err.type == DioExceptionType.receiveTimeout ||
-            err.type == DioExceptionType.sendTimeout)) {
-      return false;
-    }
     return err.type == DioExceptionType.connectionError ||
         err.type == DioExceptionType.connectionTimeout ||
         err.type == DioExceptionType.receiveTimeout ||
