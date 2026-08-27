@@ -130,6 +130,7 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
         chapterIndex: chapterIndex,
         pageIndex: 0,
         updatedAt: now,
+        sourceId: result.sourceId,
       ),
     );
     ref.invalidate(bookshelfListProvider);

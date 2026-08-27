@@ -452,7 +452,7 @@ class _ReaderPageViewState extends ConsumerState<ReaderPageView>
                 ),
               );
             case NodeType.image:
-              return const SizedBox.shrink();
+              return buildImageNode(node, state);
           }
         }).toList(),
       ),

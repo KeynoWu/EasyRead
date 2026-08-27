@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
@@ -277,7 +278,41 @@ class _ReaderScrollViewState extends ConsumerState<ReaderScrollView> {
           ),
         );
       case NodeType.image:
-        return const SizedBox.shrink();
+        return buildImageNode(node, state);
     }
   }
+}
+/// 图片节点渲染：与分页测量（page_layout 的 40~200px 占位高）一致的固定高度，
+/// 避免测量/渲染高度不一致导致每页底部空白与页码漂移。
+/// 加载失败/加载中显示占位底色，不改变布局高度。
+Widget buildImageNode(TextNode node, ReaderState state) {
+  final url = node.imageUrl;
+  if (url == null || url.isEmpty) return const SizedBox.shrink();
+  final height =
+      math.min(200.0, math.max(40.0, state.viewportSize.height * 0.9));
+  return SizedBox(
+    height: height,
+    width: double.infinity,
+    child: Image.network(
+      url,
+      fit: BoxFit.cover,
+      errorBuilder: (_, _, _) => Container(
+        color: state.theme.textColor.withValues(alpha: 0.06),
+        alignment: Alignment.center,
+        child: const Icon(Icons.broken_image_outlined, size: 28),
+      ),
+      loadingBuilder: (context, child, progress) {
+        if (progress == null) return child;
+        return Container(
+          color: state.theme.textColor.withValues(alpha: 0.04),
+          alignment: Alignment.center,
+          child: const SizedBox(
+            width: 24,
+            height: 24,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        );
+      },
+    ),
+  );
 }

@@ -610,7 +610,8 @@ class ReaderNotifier extends Notifier<ReaderState> {
         '|fs=${cfg.fontSize}|lh=${cfg.lineHeight}'
         '|ps=${cfg.paragraphSpacing}|hp=${cfg.horizontalPadding}'
         '|fw=${cfg.fontWeight.value}|ff=${cfg.fontFamily ?? ''}'
-        '|vp=${vp.width}x${vp.height}';
+        '|vp=${vp.width}x${vp.height}'
+        '|cm=${_chineseMode?.index ?? ChineseConversionMode.original.index}';
   }
 
   /// 使用当前视口与排版配置分页（命中缓存直接返回，避免重复 TextPainter 重排）
@@ -712,6 +713,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
               chapterIndex: state.currentChapter!.index,
               scrollOffset: offset,
               updatedAt: DateTime.now(),
+              sourceId: state.currentChapter!.sourceId,
             )
           : current.copyWith(scrollOffset: offset, updatedAt: DateTime.now()),
     );
@@ -917,6 +919,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
       scrollOffset: state.progress?.scrollOffset ?? 0,
       pageIndex: state.currentPage,
       updatedAt: DateTime.now(),
+      sourceId: chapter.sourceId,
     );
     _saveDebounce?.cancel();
     _saveDebounce = Timer(const Duration(milliseconds: 500), () {
@@ -997,6 +1000,7 @@ class ReaderNotifier extends Notifier<ReaderState> {
       scrollOffset: state.progress?.scrollOffset ?? 0,
       pageIndex: state.currentPage,
       updatedAt: DateTime.now(),
+      sourceId: chapter.sourceId,
     );
     unawaited(_syncBookToShelf(progress));
   }

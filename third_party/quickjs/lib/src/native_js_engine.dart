@@ -17,6 +17,9 @@ typedef _DartJSModuleLoadFunc = ffi.Pointer<lib.JSModuleDef> Function(
     ffi.Pointer<lib.JSContext> ctx,
     ffi.Pointer<ffi.Char> name,
     ffi.Pointer<ffi.Void> opaque);
+/// interrupt handler 的 Dart 侧函数签名（与 lib.JSInterruptHandler native 签名同构）
+typedef _DartJSInterruptHandler = ffi.Int Function(
+    ffi.Pointer<lib.JSRuntime> rt, ffi.Pointer<ffi.Void> opaque);
 
 typedef DartStringReader = String Function(String name);
 typedef DartNotifier = void Function(
@@ -29,6 +32,24 @@ enum EvalType {
   global,
   module,
 }
+/// QuickJS 指令级中断（防 JS 死循环持续烧核）：interrupt handler 每
+/// ~65536 条指令回调一次；超过 [kInterruptThreshold] 次（≈6500 万条
+/// 指令）返回 1 中断当前 eval，使其以 interrupted 异常快速返回——
+/// 不再依赖 Dart 侧 3s 超时（超时无法抢占同步 FFI 中的原生线程）。
+/// 正常书源规则执行量（几千~几十万条指令）远低于阈值。
+/// 计数器在每次 eval 前复位（同一 engine isolate 串行执行 eval）。
+const int kInterruptThreshold = 1000;
+int _interruptCounter = 0;
+
+int _dartInterruptHandler(
+    ffi.Pointer<lib.JSRuntime> rt, ffi.Pointer<ffi.Void> opaque) {
+  _interruptCounter++;
+  return _interruptCounter > kInterruptThreshold ? 1 : 0;
+}
+
+final ffi.Pointer<lib.JSInterruptHandler> _interruptHandlerPtr = ffi
+    .Pointer.fromFunction<_DartJSInterruptHandler>(_dartInterruptHandler, 0)
+    .cast();
 
 /// The JsEngine that directly interop with C API.
 final class NativeJsEngine {
@@ -52,6 +73,8 @@ final class NativeJsEngine {
 
   /// Evaluate the give code.
   JsEvalResult eval(String code, {EvalType evalType = EvalType.global}) {
+    // 每次 eval 独立计中断次数（同一 isolate 串行执行）
+    _interruptCounter = 0;
     final buf = NativeString.from(code);
     final result = lib.JS_Eval(
       ctx,
@@ -205,6 +228,8 @@ final class _EngineManager {
     // 用户书源规则不可信：限制单 isolate 内存/栈，超限由 eval 异常回收。
     lib.JS_SetMemoryLimit(rt, 64 * 1024 * 1024);
     lib.JS_SetMaxStackSize(rt, 1024 * 1024);
+        // 注册指令级中断回调：死循环规则在秒级内被中断，不再烧满一核
+        lib.JS_SetInterruptHandler(rt, _interruptHandlerPtr, ffi.nullptr);
     final pf = ffi.Pointer.fromFunction<_DartJSModuleLoadFunc>(_loadJsModule);
     lib.JS_SetModuleLoaderFunc(rt, ffi.nullptr, pf, ffi.nullptr);
     return _EngineManager._(rt, verbose ?? false, timersEnabled);

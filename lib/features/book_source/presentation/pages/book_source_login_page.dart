@@ -24,11 +24,19 @@ class BookSourceLoginPage extends StatefulWidget {
       path = path.substring(0, comma).trim();
     }
     if (path.isEmpty) return null;
-    if (path.startsWith('http://') || path.startsWith('https://')) {
-      return path;
+    final resolved =
+        (path.startsWith('http://') || path.startsWith('https://'))
+            ? path
+            : (base == null || base.isEmpty
+                ? path
+                : Uri.parse(base).resolve(path).toString());
+    // 协议白名单：只允许 http/https 进 WebView；书源可控的 loginUrl 若为
+    // file:///、javascript: 等绝对 URL 在此被拒绝加载
+    final uri = Uri.tryParse(resolved);
+    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
+      return null;
     }
-    if (base == null || base.isEmpty) return path;
-    return Uri.parse(base).resolve(path).toString();
+    return resolved;
   }
 }
 

@@ -6,6 +6,7 @@ class ReadingProgress {
   final double scrollOffset;  // 滚动位置（0~1）
   final int pageIndex;        // 页码
   final DateTime updatedAt;   // 更新时间
+  final String? sourceId;     // 书源 ID（换源后按旧索引续读会错章）
 
   const ReadingProgress({
     required this.bookId,
@@ -14,6 +15,7 @@ class ReadingProgress {
     this.scrollOffset = 0.0,
     this.pageIndex = 0,
     required this.updatedAt,
+    this.sourceId,
   });
 
   ReadingProgress copyWith({
@@ -23,6 +25,7 @@ class ReadingProgress {
     double? scrollOffset,
     int? pageIndex,
     DateTime? updatedAt,
+    String? sourceId,
   }) {
     return ReadingProgress(
       bookId: bookId ?? this.bookId,
@@ -31,6 +34,7 @@ class ReadingProgress {
       scrollOffset: scrollOffset ?? this.scrollOffset,
       pageIndex: pageIndex ?? this.pageIndex,
       updatedAt: updatedAt ?? this.updatedAt,
+      sourceId: sourceId ?? this.sourceId,
     );
   }
 }

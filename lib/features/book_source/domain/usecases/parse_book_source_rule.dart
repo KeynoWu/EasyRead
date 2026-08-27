@@ -13,29 +13,42 @@ class ParseBookSourceRule {
   Either<String, BookSource> execute(String jsonString) {
     try {
       final map = jsonDecode(jsonString) as Map<String, dynamic>;
-      final name = map['bookSourceName']?.toString().trim() ?? '';
-      final url = map['bookSourceUrl']?.toString().trim() ?? '';
-      // 既无名称也无地址：视为无效数据拒绝（任意空对象不应生成'未命名书源'）
-      if (name.isEmpty && url.isEmpty) {
-        return const Left('书源缺少名称和地址');
-      }
-      final rules = Map<String, dynamic>.from(map);
-      rules.remove('bookSourceName');
-      rules.remove('bookSourceGroup');
-      rules.remove('bookSourceUrl');
-      rules.remove('enabled');
-
-      final source = BookSource(
-        id: url.isNotEmpty ? url : stableIdFromName(name),
-        name: name.isEmpty ? '未命名书源' : name,
-        bookSourceUrl: url.isEmpty ? null : url,
-        bookSourceGroup: map['bookSourceGroup']?.toString(),
-        enabled: BookSource.parseBool(map['enabled']) ?? true,
-        rules: rules,
-      );
-      return Right(source);
+      return _fromMap(map);
     } catch (e) {
       return Left('书源格式错误: $e');
     }
+  }
+
+  /// 直接从已解码 Map 构建书源：大列表导入时避免逐项 re-encode/re-decode
+  Either<String, BookSource> executeMap(Map<String, dynamic> map) {
+    try {
+      return _fromMap(map);
+    } catch (e) {
+      return Left('书源格式错误: $e');
+    }
+  }
+
+  Either<String, BookSource> _fromMap(Map<String, dynamic> map) {
+    final name = map['bookSourceName']?.toString().trim() ?? '';
+    final url = map['bookSourceUrl']?.toString().trim() ?? '';
+    // 既无名称也无地址：视为无效数据拒绝（任意空对象不应生成'未命名书源'）
+    if (name.isEmpty && url.isEmpty) {
+      return const Left('书源缺少名称和地址');
+    }
+    final rules = Map<String, dynamic>.from(map);
+    rules.remove('bookSourceName');
+    rules.remove('bookSourceGroup');
+    rules.remove('bookSourceUrl');
+    rules.remove('enabled');
+
+    final source = BookSource(
+      id: url.isNotEmpty ? url : stableIdFromName(name),
+      name: name.isEmpty ? '未命名书源' : name,
+      bookSourceUrl: url.isEmpty ? null : url,
+      bookSourceGroup: map['bookSourceGroup']?.toString(),
+      enabled: BookSource.parseBool(map['enabled']) ?? true,
+      rules: rules,
+    );
+    return Right(source);
   }
 }

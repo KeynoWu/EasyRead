@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as parser;
+import '../../../../core/purification/purify_pattern_guard.dart';
 import '../../../book_source/domain/entities/book_source.dart';
 import '../../../search/data/engines/js_rule_executor.dart';
 import '../../../search/data/engines/rule_engine.dart';
@@ -211,6 +212,11 @@ class ContentExtractor {
     String content,
   ) {
     try {
+      // 与净化规则/选择器内联正则一致的 ReDoS 预检：书源可控 pattern 在
+      // 主 isolate 同步执行，灾难性回溯会卡死阅读页
+      if (PurifyPatternGuard.hasCatastrophicBacktracking(pattern)) {
+        return content;
+      }
       final regex = RegExp(pattern);
       final groupRef = RegExp(r'\$\$|\$\d+');
       return content.replaceAllMapped(regex, (match) {

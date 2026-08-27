@@ -20,6 +20,8 @@ class ReadingProgressModel extends HiveObject {
 
   @HiveField(5)
   final DateTime updatedAt;
+  @HiveField(6)
+  final String? sourceId;
 
   ReadingProgressModel({
     required this.bookId,
@@ -28,6 +30,7 @@ class ReadingProgressModel extends HiveObject {
     this.scrollOffset = 0.0,
     this.pageIndex = 0,
     required this.updatedAt,
+    this.sourceId,
   });
 
   factory ReadingProgressModel.fromEntity(ReadingProgress entity) {
@@ -38,6 +41,7 @@ class ReadingProgressModel extends HiveObject {
       scrollOffset: entity.scrollOffset,
       pageIndex: entity.pageIndex,
       updatedAt: entity.updatedAt,
+      sourceId: entity.sourceId,
     );
   }
 
@@ -49,6 +53,7 @@ class ReadingProgressModel extends HiveObject {
       scrollOffset: scrollOffset,
       pageIndex: pageIndex,
       updatedAt: updatedAt,
+      sourceId: sourceId,
     );
   }
 }
@@ -60,6 +65,7 @@ class ReadingProgressModelAdapter extends TypeAdapter<ReadingProgressModel> {
 
   @override
   ReadingProgressModel read(BinaryReader reader) {
+    String? sourceId;
     final model = ReadingProgressModel(
       bookId: reader.readString(),
       chapterIndex: reader.readInt(),
@@ -69,8 +75,22 @@ class ReadingProgressModelAdapter extends TypeAdapter<ReadingProgressModel> {
       updatedAt: DateTime.fromMillisecondsSinceEpoch(reader.readInt()),
     );
     // schema 版本标记：旧数据无该字节则跳过，向后兼容。
-    if (reader.availableBytes > 0) reader.readInt();
-    return model;
+    if (reader.availableBytes > 0) {
+      final version = reader.readInt();
+      if (version >= kProgressSchemaVersion) {
+        sourceId = reader.readString();
+      }
+    }
+    return ReadingProgressModel(
+      bookId: model.bookId,
+      chapterIndex: model.chapterIndex,
+      paragraphOffset: model.paragraphOffset,
+      scrollOffset: model.scrollOffset,
+      pageIndex: model.pageIndex,
+      updatedAt: model.updatedAt,
+      // write 侧 null 以 '' 落盘：读回归一化为 null，保持「null=不追踪源」语义
+      sourceId: (sourceId == null || sourceId.isEmpty) ? null : sourceId,
+    );
   }
 
   @override
@@ -81,10 +101,13 @@ class ReadingProgressModelAdapter extends TypeAdapter<ReadingProgressModel> {
     writer.writeDouble(obj.scrollOffset);
     writer.writeInt(obj.pageIndex);
     writer.writeInt(obj.updatedAt.millisecondsSinceEpoch);
-    // 当前 schema 版本
+    // schema 版本：v2 起在版本字节后追加 sourceId
     writer.writeInt(kProgressSchemaVersion);
+    if (kProgressSchemaVersion >= 2) {
+      writer.writeString(obj.sourceId ?? '');
+    }
   }
 }
 
 /// ReadingProgressModelAdapter 写入的 schema 版本。
-const int kProgressSchemaVersion = 1;
+const int kProgressSchemaVersion = 2;

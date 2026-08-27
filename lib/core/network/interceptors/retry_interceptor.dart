@@ -43,6 +43,15 @@ class RetryInterceptor extends Interceptor {
       final statusCode = err.response?.statusCode ?? 0;
       return statusCode == 408 || statusCode == 429 || statusCode >= 500;
     }
+    // POST 在服务端可能已处理（侧效应）：响应/发送超时重试会重发请求体
+    // 造成重复副作用，故 POST 仅重试"请求未到达服务端"的连接类错误；
+    // 幂等方法（GET 等）保持原有重试语义
+    final method = err.requestOptions.method.toUpperCase();
+    if (method == 'POST' &&
+        (err.type == DioExceptionType.receiveTimeout ||
+            err.type == DioExceptionType.sendTimeout)) {
+      return false;
+    }
     return err.type == DioExceptionType.connectionError ||
         err.type == DioExceptionType.connectionTimeout ||
         err.type == DioExceptionType.receiveTimeout ||

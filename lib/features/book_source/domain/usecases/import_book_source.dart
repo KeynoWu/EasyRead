@@ -63,7 +63,7 @@ class ImportBookSource {
       final bytes = file.bytes;
       if (bytes == null) continue;
       final content = _decodeUtf8(bytes);
-      final parsed = _parseContent(content);
+      final parsed = await _parseContent(content);
       parsed.fold((l) => null, (r) => sources.addAll(r));
     }
     if (sources.isEmpty) return const Left('未解析到有效书源');
@@ -88,7 +88,7 @@ class ImportBookSource {
     try {
       final content = await _downloadWithIdleTimeout(trimmed, onProgress: onProgress, cancelToken: cancelToken);
       debugPrint('[ImportBookSource] 请求完成, 内容长度: ${content.length}');
-      return _parseContent(content).fold(
+      return (await _parseContent(content)).fold(
         (error) => Left(error),
         (sources) async {
           for (final source in sources) {
@@ -248,19 +248,25 @@ class ImportBookSource {
     return content.startsWith('\uFEFF') ? content.substring(1) : content;
   }
 
-  /// 解析内容（支持单个书源对象或书源数组）
-  Either<String, List<BookSource>> _parseContent(String content) {
+  /// 解析内容（支持单个书源对象或书源数组）。
+  /// 大文件数组解码下沉 worker isolate（compute），避免阻塞主 isolate；
+  /// 逐项直接用已解码 Map 构建书源，不做 re-encode/re-decode。
+  Future<Either<String, List<BookSource>>> _parseContent(String content) async {
     final text = content.trim();
     if (text.isEmpty) return const Left('内容为空');
 
     // 尝试解析为数组
     if (text.startsWith('[')) {
       try {
-        final list = (jsonDecode(text) as List);
+        final list = text.length > _isolateDecodeThreshold
+            ? await compute(_decodeArrayJson, text)
+            : (jsonDecode(text) as List);
         final sources = <BookSource>[];
         final seen = <String>{};
         for (final item in list) {
-          final parsed = parser.execute(jsonEncode(item));
+          if (item is! Map) continue;
+          final parsed =
+              parser.executeMap(Map<String, dynamic>.from(item));
           parsed.fold((l) => null, (r) {
             // 按 URL 去重：同一书源重复导入不累积（无 URL 时按稳定 id）
             final key = r.bookSourceUrl?.trim().toLowerCase() ?? r.id;
@@ -282,3 +288,11 @@ class ImportBookSource {
     );
   }
 }
+
+/// 单个书源 JSON 超过该长度（字节）时，数组解码下沉 worker isolate。
+/// 常见书源列表几百 KB，isolate 往返开销不值得；21MB 级大列表驻留主 isolate
+/// 会阻塞 UI 数秒。
+const int _isolateDecodeThreshold = 1024 * 1024;
+
+/// 在 worker isolate 中解码书源 JSON 数组（compute 要求顶层函数）
+List<dynamic> _decodeArrayJson(String text) => jsonDecode(text) as List;
