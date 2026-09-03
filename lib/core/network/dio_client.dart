@@ -52,6 +52,7 @@ class DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    String? concurrentRate,
     String? charset,
     CancelToken? cancelToken,
   }) async {
@@ -59,6 +60,7 @@ class DioClient {
       url,
       headers: headers,
       sourceId: sourceId,
+      concurrentRate: concurrentRate,
       responseType: ResponseType.bytes,
       cancelToken: cancelToken,
     );
@@ -70,12 +72,14 @@ class DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    String? concurrentRate,
     CancelToken? cancelToken,
   }) async {
     final response = await _get(
       url,
       headers: headers,
       sourceId: sourceId,
+      concurrentRate: concurrentRate,
       cancelToken: cancelToken,
     );
     return response.headers.map;
@@ -86,6 +90,7 @@ class DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    String? concurrentRate,
     String? charset,
     Map<String, dynamic>? extra,
     void Function(int received, int total)? onProgress,
@@ -96,6 +101,7 @@ class DioClient {
       url,
       headers: headers,
       sourceId: sourceId,
+      concurrentRate: concurrentRate,
       extra: extra,
       responseType: ResponseType.bytes,
       // 大文件下载的空闲判定由 ImportBookSource 控制，
@@ -114,6 +120,7 @@ class DioClient {
     Map<String, String>? headers,
     String? body,
     String? sourceId,
+    String? concurrentRate,
     String? charset,
     CancelToken? cancelToken,
   }) async {
@@ -126,6 +133,7 @@ class DioClient {
       },
       data: body,
       sourceId: sourceId,
+      concurrentRate: concurrentRate,
       responseType: ResponseType.bytes,
       cancelToken: cancelToken,
     );
@@ -138,6 +146,7 @@ class DioClient {
     Map<String, String>? headers,
     String? body,
     String? sourceId,
+    String? concurrentRate,
     CancelToken? cancelToken,
   }) async {
     final response = await _send(
@@ -149,6 +158,7 @@ class DioClient {
       },
       data: body,
       sourceId: sourceId,
+      concurrentRate: concurrentRate,
       responseType: ResponseType.bytes,
       cancelToken: cancelToken,
     );
@@ -174,6 +184,7 @@ class DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+    String? concurrentRate,
     Map<String, dynamic>? extra,
     ResponseType? responseType,
     Duration? receiveTimeout,
@@ -185,6 +196,7 @@ class DioClient {
       url,
       headers: headers,
       sourceId: sourceId,
+      concurrentRate: concurrentRate,
       extra: extra,
       responseType: responseType,
       receiveTimeout: receiveTimeout,
@@ -200,6 +212,7 @@ class DioClient {
     Map<String, String>? headers,
     Object? data,
     String? sourceId,
+    String? concurrentRate,
     Map<String, dynamic>? extra,
     ResponseType? responseType,
     Duration? receiveTimeout,
@@ -213,7 +226,11 @@ class DioClient {
       await _assertSafeUrl(current);
       final options = Options(
         headers: activeHeaders,
-        extra: {'source_id': sourceId, ...?extra},
+        extra: {
+          'source_id': sourceId,
+          'concurrent_rate': ?concurrentRate,
+          ...?extra,
+        },
         responseType: responseType ?? ResponseType.json,
         receiveTimeout: receiveTimeout,
         followRedirects: false,

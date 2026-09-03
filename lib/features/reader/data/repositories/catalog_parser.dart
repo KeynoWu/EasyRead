@@ -19,6 +19,7 @@ class CatalogParser {
     String? charset,
     Map<String, String>? variables,
     String? html,
+    String? jsLib,
   }) async {
     if (rule == null || rule.isEmpty) return null;
     var normalized = rule;
@@ -58,7 +59,10 @@ class CatalogParser {
       );
     }
     if (RuleEngine.isJsRule(rule)) {
-      if (JsTemplateEngine.canHandle(rule)) {
+      // jsLib 非空时规则体可能调用 lib 自定义函数(裸标识符)——
+      // 模板子集只认 java.get 等白名单方法,自定义函数会被误判
+      // canHandle=true 后走模板路径失败返回 null,必须走完整执行器
+      if (jsLib == null && JsTemplateEngine.canHandle(rule)) {
         if (item is dom.Element) return RuleEngine.getElementText(item, rule);
         return JsTemplateEngine.extract(jsonEncode(item), rule);
       }
@@ -68,6 +72,8 @@ class CatalogParser {
         rule,
         baseUrl: baseUrl,
         charset: charset,
+        variables: variables,
+        jsLib: jsLib,
       );
     }
     return RuleEngine.getElementText(item, rule);
@@ -89,6 +95,7 @@ class CatalogParser {
         baseUrl: baseUrl,
         charset: source.responseCharset,
         variables: variables,
+        jsLib: source.jsLib,
       );
       items = decodeJsListItems(value);
     } else {
@@ -236,6 +243,7 @@ class CatalogParser {
       baseUrl,
       source.responseCharset,
       variables: variables,
+      jsLib: source.jsLib,
     );
     if (value == null || value.isEmpty) return '';
     return resolveUrl(
@@ -336,6 +344,7 @@ class CatalogParser {
         baseUrl,
         source.responseCharset,
         variables: variables,
+        jsLib: source.jsLib,
       );
     }
 
@@ -363,13 +372,13 @@ class CatalogParser {
     String rule,
     String html,
     String baseUrl,
-    String? charset,
-    {
+    String? charset, {
     Map<String, String> variables = const {},
-  }
-  ) async {
+    String? jsLib,
+  }) async {
     if (RuleEngine.isJsRule(rule)) {
-      if (JsTemplateEngine.canHandle(rule)) {
+      // jsLib 非空走完整执行器(canHandle 误判自定义函数,见 extractField)
+      if (jsLib == null && JsTemplateEngine.canHandle(rule)) {
         return RuleEngine.extractText(html, rule);
       }
       return JsRuleExecutor.execute(
@@ -378,6 +387,7 @@ class CatalogParser {
         baseUrl: baseUrl,
         charset: charset,
         variables: variables,
+        jsLib: jsLib,
       );
     }
     return RuleEngine.extractText(html, rule);

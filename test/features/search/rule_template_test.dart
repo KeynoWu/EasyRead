@@ -63,4 +63,25 @@ void main() {
       '/list?offset=41',
     );
   });
+
+  test('RuleTemplate 支持 <page1,page2> 翻页占位符（Legado 语义）', () {
+    // page 从 1 起：取第 page 段
+    expect(
+      RuleTemplate.interpolate('/a<10,20,30>.html', page: 1),
+      '/a10.html',
+    );
+    expect(
+      RuleTemplate.interpolate('/a<10,20,30>.html', page: 3),
+      '/a30.html',
+    );
+    // 越界取最后一段
+    expect(
+      RuleTemplate.interpolate('/a<10,20,30>.html', page: 9),
+      '/a30.html',
+    );
+  });
+
+  test('page 缺省按第 1 页取段,占位符不残留(审查修复)', () {
+    expect(RuleTemplate.interpolate('/a<10,20>.html'), '/a10.html');
+  });
 }

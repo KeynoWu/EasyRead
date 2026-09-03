@@ -5,6 +5,74 @@
 
 ## ⚠️ 最新状态（2026-08-19）：产品收敛为「简单小说阅读器」
 
+## ✅ 审查修复(2026-09-03,未提交,417 测试全绿)
+
+全量代码审查(reviewer 子代理 + 亲审)发现的问题全部修复:
+1. **完整执行器 prelude 补 toast/longToast stub**(js_bridge.prelude java 桥):
+   此前完整路径脚本调 java.toast 抛 TypeError 整次 eval 失败触发 _recycle
+   (记录重放版 prelude 本有 stub,仅主 prelude 漏)。
+2. **字段级 jsLib 透传**:_extractField(search 12+ 调用点)/extractField/
+   extractFromPage 签名与全部调用点补 jsLib;三处 `JsTemplateEngine.canHandle`
+   分支加 `jsLib == null &&` 前置——canHandle 会把 lib 自定义函数误判为
+   模板子集导致静默失败,jsLib 非空一律走完整执行器。
+3. **`<page,N>` 占位符 page=null 按第 1 页**(rule_template):不再原样残留;
+   旧测试"缺省原样保留"断言的是 bug 本身,已翻转。
+4. **concurrentRate 兼容 JSON 数字型与空白串**(book_source.dart):
+   `"concurrentRate": 1000` 数字、`'  '` 空白、`0/0.0` 归一;
+   N/M/单数字行为不变。
+5. RateLimitInterceptor 放行后惰性清理过期窗口(10 分钟),删源后 Map 不无界残留。
+新增测试:review_fixes_test(9)+ catalog_jslib_passthrough_test(3)。
+
+
+## ✅ C2 净化规则 scope/超时(2026-09-03,未提交)
+
+对标 legado C2(LEGADO_PARITY_PLAN.md),全部落地,405 测试全绿 + analyze 0:
+
+1. **scope/excludeScope 生效**(legado ReplaceRuleDao 语义):
+   - legado SQL `scope LIKE '%name%'`:scope 串包含书名/源 origin → EasyRead 原
+     `target.contains(item)` 方向相反。已改为**双向 contains**(scope 项含书名/源
+     或书名/源含 scope 项均命中),legado 精确书名导入与 EasyRead 短前缀习惯都工作。
+   - 匹配目标:书名 + 源名 + **源 URL**(bookSourceUrl,legado origin 是 URL)。
+   - `regex_purifier.dart` `_matchesScope` + `scopedFor({bookName, sourceName, sourceUrl})`;
+     `reader_repository_impl` 两处净化调用已补传 sourceUrl。
+2. **规则超时自动禁用**(legado ContentProcessor/RegexExtensions 语义):
+   - Dart 规则:**Isolate 逐条执行**,超时(默认 3000ms,`timeoutMillisecond`
+     字段经 `_validTimeoutMs` 接线:<=0→null→回落默认)kill isolate 抛
+     TimeoutException → 回调。卡死正则不再阻塞事件循环。
+   - **worker 探活**(advisor 复查修复):Isolate.spawn 带 onExit 端口,
+     超时先查 `exited` Completer——worker 已退出(基础设施故障)→ 主
+     isolate 同步重试一次,不误判超时;spawn 失败同样降级同步执行。
+     仅 worker 存活却超时才触发回调,防止基础设施故障静默禁掉全部规则。
+   - JS 规则:**规则级 deadline**(`_applyRule` 开头计算,覆盖匹配收集 +
+     全部匹配的替换脚本执行;此前 `_transform` 每匹配各享 3s,100 匹配最坏
+     300s)。`_collectMatches`/`_transform` 均按剩余时间限时,零剩余前置检查。
+     deadline 先于 quickjs 指令中断(约1-3s)触发 → 超时回调真实可达
+     (有测试断言必回调,堵接线静默)。
+   - **flaky 挂起修复**(quickjs.dart `forceDispose` + js_purifier 超时分支):
+     直接 kill 卡在 FFI eval 的引擎 isolate,退场要等指令中断原生调用返回,
+     测试 runner 等待该 isolate 时后续测试"did not complete"。修法:
+     ①超时分支先 `engine.dispose()` 100ms 优雅协议回收,失败才硬杀
+     (指令中断后 isolate 可正常退场,dispose 响应正常);②forceDispose
+     先 kill 后 close 端口(终止事件经仍开放端口送达)。验证:净化组 ×3
+     + 双文件 ×2 + 全量,全绿。
+   - `PurifyPipeline` + `buildPurifyPipeline` 工厂:超时 → 会话级禁用(withoutRules)
+     + `onRuleDisabled(ruleId)` 通知(同规则去重)。
+   - `purify_pipeline_provider`:onRuleDisabled → `ManagePurificationRules.disableRule`
+     → Hive enabled=false 持久化(下次冷启动/规则刷新自然排除;不 invalidate
+     provider 避免阅读中管线重建抖动)。
+   - **_buildPurifier 透传 id/timeoutMs**(blocker 修复):三处构造点
+     (JS 替换/Dart/catch fallback)均已补 `id: rule.id` +
+     `timeoutMs: _validTimeoutMs(...)`;此前 timeoutMillisecond 零接线,
+     真实 legado 规则超时回调拿空 id,disableRule 静默失效。
+3. 测试:purify_rules_test 新增 12 个 C2 测试(双向 scope/书A续集语义固定/
+   空名防护/源URL/超时回调/映射断言/降级不误回调/会话禁用/持久化幂等),
+   405 全绿 + analyze 0。
+
+⚠️ 注意:`PurifyRule`/`JsPurifyRule` 新增 `id`/`timeoutMs` 字段;`RegexPurifier`
+新增 `onRuleTimeout`/`onJsRuleTimeout` 回调与 `withoutRules`;`JsPurifier` 构造函数
+新增 `onRuleTimeout`。
+
+---
 ### 已完成的减法（M0，未提交）
 - **删除**：TTS 朗读、图片章节/漫画、RSS 订阅源、阅读统计、WebDAV+本地备份、本地导入 epub/txt、拼音注音、章内搜索、导出书籍、书签/笔记、规则测试器/书源调试页/书源订阅页、发现 tab（导航 5→4）、自动刷新、书单导入导出、source_subscription 数据盒。
 - **保留**：书源导入/列表/编辑/登录/批量检测、搜索、详情、阅读（翻页/滚动/进度续读/缓存/换源/净化/排版/亮度/自动换源）、书架、设置（净化规则/清缓存/自动换源）。

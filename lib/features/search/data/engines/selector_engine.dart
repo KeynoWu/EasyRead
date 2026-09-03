@@ -80,7 +80,9 @@ class SelectorEngine {
             ? SelectorEngine.xpathDirectChildren(r, step)
             : SelectorEngine.xpathQueryAll(r, step);
         if (step.segment.index != null && matched.isNotEmpty) {
-          final index = step.segment.index! - 1;
+          // Legado 语义：正数从 1 计，负数从 -1（倒数）计
+          final raw = step.segment.index!;
+          final index = raw > 0 ? raw - 1 : matched.length + raw;
           if (index >= 0 && index < matched.length) {
             next.add(matched[index]);
           }
@@ -154,7 +156,7 @@ class SelectorEngine {
       if (close < 0) return null;
       final predicate = rest.substring(1, close).trim();
       rest = rest.substring(close + 1);
-      if (RegExp(r'^\d+$').hasMatch(predicate)) {
+      if (RegExp(r'^-?\d+$').hasMatch(predicate)) {
         index = int.parse(predicate);
         continue;
       }

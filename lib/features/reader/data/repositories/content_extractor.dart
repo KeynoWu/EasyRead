@@ -144,6 +144,7 @@ class ContentExtractor {
           baseUrl: pageUrl,
           charset: source.responseCharset,
           variables: variables,
+          jsLib: source.jsLib,
         ) ??
             '';
       } else {

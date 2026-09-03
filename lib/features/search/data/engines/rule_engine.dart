@@ -5,6 +5,15 @@ import 'json_path.dart';
 import 'rule_parser.dart';
 import 'selector_engine.dart';
 
+/// 规则段归约核心（B1 重构）。
+///
+/// Legado 规则字符串本质上是一段"值变换管线"：JS → CSS/JsonPath/XPath
+/// → `##` 替换 → 组合连接符（&&/||/%%）依次应用到输入值上。
+/// 此前 extractText / extractTextList / getElementText 三入口各自实现
+/// 这套分发（20 处类型判断重复），现统一为 [RulePipeline.evalString] /
+/// [RulePipeline.evalStringList] 单点递归归约，三入口只保留各自的
+/// 上下文语义（页面级解析 HTML / 元素级在子树查询 / 列表聚合）。
+
 /// 规则执行引擎 — 支持多种规则样式从 HTML 提取数据。
 ///
 /// 支持的规则语法：
@@ -16,113 +25,13 @@ import 'selector_engine.dart';
 class RuleEngine {
   static String? extractText(String html, String? rule) {
     if (rule == null || rule.isEmpty) return null;
-    if (RuleParser.isJsRule(rule)) return JsTemplateEngine.extract(html, rule);
-    final replace = RuleParser.replaceSuffixOf(rule);
-    if (replace != null) {
-      final base = extractText(html, replace.baseRule);
-      return base == null ? null : SelectorEngine.applyReplaceSuffixToValue(base, replace);
-    }
-    if (RuleParser.isCssRule(rule)) rule = RuleParser.cssRuleOf(rule);
-    if (RuleParser.isJsonPath(rule)) {
-      final values = JsonPathEngine.queryString(html, RuleParser.jsonPathOf(rule));
-      if (values.isEmpty) return null;
-      return SelectorEngine.jsonToString(values.first);
-    }
-    if (RuleParser.isXPathRule(rule)) {
-      final list = SelectorEngine.xpathTextList(html, rule);
-      return list.isEmpty ? null : list.first;
-    }
-    final multi = RuleParser.multiRuleType(rule);
-    if (multi == '||') {
-      for (final alt in RuleParser.splitRule(rule, '||')) {
-        final value = extractText(html, alt);
-        if (value != null && value.isNotEmpty) return value;
-      }
-      return null;
-    }
-    if (multi != null) {
-      final list = extractTextList(html, rule);
-      return list.isEmpty ? null : list.join('\n');
-    }
-    final doc = parser.parse(html);
-    return _extractTextFromDoc(doc, rule);
+    return RulePipeline.evalString(html, rule);
   }
 
-  static String? _extractTextFromDoc(dom.Document doc, String rule) {
-    final parts = RuleParser.parseRule(rule);
-    final elements = SelectorEngine.queryAll(doc, parts);
-    if (elements.isEmpty) return null;
-    return SelectorEngine.extractValue(elements.first, parts.attr);
-  }
 
   static List<String> extractTextList(String html, String? rule) {
     if (rule == null || rule.isEmpty) return [];
-    if (RuleParser.isJsRule(rule)) {
-      final value = JsTemplateEngine.extract(html, rule);
-      return value == null ? [] : [value];
-    }
-    final replace = RuleParser.replaceSuffixOf(rule);
-    if (replace != null) {
-      return [
-        for (final value in extractTextList(html, replace.baseRule))
-          if (SelectorEngine.applyReplaceSuffixToValue(value, replace) case final replaced?
-              when replaced.isNotEmpty)
-            replaced,
-      ];
-    }
-    if (RuleParser.isCssRule(rule)) rule = RuleParser.cssRuleOf(rule);
-    if (RuleParser.isJsonPath(rule)) {
-      final result = <String>[];
-      for (final value in JsonPathEngine.queryString(html, RuleParser.jsonPathOf(rule))) {
-        if (value is List) {
-          for (final item in value) {
-            final text = SelectorEngine.jsonToString(item);
-            if (text != null && text.isNotEmpty) result.add(text);
-          }
-        } else {
-          final text = SelectorEngine.jsonToString(value);
-          if (text != null && text.isNotEmpty) result.add(text);
-        }
-      }
-      return result;
-    }
-    if (RuleParser.isXPathRule(rule)) {
-      return SelectorEngine.xpathTextList(html, rule);
-    }
-    final multi = RuleParser.multiRuleType(rule);
-    if (multi != null) {
-      final parts = RuleParser.splitRule(rule, multi);
-      if (multi == '||') {
-        for (final part in parts) {
-          final list = extractTextList(html, part);
-          if (list.isNotEmpty) return list;
-        }
-        return [];
-      }
-      final lists = [
-        for (final part in parts) extractTextList(html, part),
-      ];
-      if (multi == '%%') {
-        final result = <String>[];
-        if (lists.isNotEmpty) {
-          for (var i = 0; i < lists.first.length; i++) {
-            for (final list in lists) {
-              if (i < list.length) result.add(list[i]);
-            }
-          }
-        }
-        return result;
-      }
-      return [for (final list in lists) ...list];
-    }
-    final doc = parser.parse(html);
-    final parts = RuleParser.parseRule(rule);
-    final elements = SelectorEngine.queryAll(doc, parts);
-    return elements
-        .map((e) => SelectorEngine.extractValue(e, parts.attr))
-        .where((t) => t != null && t.isNotEmpty)
-        .cast<String>()
-        .toList();
+    return RulePipeline.evalStringList(html, rule);
   }
 
   static List<dynamic> extractElements(String html, String? rule) {
@@ -190,6 +99,15 @@ class RuleEngine {
       return SelectorEngine.extractFromGroups(groups, rule);
     }
     if (element is dom.Element) {
+      // `##` 替换后缀优先于属性/裸字段判定（Legado：替换作用于最终值）。
+      // base 规则仍以元素自身为上下文（如 '@text##a##b' 的 '@text'）。
+      final replace = RuleParser.replaceSuffixOf(rule);
+      if (replace != null) {
+        final base = getElementText(element, replace.baseRule);
+        return base == null
+            ? null
+            : SelectorEngine.applyReplaceSuffixToValue(base, replace);
+      }
       final attrOnly =
           RegExp(r'^@([a-zA-Z][\w-]*)$').firstMatch(rule.trim());
       if (attrOnly != null) {
@@ -198,7 +116,7 @@ class RuleEngine {
       // Legado 裸字段规则：`text`/`ownText`/`textNodes`/`html`/`all`
       // 取元素自身值；纯属性名且元素具有该属性时取属性值
       // （如独步小说网 chapterName: 'text'、chapterUrl: 'href'）。
-      // 标签名（a/ul/li 等）不是属性 → 落回下方 CSS 查询路径。
+      // 标签名（a/ul/li 等）不是属性 → 落回通用管线。
       final bare =
           RegExp(r'^[a-zA-Z][a-zA-Z0-9_]*$').firstMatch(rule.trim());
       if (bare != null) {
@@ -209,63 +127,25 @@ class RuleEngine {
         }
       }
     }
-    if (RuleParser.isJsRule(rule)) {
-      // 字段级 JS 规则：在元素 HTML 上下文中执行
-      if (element is dom.Element) {
-        return JsTemplateEngine.extract(element.outerHtml, rule);
-      }
-      return null;
-    }
-    final replace = RuleParser.replaceSuffixOf(rule);
-    if (replace != null) {
-      final base = getElementText(element, replace.baseRule);
-      return base == null ? null : SelectorEngine.applyReplaceSuffixToValue(base, replace);
-    }
-    if (RuleParser.isCssRule(rule)) rule = RuleParser.cssRuleOf(rule);
-    if (RuleParser.isXPathRule(rule)) {
-      if (element is dom.Element) {
-        final list = SelectorEngine.xpathTextList(element.outerHtml, rule);
-        return list.isEmpty ? null : list.join('\n');
-      }
-      return null;
-    }
-    final multi = RuleParser.multiRuleType(rule);
-    if (multi == '||') {
-      for (final alt in RuleParser.splitRule(rule, '||')) {
-        final value = getElementText(element, alt);
-        if (value != null && value.isNotEmpty) return value;
-      }
-      return null;
-    }
-    if (multi != null) {
-      if (element is dom.Element) {
-        final list = extractTextList(element.outerHtml, rule);
-        return list.isEmpty ? null : list.join('\n');
-      }
-      final values = <String>[];
-      for (final part in RuleParser.splitRule(rule, multi)) {
-        final value = getElementText(element, part);
-        if (value != null && value.isNotEmpty) values.add(value);
-      }
-      return values.isEmpty ? null : values.join('\n');
-    }
-    if (element is! dom.Element) {
-      // JSON 值条目：字段规则按 JSONPath 处理
-      // （支持 $.name 绝对、.name / name 相对路径）
+    // 通用管线：元素级先把输入序列化为其 HTML/JSON 表示
+    final content = element is dom.Element ? element.outerHtml : element;
+    final replaced = RulePipeline.evalString(
+      content is String ? content : '',
+      rule,
+    );
+    if (replaced != null) return replaced;
+    // JSON 值条目：字段规则按 JSONPath 处理
+    // （支持 $.name 绝对、.name / name 相对路径）
+    if (element is! dom.Element && element is! String) {
       final normalized = RuleParser.normalizeJsonPath(rule);
-      final values = JsonPathEngine.instance.query(element, RuleParser.jsonPathOf(normalized));
+      final values = JsonPathEngine.instance.query(
+        element,
+        RuleParser.jsonPathOf(normalized),
+      );
       if (values.isEmpty) return null;
       return SelectorEngine.jsonToString(values.first);
     }
-    if (RuleParser.isJsonPath(rule)) {
-      final values = JsonPathEngine.instance.query(element, RuleParser.jsonPathOf(rule));
-      if (values.isEmpty) return null;
-      return SelectorEngine.jsonToString(values.first);
-    }
-    final parts = RuleParser.parseRule(rule);
-    final targets = SelectorEngine.queryAll(element, parts);
-    if (targets.isEmpty) return null;
-    return SelectorEngine.extractValue(targets.first, parts.attr);
+    return null;
   }
 
 
@@ -311,17 +191,135 @@ class RuleEngine {
 
 
   // ---- 执行 ----
+}
 
+/// 规则段归约核心（B1 重构）。
+///
+/// Legado 规则字符串本质是一段"值变换管线"：JS → CSS/JsonPath/XPath
+/// → `##` 替换 → 组合连接符（&&/||/%%）依次作用到输入值。
+/// 三入口（extractText / extractTextList / getElementText）共用这里的
+/// 递归归约，各自只保留上下文语义（页面级 / 列表聚合 / 元素级）。
+class RulePipeline {
+  /// 页面级（整段 HTML）单值提取。
+  static String? evalString(String html, String rule) {
+    if (RuleParser.isJsRule(rule)) return JsTemplateEngine.extract(html, rule);
+    final replace = RuleParser.replaceSuffixOf(rule);
+    if (replace != null) {
+      final base = evalString(html, replace.baseRule);
+      return base == null
+          ? null
+          : SelectorEngine.applyReplaceSuffixToValue(base, replace);
+    }
+    if (RuleParser.isCssRule(rule)) rule = RuleParser.cssRuleOf(rule);
+    if (RuleParser.isJsonPath(rule)) {
+      final values = JsonPathEngine.queryString(
+        html,
+        RuleParser.jsonPathOf(rule),
+      );
+      if (values.isEmpty) return null;
+      return SelectorEngine.jsonToString(values.first);
+    }
+    if (RuleParser.isXPathRule(rule)) {
+      final list = SelectorEngine.xpathTextList(html, rule);
+      return list.isEmpty ? null : list.first;
+    }
+    final multi = RuleParser.multiRuleType(rule);
+    if (multi != null) {
+      return evalMultiString(html, rule, multi);
+    }
+    final doc = parser.parse(html);
+    final parts = RuleParser.parseRule(rule);
+    final elements = SelectorEngine.queryAll(doc, parts);
+    if (elements.isEmpty) return null;
+    return SelectorEngine.extractValue(elements.first, parts.attr);
+  }
 
+  /// 页面级多值提取（列表聚合）。
+  static List<String> evalStringList(String html, String rule) {
+    if (RuleParser.isJsRule(rule)) {
+      final value = JsTemplateEngine.extract(html, rule);
+      return value == null ? [] : [value];
+    }
+    final replace = RuleParser.replaceSuffixOf(rule);
+    if (replace != null) {
+      return [
+        for (final value in evalStringList(html, replace.baseRule))
+          if (SelectorEngine.applyReplaceSuffixToValue(value, replace)
+              case final replaced? when replaced.isNotEmpty)
+            replaced,
+      ];
+    }
+    if (RuleParser.isCssRule(rule)) rule = RuleParser.cssRuleOf(rule);
+    if (RuleParser.isJsonPath(rule)) {
+      final result = <String>[];
+      for (final value
+          in JsonPathEngine.queryString(html, RuleParser.jsonPathOf(rule))) {
+        if (value is List) {
+          for (final item in value) {
+            final text = SelectorEngine.jsonToString(item);
+            if (text != null && text.isNotEmpty) result.add(text);
+          }
+        } else {
+          final text = SelectorEngine.jsonToString(value);
+          if (text != null && text.isNotEmpty) result.add(text);
+        }
+      }
+      return result;
+    }
+    if (RuleParser.isXPathRule(rule)) {
+      return SelectorEngine.xpathTextList(html, rule);
+    }
+    final multi = RuleParser.multiRuleType(rule);
+    if (multi != null) {
+      return evalMultiList(html, rule, multi);
+    }
+    final doc = parser.parse(html);
+    final parts = RuleParser.parseRule(rule);
+    final elements = SelectorEngine.queryAll(doc, parts);
+    return elements
+        .map((e) => SelectorEngine.extractValue(e, parts.attr))
+        .where((t) => t != null && t.isNotEmpty)
+        .cast<String>()
+        .toList();
+  }
 
+  /// 单值上下文的组合连接符归约。
+  static String? evalMultiString(String html, String rule, String multi) {
+    if (multi == '||') {
+      for (final alt in RuleParser.splitRule(rule, '||')) {
+        final value = evalString(html, alt);
+        if (value != null && value.isNotEmpty) return value;
+      }
+      return null;
+    }
+    final list = evalStringList(html, rule);
+    return list.isEmpty ? null : list.join('\n');
+  }
 
-
-
-
-
-
-
-
-
-
+  /// 列表上下文的组合连接符归约。
+  static List<String> evalMultiList(String html, String rule, String multi) {
+    final parts = RuleParser.splitRule(rule, multi);
+    if (multi == '||') {
+      for (final part in parts) {
+        final list = evalStringList(html, part);
+        if (list.isNotEmpty) return list;
+      }
+      return [];
+    }
+    final lists = [
+      for (final part in parts) evalStringList(html, part),
+    ];
+    if (multi == '%%') {
+      final result = <String>[];
+      if (lists.isNotEmpty) {
+        for (var i = 0; i < lists.first.length; i++) {
+          for (final list in lists) {
+            if (i < list.length) result.add(list[i]);
+          }
+        }
+      }
+      return result;
+    }
+    return [for (final list in lists) ...list];
+  }
 }

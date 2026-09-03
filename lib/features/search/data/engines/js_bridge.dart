@@ -172,10 +172,13 @@ class JsBridge {
     Map<String, String> getStringCache = const {},
     Map<String, List<String>> getStringListCache = const {},
     Map<String, String>? cookies,
+    String? jsLib,
   }) {
     final cacheJson = jsonEncode(cache);
     final getStringCacheJson = jsonEncode(getStringCache);
     final getStringListCacheJson = jsonEncode(getStringListCache);
+    // jsLib 不在此注入：与规则体同一次 eval 才能共享顶层声明，
+    // 由 JsRuleExecutor._libPrefix 拼接（见 jsLibScript 文档）。
     return '''
 globalThis.result = ${quote(html)};
 globalThis.baseUrl = ${quote(baseUrl)};
@@ -206,10 +209,29 @@ globalThis.java = {
   toast: () => '',
   longToast: () => ''
 };
-$cryptoRecordBridge
 ${cookieBridge(cookies ?? const {}, seed: true)}''';
   }
 
+  /// 源级 jsLib：返回原始脚本语句（纯脚本原样；JSON 形式逐条换行拼接）。
+  /// 由执行方与规则体拼进**同一次 eval**——顶层 const/let/function 在同一
+  /// eval 内对规则体可见（对齐 Legado SharedJsScope 的作用域语义）。
+  /// 注意：lib 语法错误会使该次 eval 整体失败（与 Legado 行为一致）。
+  static String jsLibScript(String? jsLib) {
+    if (jsLib == null || jsLib.trim().isEmpty) return '';
+    final trimmed = jsLib.trim();
+    if (!trimmed.startsWith('{')) {
+      return trimmed;
+    }
+    try {
+      final decoded = jsonDecode(trimmed) as Map<String, dynamic>;
+      return decoded.values
+          .map((v) => v?.toString() ?? '')
+          .where((s) => s.trim().isNotEmpty)
+          .join('\n');
+    } catch (_) {
+      return '';
+    }
+  }
   /// 记录模式环境：get/setContent 记录调用序列（docIndex 关联切换后的
   /// 文档），ajax 收集 URL 返回占位。规则执行后由 Dart 重放查询。
   static String recordPrelude(

@@ -18,7 +18,21 @@ class RuleTemplate {
     int? page,
     bool encodeValues = false,
   }) {
-    return template.replaceAllMapped(_template, (match) {
+    // Legado `<page1,page2,...>` 翻页占位符:page 从 1 起,
+    // 取第 page 段(越界取最后一段)。page 未提供(null)按第 1 页处理,
+    // 避免占位符原样残留在 URL 中(与 {{page}} null→空串的旧行为对齐前,
+    // 先保证 URL 可用;legado 调试/部分 explore 路径 page 即为 null)。
+    var source = template;
+    final effectivePage = (page != null && page > 0) ? page : 1;
+    if (source.contains('<')) {
+      source = source.replaceAllMapped(RegExp(r'<([^<>]*)>'), (match) {
+        final pages = match.group(1)!.split(',');
+        final idx = effectivePage - 1;
+        final picked = idx < pages.length ? pages[idx] : pages.last;
+        return picked.trim();
+      });
+    }
+    return source.replaceAllMapped(_template, (match) {
       final expression = match.group(1)!.trim();
       final alternatives = _splitAlternatives(expression);
       for (final alt in alternatives) {

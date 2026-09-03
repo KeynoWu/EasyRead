@@ -78,6 +78,21 @@ class RuleParser {
     }
     return null;
   }
+  /// Legado 列表规则前缀（`bookList` 专用）：
+  /// - `-规则`：结果倒序
+  /// - `+规则`：剥除前缀（Legado 中为去重标记，EasyRead 聚合层恒去重，此处仅剥除）
+  /// 返回 `(剥除前缀后的规则, 是否倒序)`。
+  static (String, bool) splitListRulePrefix(String rule) {
+    var t = rule.trim();
+    var reverse = false;
+    if (t.startsWith('-')) {
+      reverse = true;
+      t = t.substring(1).trim();
+    } else if (t.startsWith('+')) {
+      t = t.substring(1).trim();
+    }
+    return (t, reverse);
+  }
 
   /// 字段规则是否引用 AllInOne 捕获组或带 `##` 替换后缀。
   static bool needsCaptureGroup(String rule) {

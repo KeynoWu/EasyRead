@@ -442,4 +442,38 @@ void main() {
     });
   });
 
+  group('Legado 索引 DSL（负数/步长/排除）', () {
+    const html = '<ul>'
+        '<li>a</li><li>b</li><li>c</li><li>d</li><li>e</li>'
+        '</ul>';
+
+    test('cascade 负索引取倒数第 N 个', () {
+      expect(
+        RuleEngine.extractTextList(html, r'tag.li[-1]'),
+        ['e'],
+      );
+    });
+
+    test('cascade 范围含步长 [0:4:2]', () {
+      expect(
+        RuleEngine.extractTextList(html, r'tag.li[0:4:2]'),
+        ['a', 'c', 'e'],
+      );
+    });
+
+    test('cascade 排除索引 [!0]', () {
+      expect(
+        RuleEngine.extractTextList(html, r'tag.li[!0]'),
+        ['b', 'c', 'd', 'e'],
+      );
+    });
+
+    test('xpath 单索引负数取倒数', () {
+      expect(
+        RuleEngine.extractText(html, r'//li[-1]'),
+        'e',
+      );
+    });
+  });
+
 }

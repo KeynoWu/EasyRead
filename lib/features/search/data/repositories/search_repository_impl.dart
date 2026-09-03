@@ -11,6 +11,7 @@ import 'package:html/parser.dart' as parser;
 import '../engines/js_rule_executor.dart';
 import '../engines/js_template.dart';
 import '../engines/rule_engine.dart';
+import '../engines/rule_parser.dart';
 import '../engines/rule_template.dart';
 import '../engines/rule_variables.dart';
 
@@ -93,6 +94,7 @@ class SearchRepositoryImpl implements SearchRepository {
                 headers: headers.isEmpty ? null : headers,
                 body: loginSpec.body,
                 sourceId: source.id,
+                concurrentRate: source.concurrentRate,
                 cancelToken: cancelToken,
               );
             } else {
@@ -100,6 +102,7 @@ class SearchRepositoryImpl implements SearchRepository {
                 loginUrl,
                 headers: headers.isEmpty ? null : headers,
                 sourceId: source.id,
+                concurrentRate: source.concurrentRate,
                 cancelToken: cancelToken,
               );
             }
@@ -141,6 +144,7 @@ class SearchRepositoryImpl implements SearchRepository {
           headers: headers.isEmpty ? null : headers,
           body: body,
           sourceId: source.id,
+          concurrentRate: source.concurrentRate,
           charset: charset,
           cancelToken: cancelToken,
         );
@@ -149,6 +153,7 @@ class SearchRepositoryImpl implements SearchRepository {
           searchUrl,
           headers: headers.isEmpty ? null : headers,
           sourceId: source.id,
+          concurrentRate: source.concurrentRate,
           charset: charset,
           cancelToken: cancelToken,
         );
@@ -162,19 +167,26 @@ class SearchRepositoryImpl implements SearchRepository {
         headers,
       );
 
+      final (listRuleBody, listReverse) =
+          RuleParser.splitListRulePrefix(source.bookListRule!);
       final List<dynamic> items;
       final pageVariables = <String, String>{};
-      if (RuleEngine.isJsRule(source.bookListRule!)) {
+      if (RuleEngine.isJsRule(listRuleBody)) {
         final value = await JsRuleExecutor.execute(
           responseHtml,
-          source.bookListRule!,
+          listRuleBody,
           baseUrl: searchUrl,
           charset: charset,
           variables: pageVariables,
+          jsLib: source.jsLib,
         );
         items = _decodeJsListItems(value);
       } else {
-        items = RuleEngine.extractElements(responseHtml, source.bookListRule);
+        items = RuleEngine.extractElements(responseHtml, listRuleBody);
+      }
+      if (listReverse && items.length > 1) {
+        // items 元素顺序需反转：统一走副本替换（下游只读遍历）
+        items.setAll(0, items.reversed.toList());
       }
       final results = <SearchResult>[];
 
@@ -191,6 +203,7 @@ class SearchRepositoryImpl implements SearchRepository {
           baseUrl: searchUrl,
           charset: charset,
           variables: itemVariables,
+          jsLib: source.jsLib,
         );
         if (name == null || name.isEmpty) continue;
 
@@ -201,6 +214,7 @@ class SearchRepositoryImpl implements SearchRepository {
           baseUrl: searchUrl,
           charset: charset,
           variables: itemVariables,
+          jsLib: source.jsLib,
         );
         final detailUrl = rawDetailUrl == null
             ? null
@@ -212,6 +226,7 @@ class SearchRepositoryImpl implements SearchRepository {
           baseUrl: searchUrl,
           charset: charset,
           variables: itemVariables,
+          jsLib: source.jsLib,
         );
         final intro = await _extractField(
           item,
@@ -220,6 +235,7 @@ class SearchRepositoryImpl implements SearchRepository {
           baseUrl: searchUrl,
           charset: charset,
           variables: itemVariables,
+          jsLib: source.jsLib,
         );
         final kind = await _extractField(
           item,
@@ -228,6 +244,7 @@ class SearchRepositoryImpl implements SearchRepository {
           baseUrl: searchUrl,
           charset: charset,
           variables: itemVariables,
+          jsLib: source.jsLib,
         );
         final lastChapter = await _extractField(
           item,
@@ -236,6 +253,7 @@ class SearchRepositoryImpl implements SearchRepository {
           baseUrl: searchUrl,
           charset: charset,
           variables: itemVariables,
+          jsLib: source.jsLib,
         );
         final wordCount = await _extractField(
           item,
@@ -244,6 +262,7 @@ class SearchRepositoryImpl implements SearchRepository {
           baseUrl: searchUrl,
           charset: charset,
           variables: itemVariables,
+          jsLib: source.jsLib,
         );
         results.add(SearchResult(
           bookId: _stableBookId(source.id, rawDetailUrl, i),
@@ -255,6 +274,7 @@ class SearchRepositoryImpl implements SearchRepository {
             baseUrl: searchUrl,
             charset: charset,
             variables: itemVariables,
+          jsLib: source.jsLib,
           ),
           coverUrl: rawCoverUrl == null
               ? null
@@ -333,6 +353,7 @@ class SearchRepositoryImpl implements SearchRepository {
               headers: headers.isEmpty ? null : headers,
               body: RuleTemplate.interpolate(bodyTemplate, page: page),
               sourceId: source.id,
+              concurrentRate: source.concurrentRate,
               charset: charset,
               cancelToken: cancelToken,
             )
@@ -340,6 +361,7 @@ class SearchRepositoryImpl implements SearchRepository {
               resolvedUrl,
               headers: headers.isEmpty ? null : headers,
               sourceId: source.id,
+              concurrentRate: source.concurrentRate,
               charset: charset,
               cancelToken: cancelToken,
             );
@@ -353,19 +375,25 @@ class SearchRepositoryImpl implements SearchRepository {
 
       final listRule = source.exploreBookListRule ?? source.bookListRule;
       if (listRule == null) return [];
+      final (listRuleBody, listReverse) =
+          RuleParser.splitListRulePrefix(listRule);
       final List<dynamic> items;
       final pageVariables = <String, String>{};
-      if (RuleEngine.isJsRule(listRule)) {
+      if (RuleEngine.isJsRule(listRuleBody)) {
         final value = await JsRuleExecutor.execute(
           responseHtml,
-          listRule,
+          listRuleBody,
           baseUrl: resolvedUrl,
           charset: charset,
           variables: pageVariables,
+          jsLib: source.jsLib,
         );
         items = _decodeJsListItems(value);
       } else {
-        items = RuleEngine.extractElements(responseHtml, listRule);
+        items = RuleEngine.extractElements(responseHtml, listRuleBody);
+      }
+      if (listReverse && items.length > 1) {
+        items.setAll(0, items.reversed.toList());
       }
 
       final results = <SearchResult>[];
@@ -381,6 +409,7 @@ class SearchRepositoryImpl implements SearchRepository {
           baseUrl: resolvedUrl,
           charset: charset,
           variables: itemVariables,
+          jsLib: source.jsLib,
         );
         if (name == null || name.isEmpty) continue;
         final rawDetailUrl = await _extractField(
@@ -390,6 +419,7 @@ class SearchRepositoryImpl implements SearchRepository {
           baseUrl: resolvedUrl,
           charset: charset,
           variables: itemVariables,
+          jsLib: source.jsLib,
         );
         final detailUrl = rawDetailUrl == null
             ? null
@@ -401,6 +431,7 @@ class SearchRepositoryImpl implements SearchRepository {
           baseUrl: resolvedUrl,
           charset: charset,
           variables: itemVariables,
+          jsLib: source.jsLib,
         );
         results.add(SearchResult(
           bookId: _stableBookId(source.id, rawDetailUrl, i),
@@ -412,6 +443,7 @@ class SearchRepositoryImpl implements SearchRepository {
             baseUrl: resolvedUrl,
             charset: charset,
             variables: itemVariables,
+          jsLib: source.jsLib,
           ),
           coverUrl: rawCoverUrl == null
               ? null
@@ -424,6 +456,7 @@ class SearchRepositoryImpl implements SearchRepository {
             baseUrl: resolvedUrl,
             charset: charset,
             variables: itemVariables,
+          jsLib: source.jsLib,
           ),
           kind: await _extractField(
             item,
@@ -432,6 +465,7 @@ class SearchRepositoryImpl implements SearchRepository {
             baseUrl: resolvedUrl,
             charset: charset,
             variables: itemVariables,
+          jsLib: source.jsLib,
           ),
           lastChapter: await _extractField(
             item,
@@ -440,6 +474,7 @@ class SearchRepositoryImpl implements SearchRepository {
             baseUrl: resolvedUrl,
             charset: charset,
             variables: itemVariables,
+          jsLib: source.jsLib,
           ),
           wordCount: await _extractField(
             item,
@@ -448,6 +483,7 @@ class SearchRepositoryImpl implements SearchRepository {
             baseUrl: resolvedUrl,
             charset: charset,
             variables: itemVariables,
+          jsLib: source.jsLib,
           ),
           sourceId: source.id,
           sourceName: source.name,
@@ -499,6 +535,7 @@ class SearchRepositoryImpl implements SearchRepository {
           headers: headers.isEmpty ? null : headers,
           body: spec.body!.replaceAll('{{key}}', Uri.encodeQueryComponent(keyword)),
           sourceId: source.id,
+          concurrentRate: source.concurrentRate,
           charset: charset,
         );
       } else {
@@ -506,6 +543,7 @@ class SearchRepositoryImpl implements SearchRepository {
           searchUrl,
           headers: headers.isEmpty ? null : headers,
           sourceId: source.id,
+          concurrentRate: source.concurrentRate,
           charset: charset,
         );
       }
@@ -566,6 +604,7 @@ class SearchRepositoryImpl implements SearchRepository {
         baseUrl: baseUrl,
         charset: charset,
         variables: variables,
+          jsLib: source.jsLib,
       );
       if (name == null || name.isEmpty) continue;
       final rawDetailUrl = await _extractField(
@@ -575,6 +614,7 @@ class SearchRepositoryImpl implements SearchRepository {
         baseUrl: baseUrl,
         charset: charset,
         variables: variables,
+          jsLib: source.jsLib,
       );
       results.add(SearchResult(
         bookId: _stableBookId(source.id, rawDetailUrl, i),
@@ -586,6 +626,7 @@ class SearchRepositoryImpl implements SearchRepository {
           baseUrl: baseUrl,
           charset: charset,
           variables: variables,
+          jsLib: source.jsLib,
         ),
         detailUrl: rawDetailUrl == null
             ? null
@@ -607,6 +648,7 @@ class SearchRepositoryImpl implements SearchRepository {
     String? baseUrl,
     String? charset,
     Map<String, String>? variables,
+    String? jsLib,
   }) async {
     if (rule == null || rule.isEmpty) return null;
     var normalized = rule;
@@ -645,7 +687,9 @@ class SearchRepositoryImpl implements SearchRepository {
       );
     }
     if (RuleEngine.isJsRule(rule)) {
-      if (JsTemplateEngine.canHandle(rule)) {
+      // jsLib 非空走完整执行器(canHandle 会把 lib 自定义函数误判为
+      // 模板子集,导致规则失败返回 null,见 catalog_parser 同处注释)
+      if (jsLib == null && JsTemplateEngine.canHandle(rule)) {
         if (item is dom.Element) return RuleEngine.getElementText(item, rule);
         return JsTemplateEngine.extract(jsonEncode(item), rule);
       }
@@ -655,6 +699,8 @@ class SearchRepositoryImpl implements SearchRepository {
         rule,
         baseUrl: baseUrl ?? '',
         charset: charset,
+        variables: variables,
+        jsLib: jsLib,
       );
     }
     return RuleEngine.getElementText(item, rule);
@@ -786,6 +832,7 @@ class SearchRepositoryImpl implements SearchRepository {
           headers: headers.isEmpty ? null : headers,
           body: loginSpec.body,
           sourceId: source.id,
+          concurrentRate: source.concurrentRate,
           cancelToken: cancelToken,
         );
       } else {
@@ -793,6 +840,7 @@ class SearchRepositoryImpl implements SearchRepository {
           loginUrl,
           headers: headers.isEmpty ? null : headers,
           sourceId: source.id,
+          concurrentRate: source.concurrentRate,
           cancelToken: cancelToken,
         );
       }
@@ -831,6 +879,7 @@ class SearchRepositoryImpl implements SearchRepository {
       baseUrl: url,
       charset: charset,
       cookies: cookieStore,
+      jsLib: source.jsLib,
     );
     final updatedCookie = cookieStore[source.id] ??
         cookieStore[source.bookSourceUrl ?? ''] ??

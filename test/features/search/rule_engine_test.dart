@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:easy_read/features/search/data/engines/rule_engine.dart';
+import 'package:easy_read/features/search/data/engines/rule_parser.dart';
 
 void main() {
   group('RuleEngine', () {
@@ -75,6 +76,86 @@ void main() {
     test('getElementText bare unknown ident returns null', () {
       final items = RuleEngine.extractElements(sampleHtml, 'div.item');
       expect(RuleEngine.getElementText(items[0], 'nonexistent'), isNull);
+    });
+  });
+
+  group('RuleEngine 组合连接符（Legado && || %%）', () {
+    const htmlA = '<div><p class="x">甲</p><p class="y">乙</p></div>';
+    const htmlB = '<ul><li>一</li><li>二</li><li>三</li></ul>';
+
+    test('&& 合并各部分结果', () {
+      final result = RuleEngine.extractTextList(htmlA, 'p.x&&p.y');
+      expect(result, ['甲', '乙']);
+    });
+
+    test('|| 首个非空结果短路', () {
+      expect(RuleEngine.extractText(htmlA, 'p.z||p.x'), '甲');
+      expect(RuleEngine.extractText(htmlA, 'p.z||p.q'), isNull);
+    });
+
+    test('%% 按下标交叉合并', () {
+      final result = RuleEngine.extractTextList(htmlB, 'li%%li');
+      expect(result, ['一', '一', '二', '二', '三', '三']);
+    });
+
+    test('extractElements || 短路返回首个命中元素列表', () {
+      final items = RuleEngine.extractElements(htmlA, 'div.zz||p.x');
+      expect(items.length, 1);
+    });
+  });
+
+  group('RuleParser 列表规则前缀（Legado bookList -/+）', () {
+    test('前缀 - 剥除并标记倒序', () {
+      final (rule, reverse) =
+          RuleParser.splitListRulePrefix('-class.book_list@tag.li');
+      expect(rule, 'class.book_list@tag.li');
+      expect(reverse, isTrue);
+    });
+
+    test('前缀 + 剥除不倒序', () {
+      final (rule, reverse) = RuleParser.splitListRulePrefix('+\$ .list');
+      expect(rule, '\$ .list');
+      expect(reverse, isFalse);
+    });
+
+    test('无前缀原样返回', () {
+      final (rule, reverse) = RuleParser.splitListRulePrefix('div.item');
+      expect(rule, 'div.item');
+      expect(reverse, isFalse);
+    });
+  });
+
+  group('RuleEngine 伪属性（Legado 裸字段 text/ownText/textNodes/html/all）', () {
+    const html = '<div class="wrap">'
+        '<p>段落一</p>'
+        '直接文本'
+        '<script>evil()</script>'
+        '<p>段落二</p>'
+        '</div>';
+
+    test('ownText 仅取自身直接文本节点', () {
+      final item = RuleEngine.extractElements(html, 'div.wrap').first;
+      expect(RuleEngine.getElementText(item, 'ownText'), '直接文本');
+    });
+
+    test('textNodes 取子文本节点并以换行连接', () {
+      final item = RuleEngine.extractElements(html, 'div.wrap').first;
+      final text = RuleEngine.getElementText(item, 'textNodes');
+      expect(text, isNotNull);
+      expect(text!.split('\n'), everyElement(isNot(contains('evil'))));
+    });
+
+    test('html 剔除 script/style 后返回内部 HTML', () {
+      final item = RuleEngine.extractElements(html, 'div.wrap').first;
+      final htmlOut = RuleEngine.getElementText(item, 'html');
+      expect(htmlOut, isNot(contains('evil')));
+      expect(htmlOut, contains('段落一'));
+    });
+
+    test('all 返回完整 outerHtml', () {
+      final item = RuleEngine.extractElements(html, 'div.wrap').first;
+      final all = RuleEngine.getElementText(item, 'all');
+      expect(all, contains('段落二'));
     });
   });
 }

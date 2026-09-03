@@ -133,6 +133,12 @@ class JsRuleExecutor {
     return true;
   }
 
+  /// jsLib 前缀：与规则体拼进同一次 eval，使 lib 顶层声明对规则体可见。
+  static String _libPrefix(String? jsLib) {
+    final lib = JsBridge.jsLibScript(jsLib);
+    return lib.isEmpty ? '' : '$lib\n';
+  }
+
   /// 执行 JS 规则，返回提取值；不支持/超时/异常返回 null
   static Future<String?> execute(
     String html,
@@ -141,6 +147,7 @@ class JsRuleExecutor {
     String? charset,
     Map<String, String>? variables,
     Map<String, String>? cookies,
+    String? jsLib,
   }) async {
     final body = JsBridge.scriptBody(rawRule);
     if (body == null || body.trim().isEmpty) return null;
@@ -173,14 +180,14 @@ class JsRuleExecutor {
                 getStringCache: getStringCache,
                 getStringListCache: getStringListCache,
                 cookies: cookies,
+                jsLib: jsLib,
               ),
             )
             .timeout(evalTimeout);
 
         if (hasAjax || hasCrypto || hasPost || hasHead) {
-          // 第一遍：执行收集 ajax URL（占位 ajax 返回空可能引发 JS 异常，
+          await engine.eval('try { ${_libPrefix(jsLib)} $body } catch (e) {}').timeout(evalTimeout);
           // 用 try-catch 包裹——ajax 调用在异常前已记录 URL）
-          await engine.eval('try { $body } catch (e) {}').timeout(evalTimeout);
           if (hasAjax) {
             final urls = JsRecordReplay.parseUrls(
               (await engine
@@ -226,7 +233,7 @@ class JsRuleExecutor {
           // 再按真实参数重建缓存
           await engine.eval(JsBridge.cryptoRecordBridge).timeout(evalTimeout);
           await engine.eval('globalThis.__putMap = {};').timeout(evalTimeout);
-          await engine.eval('try { $body } catch (e) {}').timeout(evalTimeout);
+          await engine.eval('try { ${_libPrefix(jsLib)} $body } catch (e) {}').timeout(evalTimeout);
           final crypto = await JsCryptoCaches.fromEngine(engine);
           // 记录热身遍 crypto 调用序列（realBridge 装入时 __cryptoSeq 会重置）
           warmSeq =
@@ -237,8 +244,9 @@ class JsRuleExecutor {
         // 第二遍前重置 putMap：之前各遍占位桥（ajax/crypto 返回 ''）
         // 推导的键值若残留，get/getString 会优先命中旧值而不重算
         await engine.eval('globalThis.__putMap = {};').timeout(evalTimeout);
-        // 第二遍：执行取最终值
-        final result = await engine.eval(body).timeout(evalTimeout);
+        // 第二遍：执行取最终值（jsLib 前缀与规则体同串）
+        final result =
+            await engine.eval('${_libPrefix(jsLib)}$body').timeout(evalTimeout);
         // 最终遍 crypto 调用序列与热身遍不一致（控制流依赖 crypto 结果时
         // 调用次数/顺序变化 → symmetric id 错位）→ 降级，不静默给错值
         if (hasCrypto) {
@@ -264,7 +272,7 @@ class JsRuleExecutor {
             ),
           )
           .timeout(evalTimeout);
-      await engine.eval('try { $body } catch (e) {}').timeout(evalTimeout);
+      await engine.eval('try { ${_libPrefix(jsLib)} $body } catch (e) {}').timeout(evalTimeout);
       var ops = await JsRecordReplay.readOps(engine);
 
       if (hasAjax || hasPost || hasHead) {
@@ -315,7 +323,7 @@ class JsRuleExecutor {
           await engine.eval(
             'globalThis.__ops = []; globalThis.__docIndex = 0;',
           );
-          await engine.eval('try { $body } catch (e) {}').timeout(evalTimeout);
+          await engine.eval('try { ${_libPrefix(jsLib)} $body } catch (e) {}').timeout(evalTimeout);
           ops = await JsRecordReplay.readOps(engine);
         }
       }
@@ -343,7 +351,7 @@ class JsRuleExecutor {
         // finalPrelude 装好后热身重录，按真实参数重建缓存
         await engine.eval(JsBridge.cryptoRecordBridge).timeout(evalTimeout);
         await engine.eval('globalThis.__putMap = {};').timeout(evalTimeout);
-        await engine.eval('try { $body } catch (e) {}').timeout(evalTimeout);
+        await engine.eval('try { ${_libPrefix(jsLib)} $body } catch (e) {}').timeout(evalTimeout);
         final crypto = await JsCryptoCaches.fromEngine(engine);
         // 记录热身遍 crypto 调用序列（realBridge 装入时 __cryptoSeq 会重置）
         warmSeq =
@@ -362,8 +370,9 @@ class JsRuleExecutor {
           )
           .timeout(evalTimeout);
 
-      // 最终遍：执行取最终值
-      final result = await engine.eval(body).timeout(evalTimeout);
+      // 最终遍：执行取最终值（jsLib 前缀与规则体同串）
+      final result =
+          await engine.eval('${_libPrefix(jsLib)}$body').timeout(evalTimeout);
       // 一致性校验：最终遍实际消费的 get/getElements 序列与记录遍不一致
       // （控制流依赖占位 '' 结果）时，值表已错位，结果不可信 → 降级
       if (await JsRecordReplay.isGetSequenceMismatch(engine, ops)) {

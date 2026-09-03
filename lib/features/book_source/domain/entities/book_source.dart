@@ -62,6 +62,33 @@ class BookSource {
   String? get contentSubContentRule => _nestedRule('ruleContent', 'subContent');
   String? get contentReplaceRegex => _nestedRule('ruleContent', 'replaceRegex');
 
+  /// 源级共享 JS 库（Legado jsLib）：脚本字符串或 `{名称: 脚本|URL}` JSON，
+  /// 在 JS 规则执行前注入全局作用域，供规则内的函数/常量复用。
+  String? get jsLib {
+    final value = rules['jsLib'];
+    if (value is String && value.trim().isNotEmpty) return value;
+    return null;
+  }
+
+  /// 并发率（Legado concurrentRate）：
+  /// - `N/M`：M 毫秒内最多 N 次请求（滑动窗口）
+  /// - 单数字：相邻请求最小间隔（毫秒）
+  /// - 空 / `0`：不限制
+  String? get concurrentRate {
+    final value = rules['concurrentRate'];
+    // JSON 数字型(legado 书源常见 `"concurrentRate": 1000`)转字符串;
+    // 空白串视同未配置,`0`/`0.0` 视为不限制
+    final text = value is String
+        ? value.trim()
+        : value is num
+            ? value.toInt().toString()
+            : null;
+    if (text == null || text.isEmpty || num.tryParse(text) == 0) {
+      return null;
+    }
+    return text;
+  }
+
   /// 响应字符集：优先书源顶层 charset，其次 ruleSearch/ruleContent 内配置。
   String? get responseCharset {
     final direct = rules['charset'] ?? rules['responseCharset'];

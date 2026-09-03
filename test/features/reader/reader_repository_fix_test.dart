@@ -27,6 +27,8 @@ class _DynamicClient implements DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+
+    String? concurrentRate,
     String? charset,
     CancelToken? cancelToken,
   }) async {
@@ -38,6 +40,8 @@ class _DynamicClient implements DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+
+    String? concurrentRate,
     CancelToken? cancelToken,
   }) async {
     return {};
@@ -49,6 +53,8 @@ class _DynamicClient implements DioClient {
     Map<String, String>? headers,
     String? body,
     String? sourceId,
+
+    String? concurrentRate,
     CancelToken? cancelToken,
   }) async {
     return {};
@@ -60,6 +66,8 @@ class _DynamicClient implements DioClient {
     Map<String, String>? headers,
     String? body,
     String? sourceId,
+
+    String? concurrentRate,
     String? charset,
     CancelToken? cancelToken,
   }) async {
@@ -71,6 +79,8 @@ class _DynamicClient implements DioClient {
     String url, {
     Map<String, String>? headers,
     String? sourceId,
+
+    String? concurrentRate,
     String? charset,
     Map<String, dynamic>? extra,
     void Function(int received, int total)? onProgress,
