@@ -75,8 +75,11 @@
     会让宿主等待其退场,搜索链路排查同类挂起时先查这里)。
   - _buildPurifier 透传 id/timeoutMs(映射断言测试堵回归)。
   - 测试:purify_rules_test 新增 12 个 C2 用例,405 全绿 + analyze 0。
+- C2.1(审查遗留 nit)jsLib JSON 形式的 URL 值:legado 先抓 URL 内容
+  再执行,EasyRead 当脚本字面 eval;且 JSON 解析失败静默返空串无痕迹。
+  量级低(URL 形式罕见),修复需 jsLibScript 异步化(网络依赖贯穿),
+  随 C3 或下次书源会话处理。
 - C3 jsLib/模板执行隔离：失败源熔断（单源 JS 异常计数 → 短时降级，参照现有 quickjs 降级）
-- 验收：20 并发批量检测对 N/M 源无 403；坏正则 3s 后自动 enabled=false 不再复发
 
 ### M-D 超越项（legado 没有或做得差的）
 - D1 兼容性度量看板：批量检测历史 + 源通过率趋势（基于现有 book_source_test_store）
