@@ -324,6 +324,255 @@ void main() {
     expect(rule.enabled, isFalse);
   });
 
+  test('C2 scope 双向匹配:legado 串含书名/源 与 EasyRead 短前缀均命中', () {
+    const purifier = RegexPurifier(rules: [
+      // legado 方向:scope 串包含书名(精确书名导入)
+      PurifyRule(pattern: 'a', replacement: 'A', scope: '凡人修仙传(精校版)'),
+      // EasyRead 方向:书名包含短前缀 scope 项
+      PurifyRule(pattern: 'b', replacement: 'B', scope: '斗破'),
+    ]);
+    final scoped = purifier.scopedFor(
+      bookName: '凡人修仙传',
+      sourceName: '源X',
+    );
+    expect(scoped.purify('a'), 'A'); // scope 含书名 → 命中
+    expect(scoped.purify('b'), 'b');
+    final scoped2 = purifier.scopedFor(
+      bookName: '斗破苍穹',
+      sourceName: '源X',
+    );
+    expect(scoped2.purify('a'), 'a');
+    expect(scoped2.purify('b'), 'B'); // 书名含 scope 项 → 命中
+  });
+
+  test('C2 scope 项与书名部分重叠(书A续集)按双向语义命中并固定现状', () {
+    // 固定行为:双向 contains 下 scope='书A' 命中 '书A续集'(旧实现既有行为,
+    // 非 C2 引入);legado 严格整串 SQL 语义此处会失配,EasyRead 取超集,
+    // 偏差理由见 LEGADO_PARITY_PLAN.md C2。
+    const purifier = RegexPurifier(rules: [
+      PurifyRule(pattern: 'x', replacement: 'Y', scope: '书A'),
+    ]);
+    expect(
+      purifier.scopedFor(bookName: '书A续集', sourceName: null).purify('x'),
+      'Y',
+    );
+    // 完全不相关书名不命中
+    expect(
+      purifier.scopedFor(bookName: '完全无关', sourceName: null).purify('x'),
+      'x',
+    );
+  });
+
+  test('C2 scope 规则对书名/源名缺失(null)健壮:不因空目标全量命中', () {
+    const purifier = RegexPurifier(rules: [
+      PurifyRule(pattern: 'x', replacement: 'Y', scope: '书A'),
+    ]);
+    // 书名与源名都缺失:无匹配目标,scope 规则不命中
+    expect(purifier.scopedFor().purify('x'), 'x');
+    // 仅源名命中
+    expect(
+      purifier.scopedFor(sourceName: '书A网').purify('x'),
+      'Y',
+    );
+  });
+
+  test('C2 scope 匹配源 URL,excludeScope 命中源 URL 排除', () {
+    const purifier = RegexPurifier(rules: [
+      PurifyRule(pattern: 'x', replacement: 'Y', scope: 'www.example.com'),
+      PurifyRule(
+        pattern: 'x',
+        replacement: 'Z',
+        excludeScope: 'bad.org',
+        scope: '坏源',
+      ),
+    ]);
+    // scope 含源 URL → 命中;excludeScope 不含 → 应用
+    expect(
+      purifier
+          .scopedFor(
+            bookName: '书',
+            sourceName: '好源',
+            sourceUrl: 'https://www.example.com/book',
+          )
+          .purify('x'),
+      'Y',
+    );
+    // excludeScope 命中源名 → 整条排除,回退第二条(scope 坏源含源名命中)
+    expect(
+      purifier
+          .scopedFor(
+            bookName: '书',
+            sourceName: '坏源',
+            sourceUrl: 'https://x.bad.org',
+          )
+          .purify('x'),
+      'x',
+    );
+  });
+
+  test('C2 Dart 规则执行超时:触发回调并跳过该规则', () async {
+    // 嵌套量词 ReDoS 模式(绕过 PurifyPatternGuard 直接构造 PurifyRule),
+    // 超时 50ms 内无法完成
+    const slow = PurifyRule(
+      id: 'slow-1',
+      pattern: r'(a+)+$',
+      replacement: 'X',
+      timeoutMs: 50,
+    );
+    final timedOut = <String>[];
+    final purifier = RegexPurifier(
+      rules: [slow, const PurifyRule(pattern: 'b', replacement: 'B')],
+      onRuleTimeout: (rule) => timedOut.add(rule.id),
+    );
+    final input = 'a' * 24 + 'b';
+    final out = await purifier.purifyAsync(input);
+    expect(timedOut, ['slow-1']);
+    // 慢规则被跳过(原文含 a 串),后续规则正常执行
+    expect(out.contains('a' * 24), isTrue);
+    expect(out, endsWith('B'));
+  });
+
+  test('C2 purifyAsync 不超时路径与同步结果一致', () async {
+    const purifier = RegexPurifier(rules: [
+      PurifyRule(pattern: '，', replacement: ','),
+    ]);
+    final out = await purifier.purifyAsync('你好，世界');
+    expect(out, '你好,世界');
+  });
+
+  test('C2 withoutRules 会话级禁用超时规则', () {
+    const purifier = RegexPurifier(rules: [
+      PurifyRule(id: 'r1', pattern: 'x', replacement: 'Y'),
+      PurifyRule(id: 'r2', pattern: 'x', replacement: 'Z'),
+    ]);
+    final filtered = purifier.withoutRules({'r1'});
+    expect(filtered.purify('x'), 'Z');
+    expect(purifier.purify('x'), 'Y'); // 原实例不变
+  });
+
+  test('C2 buildPurifyPipeline 超时会话禁用 + onRuleDisabled 去重通知', () async {
+    final disabledEvents = <String>[];
+    final pipeline = buildPurifyPipeline(
+      regexPurifier: const RegexPurifier(rules: [
+        PurifyRule(
+          id: 'slow',
+          pattern: r'(a+)+$',
+          replacement: 'X',
+          timeoutMs: 50,
+        ),
+      ]),
+      onRuleDisabled: disabledEvents.add,
+    );
+    final input = 'a' * 24 + 'b';
+    // 第一次净化:超时 → 禁用 + 通知
+    await pipeline.purifyAsync(input);
+    expect(disabledEvents, ['slow']);
+    // 第二次净化:会话级禁用,不再执行慢规则(不再触发回调)
+    await pipeline.purifyAsync(input);
+    expect(disabledEvents, ['slow']);
+  });
+
+  test('C2 disableRule 持久化 enabled=false,重复禁用幂等', () async {
+    final manager = ManagePurificationRules();
+    await manager.ensureDefaults();
+    final before = (await manager.getAll()).firstWhere((r) => r.id == '2');
+    expect(before.enabled, isTrue);
+    await manager.disableRule('2');
+    final after = (await manager.getAll()).firstWhere((r) => r.id == '2');
+    expect(after.enabled, isFalse);
+    await manager.disableRule('2'); // 已禁用:不写库
+    final again = (await manager.getAll()).firstWhere((r) => r.id == '2');
+    expect(again.enabled, isFalse);
+    // 不存在的 id 静默忽略
+    await manager.disableRule('nonexistent');
+    expect((await manager.getAll()).length, 20);
+  });
+
+  test('C2 _buildPurifier 映射:id/timeoutMs 透传到 PurifyRule/JsPurifyRule', () async {
+    final manager = ManagePurificationRules();
+    await manager.add(const PurificationRule(
+      id: 'map-dart',
+      name: 'Dart 规则',
+      pattern: 'a',
+      replacement: 'b',
+      timeoutMillisecond: 1500,
+    ));
+    await manager.add(const PurificationRule(
+      id: 'map-js',
+      name: 'JS 规则',
+      pattern: 'c',
+      replacement: '@js:result',
+      timeoutMillisecond: 2500,
+    ));
+    // 未配置超时(0)→ null 执行层回落默认 3000(legado getValidTimeoutMillisecond)
+    await manager.add(const PurificationRule(
+      id: 'map-default',
+      name: '默认超时',
+      pattern: 'd',
+      replacement: 'e',
+      timeoutMillisecond: 0,
+    ));
+    await manager.add(const PurificationRule(
+      id: 'map-lookbehind',
+      name: 'JS 语法规则',
+      pattern: r'(?<=x)y',
+      replacement: 'z',
+    ));
+    final purifier = await manager.buildPurifier();
+    final dart = purifier.rules.firstWhere((r) => r.id == 'map-dart');
+    expect(dart.timeoutMs, 1500);
+    final js = purifier.jsRules.firstWhere((r) => r.id == 'map-js');
+    expect(js.timeoutMs, 2500);
+    // Dart 3.12+ RegExp 已支持 lookbehind:可编译,进 Dart rules
+    // (旧版会转 JS fallback;此断言锁定当前行为,升级 Dart 时会提示)
+    expect(
+      purifier.rules.firstWhere((r) => r.id == 'map-lookbehind').timeoutMs,
+      isNull,
+    );
+  });
+
+  test('C2 JsPurifier 规则级 deadline 超时触发 onRuleTimeout(引擎可用时)', () async {
+    // 规则级 deadline(timeoutMs=50)先于 quickjs 指令中断(约1-3s)触发:
+    // while(true) 卡住 eval,Dart 侧 .timeout(remaining) 抛 TimeoutException
+    // → onRuleTimeout 必须回调(接线坏/漏接线时此断言失败,不再静默)。
+    final timeouts = <String>[];
+    final purifier = JsPurifier(
+      onRuleTimeout: (r) => timeouts.add(r.id),
+    );
+    // 引擎可用性前置探测:复用已验证的全角转数字脚本
+    final probed = await purifier
+        .apply('１２３', [const JsPurifyRule(id: 'probe', pattern: '[０-９]', script: 'R=result; R=="０"?"0":R=="１"?"1":R=="２"?"2":R=="３"?"3":1')])
+        .timeout(const Duration(seconds: 20));
+    if (probed != '123') return; // 引擎不可用(iOS 等)
+
+    const rule = JsPurifyRule(
+      id: 'js-slow',
+      pattern: 'x',
+      script: 'while (true) {}',
+      timeoutMs: 50,
+    );
+    final out = await purifier
+        .apply('x', [rule])
+        .timeout(const Duration(seconds: 20));
+    expect(timeouts, ['js-slow']); // 必须回调:堵"接线坏静默通过"
+    expect(out, 'x'); // 超时规则跳过,文本原样
+  });
+
+  test('C2 无效正则(spawn 降级路径)不触发超时回调', () async {
+    // 非法正则:isolate 入口发 null → 同步重试仍抛 → 调用方跳过,
+    // 全程不应触发 onRuleTimeout(基础设施/规则缺陷 ≠ 执行超时)
+    final timeouts = <String>[];
+    const bad = PurifyRule(id: 'bad', pattern: '([unclosed', replacement: 'X');
+    const good = PurifyRule(id: 'good', pattern: 'y', replacement: 'Y');
+    final purifier = RegexPurifier(
+      rules: [bad, good],
+      onRuleTimeout: (r) => timeouts.add(r.id),
+    );
+    final out = await purifier.purifyAsync('y');
+    expect(out, 'Y');
+    expect(timeouts, isEmpty);
+  });
+
   test('JsPurifier 超时后强制回收不挂起', () async {
     const rule = JsPurifyRule(pattern: 'x', script: 'while (true) {}');
     final out = await JsPurifier()

@@ -14,6 +14,11 @@ import 'regex_purifier.dart';
 /// 引擎管理复用 quickjs isolate：进程级单例 manager，初始化失败
 /// （如 iOS native assets 不可用）返回 null 由调用方跳过 JS 规则。
 class JsPurifier {
+  /// 单条 JS 规则超时回调(参数为规则,空 id 不回调由调用方判断)
+  final void Function(JsPurifyRule rule)? onRuleTimeout;
+
+  JsPurifier({this.onRuleTimeout});
+
   static JsEngineManager? _manager;
   static Future<JsEngineManager?>? _managerInit;
   static int _engineSeq = 0;
@@ -83,9 +88,14 @@ class JsPurifier {
         try {
           result = await _applyRule(engine!, result, rules[i]);
         } on TimeoutException {
-          // 单条规则死循环超时：原生 isolate 可能已卡死，直接强制回收。
-          // 最后一条规则时直接返回，其余场景重建后继续，不让一条坏规则
-          // 废掉整组 JS 净化。
+          // 单条规则超时:先走优雅协议回收(指令中断后 isolate 可正常
+          // 退场,dispose 响应正常返回),100ms 内无响应才硬杀——
+          // 直接 kill 卡在 FFI eval 的 isolate,其退场要等原生调用返回,
+          // 测试 runner/宿主等待该 isolate 时会表现为后续任务挂起。
+          onRuleTimeout?.call(rules[i]);
+          try {
+            await engine?.dispose().timeout(const Duration(milliseconds: 100));
+          } catch (_) {}
           await _forceDisposeManager();
           engine = null;
           if (i == rules.length - 1) return result;
@@ -94,7 +104,7 @@ class JsPurifier {
           manager = next;
           engine = await manager.createEngine('purify${_engineSeq++}');
         } catch (_) {
-          // 单条规则正则非法/脚本异常：跳过该条，不影响其他规则
+          // 单条规则正则非法/脚本异常:跳过该条,不影响其他规则
         }
       }
       return result;
@@ -110,18 +120,29 @@ class JsPurifier {
     String input,
     JsPurifyRule rule,
   ) async {
-    final matches = await _collectMatches(engine, rule.pattern, input);
+    // 规则级超时预算(legado timeoutMillisecond 语义):deadline 覆盖
+    // 匹配收集 + 全部匹配的替换脚本执行,而非每个匹配各享一份 3s。
+    final deadline = DateTime.now().add(
+      Duration(milliseconds: rule.timeoutMs ?? kPurifyDefaultTimeoutMs),
+    );
+    final matches = await _collectMatches(engine, rule.pattern, input)
+        .timeout(deadline.difference(DateTime.now()));
     if (matches.isEmpty) return input;
     var sb = StringBuffer();
     var cursor = 0;
     for (final m in matches) {
+      final remaining = deadline.difference(DateTime.now());
+      if (remaining <= Duration.zero) {
+        throw TimeoutException('净化规则超时: ${rule.pattern}');
+      }
       sb.write(input.substring(cursor, m.start));
       // 普通文本 replacement（非 @js 模板）：逐匹配替换，
       // 展开 $N 捕获组反向引用（Legado 语义，如 #09 标点＂＂ → “$2”）
       if (rule.script.isEmpty) {
         sb.write(_expandCaptures(rule.replacement, m));
       } else {
-        sb.write(await _transform(engine, rule.script, m.text));
+        sb.write(await _transform(engine, rule.script, m.text)
+            .timeout(remaining));
       }
       cursor = m.end;
     }

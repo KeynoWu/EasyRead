@@ -94,6 +94,7 @@ class ReaderRepositoryImpl implements ReaderRepository {
       url,
       headers: headers.isEmpty ? null : headers,
       sourceId: sourceId,
+      concurrentRate: source.concurrentRate,
       charset: charset,
     );
     final loginCheckJs = source.loginCheckJs;
@@ -462,6 +463,7 @@ class ReaderRepositoryImpl implements ReaderRepository {
           contentUrl,
           source.responseCharset,
           variables: effectiveVariables,
+          jsLib: source.jsLib,
         );
         if (extractedTitle != null && extractedTitle.trim().isNotEmpty) {
           effectiveTitle = extractedTitle.trim();
@@ -481,6 +483,7 @@ class ReaderRepositoryImpl implements ReaderRepository {
         content,
         bookName: effectiveBookName,
         sourceName: source.name,
+        sourceUrl: source.bookSourceUrl,
       );
       content = ContentExtractor.resolveImageUrls(content, contentUrl);
       content = ContentExtractor.removeRepeatedTitle(content, effectiveTitle);
@@ -494,6 +497,7 @@ class ReaderRepositoryImpl implements ReaderRepository {
         rawTitle,
         bookName: effectiveBookName,
         sourceName: source.name,
+        sourceUrl: source.bookSourceUrl,
       );
       final chapter = Chapter(
         id: cacheKey,

@@ -155,11 +155,18 @@ final class JsEngineManager {
 
   /// 强制销毁（跳过原生协议）：引擎死循环/异常导致 isolate 挂死或原生
   /// 断言风险时直接 kill，避免 JS_FreeRuntime 断言崩溃。
+  ///
+  /// 顺序关键:先 kill 再 close 端口。引擎 isolate 卡在 FFI eval 时,
+  /// kill(immediate) 的终止请求要等指令中断(约 1-3s)原生调用返回后才被
+  /// 处理;若先 close `_recv`,isolate 死亡事件的监听被提前拆除,主 isolate
+  /// 侧 onDone→_failPending 不触发,测试 runner 会等待该 isolate 退场
+  /// 直至超时(表现为后续测试 "did not complete")。kill 先发出,死亡事件
+  /// 经仍开放的端口送达,挂起的 eval completer 立刻失败。
   Future<void> forceDispose() async {
     log("manager: force disposing (skip native protocol)...");
+    _isolate.kill(priority: Isolate.immediate);
     _recv.close();
     _notified.close();
-    _isolate.kill(priority: Isolate.immediate);
     _engines.clear();
   }
 

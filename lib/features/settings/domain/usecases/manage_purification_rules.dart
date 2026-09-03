@@ -89,6 +89,21 @@ class ManagePurificationRules {
     await box.delete(id);
   }
 
+  /// 超时自动禁用:enabled=false 持久化(Legado 语义)。
+  /// 规则不存在时静默忽略(可能已被用户删除)。
+  Future<void> disableRule(String id) async {
+    final box = await Hive.openBox<String>(_boxName);
+    final raw = box.get(id);
+    if (raw == null) return;
+    try {
+      final rule = _fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      if (!rule.enabled) return;
+      await box.put(id, jsonEncode(_toJson(rule.copyWith(enabled: false))));
+    } catch (_) {
+      // 损坏的记录:保留原样,不做半写
+    }
+  }
+
   /// 从 JSON 字符串导入净化规则（支持单个规则对象或规则数组）。
   /// 返回成功导入的规则数；解析失败抛 [FormatException]。
   /// id 与现有规则冲突时自动重编号（后缀 -N），避免覆盖用户已有规则。
@@ -179,17 +194,21 @@ class ManagePurificationRules {
         }
         if (isJsReplacement) {
           jsRules.add(JsPurifyRule(
+            id: rule.id,
             pattern: pattern,
             script: rule.replacement.substring(4),
             scope: rule.scope,
             excludeScope: rule.excludeScope,
+            timeoutMs: _validTimeoutMs(rule.timeoutMillisecond),
           ));
         } else {
           enabled.add(PurifyRule(
+            id: rule.id,
             pattern: pattern,
             replacement: rule.replacement,
             scope: rule.scope,
             excludeScope: rule.excludeScope,
+            timeoutMs: _validTimeoutMs(rule.timeoutMillisecond),
           ));
         }
       } catch (_) {
@@ -197,16 +216,23 @@ class ManagePurificationRules {
         // 普通文本 replacement 作为替换内容保留（JS 引擎逐匹配替换），
         // 而非被当作"空脚本删除匹配"——#06 标点…… 等内置规则依赖此语义
         jsRules.add(JsPurifyRule(
+          id: rule.id,
           pattern: pattern,
           script: isJsReplacement ? rule.replacement.substring(4) : '',
           replacement: isJsReplacement ? '' : rule.replacement,
           scope: rule.scope,
           excludeScope: rule.excludeScope,
+          timeoutMs: _validTimeoutMs(rule.timeoutMillisecond),
         ));
       }
     }
     return RegexPurifier(rules: enabled, jsRules: jsRules);
   }
+
+  /// legado getValidTimeoutMillisecond 语义:未配置或 <=0 → null
+  /// (执行层回落 kPurifyDefaultTimeoutMs = 3000)
+  static int? _validTimeoutMs(int? raw) =>
+      raw == null || raw <= 0 ? null : raw;
 
   static PurificationRule _fromJson(Map<String, dynamic> map) {
     return PurificationRule(
