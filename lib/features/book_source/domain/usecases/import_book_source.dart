@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:either_dart/either.dart';
 import '../../../../core/network/dio_client.dart';
 import '../../../../core/network/url_redact.dart';
+import '../../data/services/source_subscription_store.dart';
 import '../entities/book_source.dart';
 import '../repositories/book_source_repository.dart';
 import 'parse_book_source_rule.dart';
@@ -42,10 +43,17 @@ class ImportBookSource {
     required this.repository,
     required this.parser,
     DioClient? client,
+    SourceSubscriptionStore? subscriptionStore,
     this.idleTimeout = const Duration(seconds: 20),
         this.firstByteTimeout = const Duration(seconds: 60),
     this.totalLimit = const Duration(minutes: 10),
-  }) : _client = client ?? DioClient();
+  })  : _client = client ?? DioClient(),
+        subscriptionStore =
+            subscriptionStore ?? MemorySourceSubscriptionStore();
+
+  /// 订阅存储（§三-9）：成功导入 URL 后记录，供一键刷新。
+  /// 默认内存实现（Hive 未初始化环境零依赖）；应用入口注入 Hive 持久实现。
+  final SourceSubscriptionStoreBase subscriptionStore;
 
   /// 从文件导入（支持单个书源 JSON 或书源列表 JSON 数组）
   Future<Either<String, List<BookSource>>> fromFile() async {
@@ -69,9 +77,32 @@ class ImportBookSource {
     if (sources.isEmpty) return const Left('未解析到有效书源');
 
     for (final source in sources) {
-      await repository.save(source);
+      await _saveMerged(source);
     }
     return Right(sources);
+  }
+
+  /// 导入合并（P0-12，Legado ImportBookSourceViewModel comparisonSource）：
+  /// - 本地不存在 → 直接入库
+  /// - 本地 lastUpdateTime 较新 → 跳过（保留本地规则/启用/分组）
+  /// - 导入源较新 → 覆盖规则，但保留本地启用状态与分组
+  ///   （避免更新把用户手动关闭的源重新打开、打乱本地分组组织）
+  Future<void> _saveMerged(BookSource source) async {
+    final existing = await repository.getById(source.id);
+    if (existing == null) {
+      await repository.save(source);
+      return;
+    }
+    if (existing.lastUpdateTime > source.lastUpdateTime) return;
+    if (existing.enabled != source.enabled ||
+        existing.bookSourceGroup != source.bookSourceGroup) {
+      await repository.save(source.copyWith(
+        enabled: existing.enabled,
+        bookSourceGroup: existing.bookSourceGroup,
+      ));
+      return;
+    }
+    await repository.save(source);
   }
 
   /// 从网络链接导入（支持单个书源 JSON 或书源列表 JSON 数组）。
@@ -88,12 +119,17 @@ class ImportBookSource {
     try {
       final content = await _downloadWithIdleTimeout(trimmed, onProgress: onProgress, cancelToken: cancelToken);
       debugPrint('[ImportBookSource] 请求完成, 内容长度: ${content.length}');
-      return (await _parseContent(content)).fold(
+      return (await _parseContent(content, cancelToken: cancelToken)).fold(
         (error) => Left(error),
         (sources) async {
           for (final source in sources) {
-            await repository.save(source);
+            await _saveMerged(source);
           }
+          // 订阅记录（§三-9）：URL 导入成功即视为订阅，一键刷新可重拉；
+          // 记录失败不阻断导入主流程
+          try {
+            await subscriptionStore.recordChecked(trimmed, sourceCount: sources.length);
+          } catch (_) {}
           return Right(sources);
         },
       );
@@ -238,7 +274,7 @@ class ImportBookSource {
       (l) => Left(l),
       (sources) async {
         for (final source in sources) {
-          await repository.save(source);
+          await _saveMerged(source);
         }
         return Right(sources);
       },
@@ -256,11 +292,92 @@ class ImportBookSource {
         : '${d.inSeconds} 秒';
   }
 
-  /// 解析内容（支持单个书源对象或书源数组）。
+  /// 订阅容器最大子地址数（§三-9）：防恶意容器拖垮导入
+  static const int _maxSubscriptionUrls = 20;
+
+  /// 订阅容器（§三-9，Legado ImportBookSourceViewModel $.sourceUrls）：
+  /// `{"sourceUrls": ["http://...", ...]}` 递归拉取每个子地址合并书源；
+  /// 单个子地址失败不中断其余；子容器不递归（深度 1），总数封顶。
+  Future<Either<String, List<BookSource>>> _parseContainer(
+    List<dynamic> urls,
+    CancelToken? cancelToken,
+  ) async {
+    final sources = <BookSource>[];
+    var fetched = 0;
+    var failures = 0;
+    for (final entry in urls) {
+      if (fetched + failures >= _maxSubscriptionUrls) break;
+      final sub = entry?.toString().trim() ?? '';
+      if (sub.isEmpty || !sub.startsWith('http')) continue;
+      try {
+        final content =
+            await _downloadWithIdleTimeout(sub, cancelToken: cancelToken);
+        // 子内容不再识别容器（深度 1）：{"sourceUrls":...} 指回自身的
+        // 恶意容器不会形成递归拉取链
+        final parsed =
+            await _parseContent(content, allowContainer: false);
+        parsed.fold(
+          (_) => failures++,
+          (list) {
+            sources.addAll(list);
+            fetched++;
+          },
+        );
+      } catch (_) {
+        failures++;
+      }
+    }
+    if (sources.isEmpty) {
+      return Left(
+        failures > 0 ? '订阅子地址均拉取失败（共 $failures 个）' : '订阅容器未包含有效子地址',
+      );
+    }
+    return Right(sources);
+  }
+
+  /// 一键更新所有订阅（§三-9）：逐个重新拉取并合并；合并语义沿用
+  /// [fromUrl]（本地较新跳过、保留启用与分组）。返回各订阅结果摘要。
+  Future<List<SubscriptionRefreshResult>> refreshSubscriptions({
+    CancelToken? cancelToken,
+  }) async {
+    final subs = await subscriptionStore.list();
+    final results = <SubscriptionRefreshResult>[];
+    for (final sub in subs) {
+      final result = await fromUrl(sub.url, cancelToken: cancelToken);
+      results.add(result.fold(
+        (error) => SubscriptionRefreshResult(url: sub.url, error: error),
+        (sources) =>
+            SubscriptionRefreshResult(url: sub.url, updated: sources.length),
+      ));
+    }
+    return results;
+  }
+
+  /// 解析内容（支持单个书源对象、书源数组或订阅容器）。
+  /// [allowContainer]=false 时不再识别订阅容器（订阅子地址内容用——
+  /// 容器不递归，防恶意容器链无界拉取，见 _parseContainer）。
   /// 大文件数组解码下沉 worker isolate（compute），避免阻塞主 isolate；
   /// 逐项直接用已解码 Map 构建书源，不做 re-encode/re-decode。
-  Future<Either<String, List<BookSource>>> _parseContent(String content) async {
+  Future<Either<String, List<BookSource>>> _parseContent(
+    String content, {
+    CancelToken? cancelToken,
+    bool allowContainer = true,
+  }) async {
     final text = content.trim();
+    if (text.isEmpty) return const Left('内容为空');
+
+    // 订阅容器（§三-9）：{"sourceUrls": [...]}
+    if (allowContainer && text.startsWith('{')) {
+      try {
+        final obj = jsonDecode(text);
+        if (obj is Map && obj['sourceUrls'] is List) {
+          return _parseContainer(obj['sourceUrls'] as List, cancelToken);
+        }
+      } catch (_) {
+        // 非容器 JSON：回落到单源解析
+      }
+    }
+
     if (text.isEmpty) return const Left('内容为空');
 
     // 尝试解析为数组
@@ -309,3 +426,14 @@ const int _isolateDecodeThreshold = 512 * 1024;
 
 /// 在 worker isolate 中解码书源 JSON 数组（compute 要求顶层函数）
 List<dynamic> _decodeArrayJson(String text) => jsonDecode(text) as List;
+
+/// 订阅刷新单条结果（§三-9）
+class SubscriptionRefreshResult {
+  final String url;
+  final int? updated;
+  final String? error;
+
+  const SubscriptionRefreshResult({required this.url, this.updated, this.error});
+
+  bool get isSuccess => error == null;
+}

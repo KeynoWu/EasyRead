@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:easy_quickjs/quickjs.dart';
 import '../../../../core/network/dio_client.dart';
 import 'js_network.dart';
+import 'js_cache_store.dart';
 import 'js_record_replay.dart';
 import 'js_bridge.dart';
 
@@ -133,10 +134,82 @@ class JsRuleExecutor {
     return true;
   }
 
-  /// jsLib 前缀：与规则体拼进同一次 eval，使 lib 顶层声明对规则体可见。
-  static String _libPrefix(String? jsLib) {
-    final lib = JsBridge.jsLibScript(jsLib);
-    return lib.isEmpty ? '' : '$lib\n';
+  /// connect 结果按 url|headersJson 键重组（JS connect stub 的 key 形态）
+  static Map<String, Map<String, dynamic>> _connectCacheOf(
+    List<NetworkOp> networkOps,
+    Map<String, Map<String, dynamic>> results,
+  ) {
+    return {
+      for (final op in networkOps)
+        if (op.kind == 'connect')
+          '${op.url}|${jsonEncode(op.headers)}': results[op.key] ?? const {},
+    };
+  }
+
+  /// 读取本次执行的 cache.put 调用并持久化（Legado CacheManager.put 语义）
+  static Future<void> _persistCachePuts(JsEngine engine) async {
+    try {
+      final json = (await engine
+              .eval('JSON.stringify(__cachePutOps || [])')
+              .timeout(evalTimeout))
+          .value;
+      final ops = JsCacheStore.decodePutOps(json);
+      if (ops.isEmpty) return;
+      final puts = <String, (String, int)>{};
+      for (final op in ops) {
+        if (op.length < 2) continue;
+        final key = op[0].toString();
+        final value = op[1].toString();
+        final ttl = op.length > 2 ? (int.tryParse(op[2].toString()) ?? 0) : 0;
+        puts[key] = (value, ttl);
+      }
+      await JsCacheStore.instance.persistPuts(puts);
+    } catch (_) {
+      // cache 持久化失败不影响规则结果
+    }
+  }
+
+  /// 解析 jsLib 为纯脚本：JSON 形式 {名: 脚本|URL} 的 URL 条目下载并
+  /// 磁盘缓存（JsCacheStore，7 天 TTL），脚本条目原样拼接（P1-8）。
+  static Future<String> _resolveJsLib(String? jsLib) async {
+    if (jsLib == null || jsLib.trim().isEmpty) return '';
+    final trimmed = jsLib.trim();
+    if (!trimmed.startsWith('{')) return trimmed;
+    try {
+      final decoded = jsonDecode(trimmed) as Map<String, dynamic>;
+      final buffer = StringBuffer();
+      for (final value in decoded.values) {
+        final s = value?.toString() ?? '';
+        if (s.trim().isEmpty) continue;
+        if (s.startsWith('http://') || s.startsWith('https://')) {
+          final content = await _fetchJsLibUrl(s);
+          if (content.isNotEmpty) buffer.writeln(content);
+        } else {
+          buffer.writeln(s);
+        }
+      }
+      return buffer.toString();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// 下载 jsLib URL 条目（fetcher 测试桩优先），命中磁盘缓存直接返回
+  static Future<String> _fetchJsLibUrl(String url) async {
+    final cached = await JsCacheStore.instance.get(url);
+    if (cached != null) return cached;
+    final client = networkClient ?? DioClient();
+    try {
+      final content = JsRuleExecutor.fetcher != null
+          ? await JsRuleExecutor.fetcher!(url).timeout(ajaxTimeout)
+          : await client.getString(url).timeout(ajaxTimeout);
+      if (content.isNotEmpty) {
+        await JsCacheStore.instance.put(url, content, 7 * 24 * 3600);
+      }
+      return content;
+    } catch (_) {
+      return '';
+    }
   }
 
   /// 执行 JS 规则，返回提取值；不支持/超时/异常返回 null
@@ -148,16 +221,49 @@ class JsRuleExecutor {
     Map<String, String>? variables,
     Map<String, String>? cookies,
     String? jsLib,
+    String? cookieHeader,
   }) async {
     final body = JsBridge.scriptBody(rawRule);
     if (body == null || body.trim().isEmpty) return null;
     if (JsBridge.unsupported(body)) return null;
+    // P1-6 java.cache：seed 注入（过期清理），执行成功后回写 puts
+    final cacheStore = await JsCacheStore.instance.seed();
+    // P0-3：Dart 侧跨阶段变量（@put 链/书架透传）注入 __putMap 初始表，
+    // 使 java.get(key) 可读（此前只回写不注入，跨遍变量链断裂）
+    final variablesJson = jsonEncode(variables ?? const <String, String>{});
     final hasAjax = body.contains('java.ajax');
+    final hasAjaxAll = body.contains('java.ajaxAll');
+    final hasConnect = body.contains('java.connect');
     final hasPost = body.contains('java.post');
     final hasHead = body.contains('java.head');
     final hasSetContent = body.contains('setContent');
     final hasGetElements = body.contains('java.getElements');
+    // 单参 java.getElement(sel)（Legado Element 风格对象）：静态预提取
+    // 只缓存字符串值，必须走记录-重放路径取元素快照（P1-11）
+    final hasGetElement =
+        RegExp(r'java\.getElement\s*\([^,)]*\)').hasMatch(body);
     final hasCrypto = JsBridge.hasCryptoBridge(body);
+    // 两参 java.get(url, headers) = 网络 GET（getString/getElements 不匹配）
+    final hasGet2 = RegExp(r'java\.get\s*\([^,)]*,').hasMatch(body);
+    // 动态选择器（java.get/getElement 首参为变量、或含 + 拼接的表达式）：
+    // 静态预提取缓存必 miss，必须走记录-重放路径（P1-7），否则静默空
+    final hasDynamicGet =
+        RegExp(r"""java\.get(?:Element)?\s*\((?!['"\[])|java\.get(?:Element)?\s*\(['"][^'")]*['"]\s*\+""",
+            ).hasMatch(body);
+    // JS 网络请求携带登录 Cookie（P0-11：与页面请求同一凭据面）
+    final baseHeaders = (cookieHeader == null || cookieHeader.isEmpty)
+        ? const <String, String>{}
+        : {'Cookie': cookieHeader};
+    // P1-8 jsLib：URL 条目下载（磁盘缓存）解析为脚本；仅第一次 eval 注入
+    // —— 全局词法环境的 let/const 重复声明会抛 SyntaxError（QuickJS
+    // global eval 语义），后续遍直接用已声明的绑定
+    final resolvedLib = await _resolveJsLib(jsLib);
+    var libInjected = false;
+    String libPrefix() {
+      if (libInjected) return '';
+      libInjected = true;
+      return resolvedLib.isEmpty ? '' : '$resolvedLib\n';
+    }
 
     final manager = await _getManager();
     if (manager == null) return null;
@@ -165,11 +271,14 @@ class JsRuleExecutor {
     if (engine == null) return null;
     var recycled = false;
     try {
-      if (!hasSetContent && !hasGetElements) {
+      if (!hasSetContent &&
+          !hasGetElements &&
+          !hasGetElement &&
+          !hasDynamicGet) {
         // 无 setContent：静态预提取 java.get 字面量 + 两遍 ajax
         List<String> warmSeq = const []; // 热身遍 crypto 调用序列（hasCrypto 时填充）
         final cache = JsBridge.extractLiterals(html, baseUrl ?? '', body);
-        final getStringCache = JsBridge.extractGetStringCache(html, body);
+        final getStringCache = JsBridge.extractGetStringCache(html, body, baseUrl: baseUrl ?? '');
         final getStringListCache = JsBridge.extractGetStringListCache(html, body);
         await engine
             .eval(
@@ -181,14 +290,22 @@ class JsRuleExecutor {
                 getStringListCache: getStringListCache,
                 cookies: cookies,
                 jsLib: jsLib,
+                variables: variables,
+                cacheStore: cacheStore,
               ),
             )
             .timeout(evalTimeout);
 
-        if (hasAjax || hasCrypto || hasPost || hasHead) {
-          await engine.eval('try { ${_libPrefix(jsLib)} $body } catch (e) {}').timeout(evalTimeout);
+        if (hasAjax ||
+            hasAjaxAll ||
+            hasConnect ||
+            hasCrypto ||
+            hasPost ||
+            hasHead ||
+            hasGet2) {
+          await engine.eval('try { ${libPrefix()} $body } catch (e) {}').timeout(evalTimeout);
           // 用 try-catch 包裹——ajax 调用在异常前已记录 URL）
-          if (hasAjax) {
+          if (hasAjax || hasAjaxAll) {
             final urls = JsRecordReplay.parseUrls(
               (await engine
                       .eval('JSON.stringify(__ajaxUrls)')
@@ -200,6 +317,7 @@ class JsRuleExecutor {
                 urls,
                 baseUrl: baseUrl ?? '',
                 charset: charset,
+                baseHeaders: baseHeaders,
               );
               await engine
                   .eval('globalThis.__ajaxCache = ${jsonEncode(results)};')
@@ -208,21 +326,35 @@ class JsRuleExecutor {
             // 切换为真实 ajax 桥
             await engine.eval(JsBridge.ajaxRealBridge).timeout(evalTimeout);
           }
+          // post/head/get2(两参网络 GET) 统一读取抓取；get2 结果按
+          // body 串注入 __get2Cache（Legado get(url,headers) 返回 body）
+          final networkOps = await JsNetwork.readNetworkOps(engine);
+          if (networkOps.isNotEmpty) {
+            final results = await JsNetwork.fetchNetworkResults(
+              networkOps,
+              baseUrl: baseUrl ?? '',
+              charset: charset,
+              baseHeaders: baseHeaders,
+            );
+            final get2Cache = {
+              // get2 缓存键 = url|headersJson（与 JS 侧 __g2h 归一一致；
+              // 不用 op.key——那是 url|body|headers 三段格式）
+              for (final op in networkOps)
+                if (op.kind == 'get2')
+                  '${op.url}|${jsonEncode(op.headers)}':
+                      (results[op.key]?['body'] ?? '') as String,
+            };
+            final connectCache = _connectCacheOf(networkOps, results);
+            await engine
+                .eval(
+                  'globalThis.__postCache = ${jsonEncode(results)};'
+                  'globalThis.__headCache = ${jsonEncode(results)};'
+                  'globalThis.__get2Cache = ${jsonEncode(get2Cache)};'
+                  'globalThis.__connectCache = ${jsonEncode(connectCache)};',
+                )
+                .timeout(evalTimeout);
+          }
           if (hasPost || hasHead) {
-            final networkOps = await JsNetwork.readNetworkOps(engine);
-            if (networkOps.isNotEmpty) {
-              final results = await JsNetwork.fetchNetworkResults(
-                networkOps,
-                baseUrl: baseUrl ?? '',
-                charset: charset,
-              );
-              await engine
-                  .eval(
-                    'globalThis.__postCache = ${jsonEncode(results)};'
-                    'globalThis.__headCache = ${jsonEncode(results)};',
-                  )
-                  .timeout(evalTimeout);
-            }
             await engine.eval(JsBridge.networkRealBridge).timeout(evalTimeout);
           }
         }
@@ -232,8 +364,8 @@ class JsRuleExecutor {
           // 真实网络桥装好后热身重录（cryptoRecordBridge 重置记录数组），
           // 再按真实参数重建缓存
           await engine.eval(JsBridge.cryptoRecordBridge).timeout(evalTimeout);
-          await engine.eval('globalThis.__putMap = {};').timeout(evalTimeout);
-          await engine.eval('try { ${_libPrefix(jsLib)} $body } catch (e) {}').timeout(evalTimeout);
+          await engine.eval('globalThis.__putMap = $variablesJson;').timeout(evalTimeout);
+          await engine.eval('try { ${libPrefix()} $body } catch (e) {}').timeout(evalTimeout);
           final crypto = await JsCryptoCaches.fromEngine(engine);
           // 记录热身遍 crypto 调用序列（realBridge 装入时 __cryptoSeq 会重置）
           warmSeq =
@@ -243,10 +375,10 @@ class JsRuleExecutor {
 
         // 第二遍前重置 putMap：之前各遍占位桥（ajax/crypto 返回 ''）
         // 推导的键值若残留，get/getString 会优先命中旧值而不重算
-        await engine.eval('globalThis.__putMap = {};').timeout(evalTimeout);
+        await engine.eval('globalThis.__putMap = $variablesJson;').timeout(evalTimeout);
         // 第二遍：执行取最终值（jsLib 前缀与规则体同串）
         final result =
-            await engine.eval('${_libPrefix(jsLib)}$body').timeout(evalTimeout);
+            await engine.eval('${libPrefix()}$body').timeout(evalTimeout);
         // 最终遍 crypto 调用序列与热身遍不一致（控制流依赖 crypto 结果时
         // 调用次数/顺序变化 → symmetric id 错位）→ 降级，不静默给错值
         if (hasCrypto) {
@@ -257,6 +389,7 @@ class JsRuleExecutor {
         final value = result.value.trim();
         await JsRecordReplay.mergePutMap(engine, variables);
         await JsRecordReplay.mergeCookies(engine, cookies);
+        await _persistCachePuts(engine);
         return value.isEmpty || value == 'undefined' ? null : value;
       }
 
@@ -266,17 +399,21 @@ class JsRuleExecutor {
             JsBridge.recordPrelude(
               html,
               baseUrl ?? '',
-              getStringCache: JsBridge.extractGetStringCache(html, body),
-              getStringListCache: JsBridge.extractGetStringListCache(html, body),
+              getStringCache:
+                  JsBridge.extractGetStringCache(html, body, baseUrl: baseUrl ?? ''),
+              getStringListCache:
+                  JsBridge.extractGetStringListCache(html, body),
               cookies: cookies,
+              variables: variables,
+              cacheStore: cacheStore,
             ),
           )
           .timeout(evalTimeout);
-      await engine.eval('try { ${_libPrefix(jsLib)} $body } catch (e) {}').timeout(evalTimeout);
+      await engine.eval('try { ${libPrefix()} $body } catch (e) {}').timeout(evalTimeout);
       var ops = await JsRecordReplay.readOps(engine);
 
-      if (hasAjax || hasPost || hasHead) {
-        if (hasAjax) {
+      if (hasAjax || hasAjaxAll || hasConnect || hasPost || hasHead || hasGet2) {
+        if (hasAjax || hasAjaxAll) {
           final urls = JsRecordReplay.parseUrls(
             (await engine
                     .eval('JSON.stringify(__ajaxUrls)')
@@ -288,29 +425,13 @@ class JsRuleExecutor {
               urls,
               baseUrl: baseUrl ?? '',
               charset: charset,
+              baseHeaders: baseHeaders,
             );
             await engine
                 .eval('globalThis.__ajaxCache = ${jsonEncode(results)};')
                 .timeout(evalTimeout);
           }
           await engine.eval(JsBridge.ajaxRealBridge).timeout(evalTimeout);
-        }
-        if (hasPost || hasHead) {
-          final networkOps = await JsNetwork.readNetworkOps(engine);
-          if (networkOps.isNotEmpty) {
-            final results = await JsNetwork.fetchNetworkResults(
-              networkOps,
-              baseUrl: baseUrl ?? '',
-              charset: charset,
-            );
-            await engine
-                .eval(
-                  'globalThis.__postCache = ${jsonEncode(results)};'
-                  'globalThis.__headCache = ${jsonEncode(results)};',
-                )
-                .timeout(evalTimeout);
-          }
-          await engine.eval(JsBridge.networkRealBridge).timeout(evalTimeout);
         }
         // setContent 参数依赖 ajax/post 结果（第一遍记录为空）时，
         // 用真实结果重新记录一遍（此时 setContent 拿到真实 html）
@@ -319,12 +440,44 @@ class JsRuleExecutor {
         );
         if (staleSetContent) {
           // 先切换真实网络桥（保留 get/setContent 记录桥），
-          // 否则 c=java.ajax(u); setContent(c) 重录仍记录空 html
+          // 否则 c=java.ajax(u); setContent(c) 重录仍记录空 html。
+          // 网络 op 一并清空：重录后的 post/head/get2 参数才是真实值
           await engine.eval(
-            'globalThis.__ops = []; globalThis.__docIndex = 0;',
+            'globalThis.__ops = []; globalThis.__docIndex = 0;'
+            'globalThis.__postOps = []; globalThis.__headOps = [];'
+            'globalThis.__get2Ops = [];',
           );
-          await engine.eval('try { ${_libPrefix(jsLib)} $body } catch (e) {}').timeout(evalTimeout);
+          await engine.eval('try { ${libPrefix()} $body } catch (e) {}').timeout(evalTimeout);
           ops = await JsRecordReplay.readOps(engine);
+        }
+        // 读取并抓取 post/head/get2（重录后参数为真实值）
+        final networkOps = await JsNetwork.readNetworkOps(engine);
+        if (networkOps.isNotEmpty) {
+          final results = await JsNetwork.fetchNetworkResults(
+            networkOps,
+            baseUrl: baseUrl ?? '',
+            charset: charset,
+            baseHeaders: baseHeaders,
+          );
+          final get2Cache = {
+            // get2 缓存键 = url|headersJson（与 JS 侧 __g2h 归一一致）
+            for (final op in networkOps)
+              if (op.kind == 'get2')
+                '${op.url}|${jsonEncode(op.headers)}':
+                    (results[op.key]?['body'] ?? '') as String,
+          };
+          final connectCache = _connectCacheOf(networkOps, results);
+          await engine
+              .eval(
+                'globalThis.__postCache = ${jsonEncode(results)};'
+                'globalThis.__headCache = ${jsonEncode(results)};'
+                'globalThis.__get2Cache = ${jsonEncode(get2Cache)};'
+                'globalThis.__connectCache = ${jsonEncode(connectCache)};',
+              )
+              .timeout(evalTimeout);
+        }
+        if (hasPost || hasHead) {
+          await engine.eval(JsBridge.networkRealBridge).timeout(evalTimeout);
         }
       }
 
@@ -350,8 +503,8 @@ class JsRuleExecutor {
         // crypto 参数常依赖提取值/ajax 真实结果（记录遍占位 '' 的参数有误）：
         // finalPrelude 装好后热身重录，按真实参数重建缓存
         await engine.eval(JsBridge.cryptoRecordBridge).timeout(evalTimeout);
-        await engine.eval('globalThis.__putMap = {};').timeout(evalTimeout);
-        await engine.eval('try { ${_libPrefix(jsLib)} $body } catch (e) {}').timeout(evalTimeout);
+        await engine.eval('globalThis.__putMap = $variablesJson;').timeout(evalTimeout);
+        await engine.eval('try { ${libPrefix()} $body } catch (e) {}').timeout(evalTimeout);
         final crypto = await JsCryptoCaches.fromEngine(engine);
         // 记录热身遍 crypto 调用序列（realBridge 装入时 __cryptoSeq 会重置）
         warmSeq =
@@ -363,7 +516,7 @@ class JsRuleExecutor {
       // putMap 占位推导值都不能带入最终遍
       await engine
           .eval(
-            'globalThis.__putMap = {};'
+            'globalThis.__putMap = $variablesJson;'
             'globalThis.__getIdx = 0;'
             'globalThis.__getElementsIdx = 0;'
             'globalThis.__getSelectors = [];',
@@ -372,7 +525,7 @@ class JsRuleExecutor {
 
       // 最终遍：执行取最终值（jsLib 前缀与规则体同串）
       final result =
-          await engine.eval('${_libPrefix(jsLib)}$body').timeout(evalTimeout);
+          await engine.eval('${libPrefix()}$body').timeout(evalTimeout);
       // 一致性校验：最终遍实际消费的 get/getElements 序列与记录遍不一致
       // （控制流依赖占位 '' 结果）时，值表已错位，结果不可信 → 降级
       if (await JsRecordReplay.isGetSequenceMismatch(engine, ops)) {
@@ -388,6 +541,7 @@ class JsRuleExecutor {
       final value = result.value.trim();
       await JsRecordReplay.mergePutMap(engine, variables);
       await JsRecordReplay.mergeCookies(engine, cookies);
+      await _persistCachePuts(engine);
       return value.isEmpty || value == 'undefined' ? null : value;
     } on TimeoutException {
       recycled = true;
@@ -621,6 +775,125 @@ class JsRuleExecutor {
         } catch (_) {}
       }
     }
+  }
+
+  /// 求值 URL 中的裸 JS 段（全 JS URL / 选项 js 字段，Legado AnalyzeUrl.evalJS
+  /// 语义）：绑定 key、page、baseUrl、result 与 java 桥（模板同款两遍记录-
+  /// 重放，md5/base64 等取真实值）。返回字符串化结果；引擎不可用/超时/异常
+  /// 返回 null；黑名单命中返回空串（不给执行机会）。
+  static Future<String?> evalUrlJs(
+    String js, {
+    String? key,
+    int? page,
+    String? baseUrl,
+    String? result,
+  }) async {
+    if (js.trim().isEmpty) return null;
+    if (JsBridge.unsupported(js)) return '';
+    final manager = await _getManager();
+    if (manager == null) return null;
+    final engine = await _createEngine(manager, 'urljs');
+    if (engine == null) return null;
+    var recycled = false;
+    try {
+      final recordPrelude = JsRecordReplay.templateRecordPrelude(
+        const {},
+        '',
+        baseUrl ?? '',
+        page,
+        key: key,
+        result: result,
+      );
+      final script = 'try { $js } catch (e) { "" }';
+      await engine.eval(recordPrelude).timeout(evalTimeout);
+      await engine.eval(script).timeout(evalTimeout);
+      var caches = await JsRecordReplay.readTemplateCaches(engine, const {}, '');
+      for (var round = 0; round < 4; round++) {
+        await engine
+            .eval(
+              JsRecordReplay.templateRealPrelude(
+                caches.jsonCache,
+                caches.htmlCache,
+                caches.md5Cache,
+                caches.base64Cache,
+                caches.base64DecodeCache,
+                caches.base64DecodeByteCache,
+                caches.hmacCache,
+                caches.hmacBase64Cache,
+                caches.aesCache,
+                caches.aesBase64Cache,
+                caches.aesEncodeBase64Cache,
+                caches.hexEncodeCache,
+                caches.hexDecodeCache,
+                caches.uriCache,
+                caches.t2sCache,
+                caches.s2tCache,
+                caches.uuidCache,
+                caches.putCache,
+                caches.timeCache,
+                collect: true,
+              ),
+            )
+            .timeout(evalTimeout);
+        await engine.eval(script).timeout(evalTimeout);
+        final next = await JsRecordReplay.readTemplateCaches(engine, const {}, '');
+        if (next.argCount == caches.argCount) {
+          caches = next;
+          break;
+        }
+        caches = next;
+      }
+      await engine
+          .eval(
+            JsRecordReplay.templateRealPrelude(
+              caches.jsonCache,
+              caches.htmlCache,
+              caches.md5Cache,
+              caches.base64Cache,
+              caches.base64DecodeCache,
+              caches.base64DecodeByteCache,
+              caches.hmacCache,
+              caches.hmacBase64Cache,
+              caches.aesCache,
+              caches.aesBase64Cache,
+              caches.aesEncodeBase64Cache,
+              caches.hexEncodeCache,
+              caches.hexDecodeCache,
+              caches.uriCache,
+              caches.t2sCache,
+              caches.s2tCache,
+              caches.uuidCache,
+              caches.putCache,
+              caches.timeCache,
+            ),
+          )
+          .timeout(evalTimeout);
+      final out = await engine.eval(script).timeout(evalTimeout);
+      return _stringifyJsValue(out.value);
+    } on TimeoutException {
+      recycled = true;
+      await _recycle();
+      return null;
+    } catch (_) {
+      recycled = true;
+      await _recycle();
+      return null;
+    } finally {
+      if (!recycled) {
+        try {
+          await engine.dispose();
+        } catch (_) {}
+      }
+    }
+  }
+
+  /// JS 结果字符串化：字符串原样、对象/数组 JSON、数字/布尔 toString、
+  /// null/undefined → null。
+  static String? _stringifyJsValue(dynamic value) {
+    if (value == null) return null;
+    if (value is String) return value;
+    if (value is Map || value is List) return jsonEncode(value);
+    return value.toString();
   }
 
 

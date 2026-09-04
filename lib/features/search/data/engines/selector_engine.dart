@@ -107,6 +107,22 @@ class SelectorEngine {
 
   static List<dom.Element> xpathQueryAll(dom.Node root, XPathStep step) {
     try {
+      // 含 !=/or/not 等无法用纯 CSS 表达的条件：先按 tag 粗查再逐元素匹配
+      final needsElementFilter = step.segment.conditions.any(
+        (c) => !c.cssExpressible,
+      );
+      if (needsElementFilter) {
+        final tagCss = step.segment.tag == '*' ? '*' : step.segment.tag;
+        final candidates = root is dom.Document
+            ? root.querySelectorAll(tagCss)
+            : (root is dom.Element
+                ? root.querySelectorAll(tagCss)
+                : const <dom.Element>[]);
+        return [
+          for (final element in candidates)
+            if (SelectorEngine.xpathElementMatches(element, step)) element,
+        ];
+      }
       final css = SelectorEngine.xpathStepCss(step);
       if (root is dom.Document) {
         if (css == 'html') {
@@ -176,6 +192,32 @@ class SelectorEngine {
         endIndex = positionLt.group(1) == '<' ? n - 1 : n;
         continue;
       }
+      // last() / last()-N：倒数第 1 / 第 N+1 个（负索引语义）
+      final lastMatch =
+          RegExp(r'^last\(\)\s*(?:-\s*(\d+))?$').firstMatch(predicate);
+      if (lastMatch != null) {
+        final offset = lastMatch.group(1) == null
+            ? 0
+            : int.parse(lastMatch.group(1)!);
+        index = -(1 + offset);
+        continue;
+      }
+      // or 组合：全部备选解析为条件（元素级过滤）
+      if (predicate.toLowerCase().contains(' or ')) {
+        final alternatives = <XPathCondition>[];
+        var valid = true;
+        for (final rawAlternative in predicate.split(RegExp(r'\s+or\s+', caseSensitive: false))) {
+          final alt = SelectorEngine.xpathCondition(rawAlternative.trim());
+          if (alt == null) {
+            valid = false;
+            break;
+          }
+          alternatives.add(alt);
+        }
+        if (!valid) return null;
+        conditions.add(XPathCondition.or(alternatives));
+        continue;
+      }
       for (final rawCondition
           in predicate.toLowerCase().split(' and ')) {
         final condition = SelectorEngine.xpathCondition(rawCondition.trim());
@@ -217,6 +259,33 @@ class SelectorEngine {
         contains.group(2) ?? contains.group(3),
       );
     }
+    final starts = RegExp(
+      r"""^starts-with\(\s*@([\w-]+)\s*,\s*(?:'([^']*)'|"([^"]*)")\)$""",
+    ).firstMatch(condition);
+    if (starts != null) {
+      return XPathCondition(
+        starts.group(1)!,
+        'starts',
+        starts.group(2) ?? starts.group(3),
+      );
+    }
+    final notEquals = RegExp(
+      r"""^@([\w-]+)\s*!=\s*(?:'([^']*)'|"([^"]*)")$""",
+    ).firstMatch(condition);
+    if (notEquals != null) {
+      return XPathCondition(
+        notEquals.group(1)!,
+        'ne',
+        notEquals.group(2) ?? notEquals.group(3),
+      );
+    }
+    // not(@a) / not(@a='v') / not(contains(@a,'v'))
+    final notMatch = RegExp(r'^not\((.+)\)$').firstMatch(condition);
+    if (notMatch != null) {
+      final inner = SelectorEngine.xpathCondition(notMatch.group(1)!.trim());
+      if (inner != null) return XPathCondition.not(inner);
+      return null;
+    }
     return null;
   }
 
@@ -236,6 +305,8 @@ class SelectorEngine {
           }
         case 'contains':
           buffer.write('[${condition.attr}*="${condition.value ?? ''}"]');
+        case 'starts':
+          buffer.write('[${condition.attr}^="${condition.value ?? ''}"]');
       }
     }
     return buffer.toString();
@@ -257,19 +328,43 @@ class SelectorEngine {
       return false;
     }
     for (final condition in step.segment.conditions) {
-      final value = element.attributes[condition.attr];
-      switch (condition.op) {
-        case 'exists':
-          if (value == null) return false;
-        case 'eq':
-          if (value != condition.value) return false;
-        case 'contains':
-          if (value == null || !value.contains(condition.value ?? '')) {
-            return false;
-          }
+      if (!SelectorEngine._xpathConditionMatches(element, condition)) {
+        return false;
       }
     }
     return true;
+  }
+
+  /// 单条件元素级匹配（exists/eq/contains/starts/ne/not/or 全支持）
+  static bool _xpathConditionMatches(
+    dom.Element element,
+    XPathCondition condition,
+  ) {
+    switch (condition.op) {
+      case 'or':
+        return (condition.alternatives ?? const []).any(
+          (alt) => SelectorEngine._xpathConditionMatches(element, alt),
+        );
+      case 'not':
+        return !SelectorEngine._xpathConditionMatches(
+          element,
+          condition.inner!,
+        );
+    }
+    final value = element.attributes[condition.attr];
+    switch (condition.op) {
+      case 'exists':
+        return value != null;
+      case 'eq':
+        return value == condition.value;
+      case 'contains':
+        return value != null && value.contains(condition.value ?? '');
+      case 'starts':
+        return value != null && value.startsWith(condition.value ?? '');
+      case 'ne':
+        return value != condition.value;
+    }
+    return false;
   }
 
   /// 在文档/元素内按规则查询元素（供 JS 模板引擎复用级联/前缀语法）
@@ -328,7 +423,12 @@ class SelectorEngine {
         // Legado/Java 语义：replaceFirst 未命中时返回原值，
         // 而不是把替换串本身当作结果（那会污染字段值）。
         if (match == null) return value;
-        return SelectorEngine.expandReplacement(match, suffix.replacement);
+        // 仅首处替换：把展开后的替换串拼回原值（此前只返回替换串）
+        return value.replaceRange(
+          match.start,
+          match.end,
+          SelectorEngine.expandReplacement(match, suffix.replacement),
+        );
       }
       return value.replaceAllMapped(
         regex,
@@ -506,28 +606,48 @@ class SelectorEngine {
   }
 
   /// 展开索引集合：整数直接保留，范围按实际列表长度生成（含负索引）。
+  /// 对齐 Legado AnalyzeByJSoup getElementsSingle 的区间语义：
+  /// 端点省略（start=0/end=len-1）、同侧越界整体无效、
+  /// 方向由端点大小决定（end<start 降序，`[-1:0]` 反向即此路径）、
+  /// start==end 或步长≥列表长时仅取 start。
   static List<int> expandIndexes(int length, List<Object> indexes) {
     final result = <int>[];
     for (final index in indexes) {
       if (index is int) {
         result.add(index);
       } else if (index is IndexRange) {
-        var start = index.start;
-        var end = index.end;
+        var start = index.startOpen ? 0 : index.start;
+        var end = index.endOpen ? length - 1 : index.end;
         if (start < 0) start += length;
         if (end < 0) end += length;
+        // 同侧越界：区间整体无效，跳过（Legado: continue）
+        if ((start < 0 && end < 0) || (start >= length && end >= length)) {
+          continue;
+        }
         start = start.clamp(0, length - 1);
         end = end.clamp(0, length - 1);
         if (index.reverse) {
           for (var i = length - 1; i >= 0; i--) {
             result.add(i);
           }
-        } else if (index.step > 0) {
-          for (var i = start; i <= end; i += index.step) {
+          continue;
+        }
+        final step = index.step;
+        // 两端相同或步长≥列表长：区间实际仅首元素（Legado 语义）
+        if (start == end || step >= length) {
+          result.add(start);
+          continue;
+        }
+        final effectiveStep = step > 0
+            ? step
+            : (-step < length ? step + length : 1);
+        if (end > start) {
+          for (var i = start; i <= end; i += effectiveStep) {
             result.add(i);
           }
         } else {
-          for (var i = start; i >= end; i += index.step) {
+          // 降序（Legado start downTo end step step）
+          for (var i = start; i >= end; i -= effectiveStep) {
             result.add(i);
           }
         }
@@ -600,5 +720,29 @@ class XPathCondition {
   final String op;
   final String? value;
 
-  const XPathCondition(this.attr, this.op, [this.value]);
+  /// `or` 的备选条件（op='or' 时非空）
+  final List<XPathCondition>? alternatives;
+
+  /// `not(...)` 包裹的内部条件（op='not' 时非空）
+  final XPathCondition? inner;
+
+  const XPathCondition(this.attr, this.op, [this.value])
+      : alternatives = null,
+        inner = null;
+
+  const XPathCondition.or(this.alternatives)
+      : attr = '',
+        op = 'or',
+        value = null,
+        inner = null;
+
+  const XPathCondition.not(this.inner)
+      : attr = '',
+        op = 'not',
+        value = null,
+        alternatives = null;
+
+  /// 是否可用纯 CSS 表达（starts-with 用 `^=`；!=/or/not 需元素级过滤）
+  bool get cssExpressible =>
+      op == 'exists' || op == 'eq' || op == 'contains' || op == 'starts';
 }

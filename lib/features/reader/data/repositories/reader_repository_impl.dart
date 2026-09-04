@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
+import 'package:dio/dio.dart' show DioException;
 import 'package:hive/hive.dart';
 import '../../../../core/database/hive_init.dart';
 import '../../../../core/data/cookie_jar_service.dart';
@@ -9,6 +11,8 @@ import '../../../../features/book_source/domain/entities/book_source.dart';
 import '../../../../features/book_source/domain/repositories/book_source_repository.dart';
 import '../../../../features/search/data/engines/js_rule_executor.dart';
 import '../../../../features/search/data/engines/rule_variables.dart';
+import '../../../../features/search/data/engines/url_spec.dart';
+import '../../../settings/domain/entities/chinese_conversion.dart';
 import '../../domain/entities/chapter.dart';
 import '../../domain/entities/chapter_catalog.dart';
 import '../../domain/entities/book_detail.dart';
@@ -20,10 +24,20 @@ import 'catalog_parser.dart';
 import 'content_extractor.dart';
 
 /// 章节加载失败时抛出的业务异常，由 UI 转成可重试的错误态。
+/// 章节加载错误类别（自动换源判定依据，对齐 Legado 仅书源级失败
+/// 才自动换源、瞬时网络错误不触发的精神）：
+/// - sourceError：书源/规则层失败（书源不可用/无法定位/内容为空）
+/// - networkError：瞬时网络异常（超时/断网等），自动换源不触发
+enum ChapterErrorKind { sourceError, networkError }
+
 class ChapterLoadException implements Exception {
   final String message;
+  final ChapterErrorKind kind;
 
-  const ChapterLoadException(this.message);
+  const ChapterLoadException(
+    this.message, {
+    this.kind = ChapterErrorKind.sourceError,
+  });
 
   @override
   String toString() => message;
@@ -55,10 +69,20 @@ class ReaderRepositoryImpl implements ReaderRepository {
     PurifyPipeline? pipeline,
     BookSourceRepository? sourceRepo,
     CookieJarService? cookieJar,
+    Duration? contentRetryInterval,
+    this.cacheByteBudget,
   })  : _client = client ?? DioClient(),
         _pipeline = pipeline ?? PurifyPipeline(),
         _sourceRepo = sourceRepo ?? _EmptySourceRepo(),
-        _cookieJar = cookieJar ?? CookieJarService();
+        _cookieJar = cookieJar ?? CookieJarService(),
+        contentRetryInterval = contentRetryInterval ?? const Duration(seconds: 1);
+
+  /// 正文页抓取重试间隔（§三-12，Legado CacheBook 失败重试 3 次；
+  /// 测试可注入短间隔）。
+  final Duration contentRetryInterval;
+
+  /// 章节缓存总字节预算（§三-6；null 用默认 64MB，测试可注入小值）。
+  final int? cacheByteBudget;
 
   /// 运行时注入净化规则（用户配置加载完成后调用）
   void setPipeline(PurifyPipeline pipeline) {
@@ -67,6 +91,28 @@ class ReaderRepositoryImpl implements ReaderRepository {
 
   Future<BookSource?> _getSource(String sourceId) async {
     return _sourceRepo.getById(sourceId);
+  }
+
+  /// 封面/正文图片字节获取（§三-3 防盗链，对齐 Legado
+  /// OkHttpStreamFetcher：带书源 headers + cookie 请求图片）。
+  /// 相对 URL 基于书源地址解析；[sourceId] 为空或书源缺失时直取。
+  Future<Uint8List> fetchImageBytes(
+    String url, {
+    String? sourceId,
+    Map<String, String>? headers,
+  }) async {
+    var target = url;
+    Map<String, String> effective = {...?headers};
+    if (sourceId != null && sourceId.isNotEmpty) {
+      final source = await _getSource(sourceId);
+      if (source != null) {
+        if (target.isNotEmpty && !target.startsWith('http')) {
+          target = CatalogParser.resolveUrl(source.bookSourceUrl, target);
+        }
+        effective = {...await _requestHeaders(source, sourceId), ...?headers};
+      }
+    }
+    return _client.getBytes(target, headers: effective, sourceId: sourceId);
   }
 
   Future<Map<String, String>> _requestHeaders(
@@ -89,13 +135,19 @@ class ReaderRepositoryImpl implements ReaderRepository {
     String url,
     Map<String, String> headers, {
     String? charset,
+    String method = 'GET',
+    String? body,
+    int retry = 0,
   }) async {
-    final html = await _client.getString(
+    final html = await _client.requestString(
       url,
+      method: method,
+      body: body,
       headers: headers.isEmpty ? null : headers,
       sourceId: sourceId,
       concurrentRate: source.concurrentRate,
       charset: charset,
+      retry: retry,
     );
     final loginCheckJs = source.loginCheckJs;
     if (loginCheckJs == null || loginCheckJs.trim().isEmpty) return html;
@@ -113,7 +165,35 @@ class ReaderRepositoryImpl implements ReaderRepository {
       baseUrl: url,
       charset: charset,
       cookies: cookieStore,
+      cookieHeader: storedCookie,
     );
+    // 登录失效检测（§三-7，与 search 仓库 _applyLoginCheck 同语义）：
+    // error: 前缀（执行结果或规则原文）→ 专用登录失效错误；startBrowser
+    // 校验且无 Cookie → 需网页登录。分类为 sourceError（书源层失败，
+    // 自动换源可尝试其他源）。
+    final trimmed = value?.trim() ?? '';
+    final rawCheck = loginCheckJs.trim();
+    final expiredReason = trimmed.startsWith('error:')
+        ? trimmed.substring(6).trim()
+        : rawCheck.startsWith('error:')
+            ? rawCheck.substring(6).trim()
+            : null;
+    if (expiredReason != null) {
+      throw ChapterLoadException(
+        expiredReason.isEmpty ? '登录已失效，请重新登录书源' : '登录已失效：$expiredReason',
+        kind: ChapterErrorKind.sourceError,
+      );
+    }
+    final hasCookie =
+        (storedCookie?.isNotEmpty ?? false) || (headers['Cookie']?.isNotEmpty ?? false);
+    if (trimmed.isEmpty &&
+        !hasCookie &&
+        loginCheckJs.contains('startBrowser')) {
+      throw const ChapterLoadException(
+        '登录已失效，请在书源列表重新登录（该源校验需要网页登录）',
+        kind: ChapterErrorKind.sourceError,
+      );
+    }
     final updatedCookie = cookieStore[source.id] ??
         cookieStore[source.bookSourceUrl ?? ''] ??
         cookieStore[url] ??
@@ -130,6 +210,65 @@ class ReaderRepositoryImpl implements ReaderRepository {
     return value != null && value.isNotEmpty ? value : html;
   }
 
+  /// tocUrl/contentUrl/nextTocUrl 统一取回（P1：URL,{json} 选项 + 全 JS URL
+  /// 接入，对齐 Legado AnalyzeUrl）：全 JS URL 绑定 page/baseUrl 求值；
+  /// `,{json}` 选项支持 method/headers/body/charset/retry/js。
+  /// spec.headers 覆盖源级 headers（Legado putAll 顺序）；无选项时保持
+  /// 原 headers 引用语义（Cookie 回写传播给调用方）。
+  Future<String> _fetchRuleUrl(
+    BookSource source,
+    String sourceId,
+    String rawUrl,
+    Map<String, String> headers, {
+    int? page,
+  }) async {
+    final spec = await UrlSpec.parse(
+      rawUrl,
+      evalJs: (js, result) => JsRuleExecutor.evalUrlJs(
+        js,
+        page: page,
+        baseUrl: source.bookSourceUrl,
+        result: result,
+      ),
+    );
+    final merged =
+        spec.headers.isEmpty ? headers : {...headers, ...spec.headers};
+    return _getStringWithLoginCheck(
+      source,
+      sourceId,
+      spec.url,
+      merged,
+      charset: spec.charset ?? source.responseCharset,
+      method: spec.method,
+      body: spec.body,
+      retry: spec.retry,
+    );
+  }
+
+  /// 正文页抓取重试（§三-12，对齐 Legado CacheBook 失败重试 3 次）：
+  /// 仅重试瞬时网络异常（DioException），间隔 [contentRetryInterval]；
+  /// 书源级失败（ChapterLoadException）立即抛出。
+  static const int _contentRetryTimes = 3;
+
+  Future<String> _fetchContentPageWithRetry(
+    BookSource source,
+    String sourceId,
+    String rawUrl,
+    Map<String, String> headers, {
+    int? page,
+  }) async {
+    var attempt = 0;
+    while (true) {
+      attempt++;
+      try {
+        return await _fetchRuleUrl(source, sourceId, rawUrl, headers, page: page);
+      } on DioException {
+        if (attempt > _contentRetryTimes) rethrow;
+        await Future<void>.delayed(contentRetryInterval);
+      }
+    }
+  }
+
   @override
   Future<ChapterCatalog> getCatalog({
     required String bookId,
@@ -144,9 +283,12 @@ class ReaderRepositoryImpl implements ReaderRepository {
 
     final expandedDetailUrl = RuleVariables.expand(detailUrl, variables);
     final resolvedDetailUrl = CatalogParser.resolveUrl(source.bookSourceUrl, expandedDetailUrl);
-    // bookUrlPattern 最小接线：不匹配仅告警，不阻塞流程
+    // bookUrlPattern 生效（§三-10，Legado「链接为详情页」判定 BookList.kt:50）：
+    // 详情页 URL 与 pattern 不匹配 → 非该源的真实详情页，直接报错——
+    // 自动换源时无效候选被拒，正常加载给出明确错误而非错页解析。
+    // pattern 为空/非法正则时 matchesBookUrlPattern 返回 true 放行。
     if (!matchesBookUrlPattern(source.bookUrlPattern, resolvedDetailUrl)) {
-      // 不匹配仅告警，不阻塞流程
+      throw const ChapterLoadException('详情页 URL 与书源 bookUrlPattern 不匹配');
     }
     final cacheKey =
         '${bookId}_${sourceId}_$resolvedDetailUrl|'
@@ -158,7 +300,8 @@ class ReaderRepositoryImpl implements ReaderRepository {
         '${jsonEncode(source.requestHeaders)}|${source.responseCharset}|'
         '${jsonEncode(variables)}';
     if (_cachedCatalogKey == cacheKey && _cachedCatalog != null) {
-      return _cachedCatalog!;
+      // 目录标题净化在返回时套用（缓存存原始标题，改净化规则即生效）
+      return _purifyCatalogTitles(_cachedCatalog!, source, bookId);
     }
 
     try {
@@ -183,13 +326,7 @@ class ReaderRepositoryImpl implements ReaderRepository {
         );
         if (info.tocUrl.isNotEmpty && info.tocUrl != resolvedDetailUrl) {
           tocUrl = info.tocUrl;
-          tocHtml = await _getStringWithLoginCheck(
-            source,
-            sourceId,
-            tocUrl,
-            headers,
-            charset: source.responseCharset,
-          );
+          tocHtml = await _fetchRuleUrl(source, sourceId, tocUrl, headers);
         }
         _lastBookDetail = _toBookDetail(
           bookId: bookId,
@@ -217,13 +354,7 @@ class ReaderRepositoryImpl implements ReaderRepository {
         );
         if (nextUrl.isEmpty || !visited.add(nextUrl)) break;
         pageUrl = nextUrl;
-        pageHtml = await _getStringWithLoginCheck(
-          source,
-          sourceId,
-          pageUrl,
-          headers,
-          charset: source.responseCharset,
-        );
+        pageHtml = await _fetchRuleUrl(source, sourceId, nextUrl, headers);
       }
 
       final seen = <String>{};
@@ -251,12 +382,51 @@ class ReaderRepositoryImpl implements ReaderRepository {
       }
       _variablesCache['${bookId}_${sourceId}_$resolvedDetailUrl'] =
           Map.unmodifiable(variables);
-      return catalog;
+      // 目录标题净化在返回时套用（缓存保留原始标题）
+      return _purifyCatalogTitles(catalog, source, bookId);
+    } on ChapterLoadException {
+      rethrow;
     } catch (e) {
       // 目录加载失败（网络/解析）：抛错而非静默返空目录，
       // 避免上层误判"无章节"进而级联成无关的章节加载失败。
       throw const ChapterLoadException('目录加载失败');
     }
+  }
+
+  /// 目录标题净化（§三-10，Legado getDisplayTitle(titleReplaceRules)）：
+  /// 标题作用域规则在目录返回时套用，缓存保留原始标题——改净化规则
+  /// 下次取目录即生效（与正文净化双层时机同原则）。
+  Future<ChapterCatalog> _purifyCatalogTitles(
+    ChapterCatalog catalog,
+    BookSource source,
+    String bookId,
+  ) async {
+    if (catalog.chapters.isEmpty) return catalog;
+    // 书名净化参数只允许使用当前书的详情（与 getChapter 同守卫）
+    final effectiveBookName =
+        _lastBookDetail != null && _lastBookDetail!.bookId == bookId
+            ? _lastBookDetail!.name
+            : null;
+    final chapters = <ChapterItem>[];
+    for (final chapter in catalog.chapters) {
+      chapters.add(ChapterItem(
+        title: await _pipeline.purifyTitle(
+          chapter.title,
+          bookName: effectiveBookName,
+          sourceName: source.name,
+          sourceUrl: source.bookSourceUrl,
+        ),
+        url: chapter.url,
+        index: chapter.index,
+        variables: chapter.variables,
+        isVolume: chapter.isVolume,
+      ));
+    }
+    return ChapterCatalog(
+      bookId: catalog.bookId,
+      chapters: chapters,
+      fetchedAt: catalog.fetchedAt,
+    );
   }
 
   @override
@@ -292,6 +462,7 @@ class ReaderRepositoryImpl implements ReaderRepository {
     required String sourceId,
     String? detailUrl,
     Map<String, String> variables = const {},
+    ChineseConversionMode chineseMode = ChineseConversionMode.original,
   }) async {
     var effectiveVariables = variables;
     // 缓存 key 含 sourceId 与规则指纹：换源/改规则后不会读到旧内容。
@@ -325,7 +496,14 @@ class ReaderRepositoryImpl implements ReaderRepository {
           ),
         );
       }
-      return cached.toEntity();
+      // 用户净化规则在阅读时套用（缓存只存源规则后原文，
+      // 改规则无需清缓存即生效）
+      return _applyUserPurify(
+        cached.toEntity(),
+        source,
+        bookId,
+        chineseMode: chineseMode,
+      );
     }
 
     if (sourceId == localSourceId) {
@@ -347,6 +525,9 @@ class ReaderRepositoryImpl implements ReaderRepository {
       // 退化为正文 URL 模板 / detailUrl 兜底定位正文页。
       var chapterUrl = '';
       var chapterTitle = '';
+      // 下一章 URL：nextContentUrl 翻页的跨章守卫用（Legado
+      // BookContent.kt:47-52 nextUrl==nextChapterUrl 即停，防下章正文混入）
+      var nextChapterUrl = '';
       if (resolvedDetailUrl.isNotEmpty) {
         try {
           final catalog = await getCatalog(
@@ -364,6 +545,17 @@ class ReaderRepositoryImpl implements ReaderRepository {
           if (chapterIndex < catalog.chapters.length) {
             chapterUrl = catalog.chapters[chapterIndex].url;
             chapterTitle = catalog.chapters[chapterIndex].title;
+            if (chapterIndex + 1 < catalog.chapters.length) {
+              nextChapterUrl = catalog.chapters[chapterIndex + 1].url;
+              if (nextChapterUrl.isNotEmpty &&
+                  !nextChapterUrl.startsWith('http') &&
+                  resolvedDetailUrl.isNotEmpty) {
+                nextChapterUrl = CatalogParser.resolveUrl(
+                  resolvedDetailUrl,
+                  nextChapterUrl,
+                );
+              }
+            }
             effectiveVariables = {
               ...effectiveVariables,
               ...catalog.chapters[chapterIndex].variables,
@@ -402,13 +594,9 @@ class ReaderRepositoryImpl implements ReaderRepository {
         throw const ChapterLoadException('无法定位章节');
       }
       final headers = await _requestHeaders(source, sourceId);
-      final html = await _getStringWithLoginCheck(
-        source,
-        sourceId,
-        contentUrl,
-        headers,
-        charset: source.responseCharset,
-      );
+      // 正文页抓取带重试（§三-12）
+      final html =
+          await _fetchContentPageWithRetry(source, sourceId, contentUrl, headers);
 
       // 提取正文（支持 nextContentUrl 分页拼接）
       final contentParts = <String>[];
@@ -421,6 +609,7 @@ class ReaderRepositoryImpl implements ReaderRepository {
           pageHtml,
           pageUrl,
           effectiveVariables,
+          cookieHeader: headers['Cookie'],
         );
         if (part.isNotEmpty) contentParts.add(part);
         final nextRule = source.nextContentUrl;
@@ -432,14 +621,23 @@ class ReaderRepositoryImpl implements ReaderRepository {
           source,
           effectiveVariables,
         );
-        if (nextUrl.isEmpty || !visitedPages.add(nextUrl)) break;
+        // 跨章守卫：下一页 URL == 下一章 URL 时必须停（含解析到同一
+        // 绝对 URL 的相对/绝对差异），否则下一章正文混入当前章
+        if (nextUrl.isEmpty ||
+            (nextChapterUrl.isNotEmpty &&
+                (nextUrl == nextChapterUrl ||
+                    CatalogParser.resolveUrl(pageUrl, nextUrl) ==
+                        nextChapterUrl)) ||
+            !visitedPages.add(nextUrl)) {
+          break;
+        }
         pageUrl = nextUrl;
-        pageHtml = await _getStringWithLoginCheck(
+        // 翻页抓取同样带重试（§三-12）
+        pageHtml = await _fetchContentPageWithRetry(
           source,
           sourceId,
-          pageUrl,
+          nextUrl,
           headers,
-          charset: source.responseCharset,
         );
       }
       var content = contentParts.join('\n');
@@ -447,10 +645,17 @@ class ReaderRepositoryImpl implements ReaderRepository {
       // 明确报错，由 UI 展示错误+重试，避免把整页 HTML 当正文
       // （"像 Web"体验的根源）。
 
-      // ruleContent.replaceRegex：对提取的正文做正则替换。
-      // 兼容 legado 格式：JSON 数组字符串 ["pattern","replacement"] 优先，
-      // 否则 || 分隔（pattern||replacement）；格式非法/正则失败时跳过不报错。
-      content = ContentExtractor.applyContentReplaceRegex(source.contentReplaceRegex, content);
+      // ruleContent.replaceRegex：Legado 语义 = 作用于全文的完整规则
+      // （## 链为主流 / @js: 规则 / 存量 ["pat","rep"] 与 || 兼容）
+      content = await ContentExtractor.applyContentReplaceRegex(
+        source.contentReplaceRegex,
+        content,
+        baseUrl: contentUrl,
+        variables: effectiveVariables,
+        jsLib: source.jsLib,
+        charset: source.responseCharset,
+        cookieHeader: headers['Cookie'],
+      );
 
       // ruleContent.title：正文标题规则。先提取正文页标题，非空才覆盖
       // 章节标题（目录标题为空或与正文不一致时以此为准）。
@@ -476,15 +681,9 @@ class ReaderRepositoryImpl implements ReaderRepository {
           _lastBookDetail != null && _lastBookDetail!.bookId == bookId
               ? _lastBookDetail!.name
               : null;
-
-      // 无论规则提取还是兜底，统一经过净化管线；否则用户正则/JS 规则
-      // 在成功提取正文时会被绕过。
-      content = await _pipeline.purifyAsync(
-        content,
-        bookName: effectiveBookName,
-        sourceName: source.name,
-        sourceUrl: source.bookSourceUrl,
-      );
+      // 双层净化时机（对齐 Legado BookContent/ContentProcessor 分层）：
+      // 缓存层只存「源规则后原文」（图片 URL 解析 + 重复标题去除属源层），
+      // 用户净化规则（含书名/源作用域）阅读时套用——改规则不清缓存即生效。
       content = ContentExtractor.resolveImageUrls(content, contentUrl);
       content = ContentExtractor.removeRepeatedTitle(content, effectiveTitle);
 
@@ -493,16 +692,10 @@ class ReaderRepositoryImpl implements ReaderRepository {
       }
 
       final rawTitle = effectiveTitle.isEmpty ? '第${chapterIndex + 1}章' : effectiveTitle;
-      final title = await _pipeline.purifyTitle(
-        rawTitle,
-        bookName: effectiveBookName,
-        sourceName: source.name,
-        sourceUrl: source.bookSourceUrl,
-      );
       final chapter = Chapter(
         id: cacheKey,
         bookId: bookId,
-        title: title,
+        title: rawTitle,
         content: content,
         index: chapterIndex,
         sourceId: sourceId,
@@ -511,14 +704,68 @@ class ReaderRepositoryImpl implements ReaderRepository {
 
       await cacheBox.put(cacheKey, ChapterModel.fromEntity(chapter));
       await _trimCache(cacheBox);
-      return chapter;
+      // 用户净化规则在阅读时套用（返回值仍为净化后内容，缓存保留原文）
+      return _applyUserPurify(
+        chapter,
+        source,
+        bookId,
+        bookName: effectiveBookName,
+        chineseMode: chineseMode,
+      );
     } on ChapterLoadException {
       // 已含明确语义的错误（书源不可用/无法定位/内容为空）直接透传，
       // 不被兜底文案覆盖，便于用户定位问题。
       rethrow;
     } catch (_) {
-      throw const ChapterLoadException('章节加载失败，请检查网络或书源规则');
+      // 兜底 = 瞬时网络异常（超时/断网/SSL 等）：自动换源不触发，
+      // 由用户手动重试判断是否恢复。
+      throw const ChapterLoadException(
+        '章节加载失败，请检查网络或书源规则',
+        kind: ChapterErrorKind.networkError,
+      );
     }
+  }
+
+  /// 用户净化规则阅读时套用（Legado ContentProcessor.getContent 时机）：
+  /// 简繁转换先于净化规则（Legado getContent 顺序 chineseConvert → 替换
+  /// 规则，繁体站配简体净化规则可命中）；正文走内容作用域规则，标题走
+  /// 标题作用域规则；净化后为空且原文非空视为规则错误，报错而不展示
+  /// 空章节（与旧「净化后判空」行为一致）。
+  Future<Chapter> _applyUserPurify(
+    Chapter chapter,
+    BookSource? source,
+    String bookId, {
+    String? bookName,
+    ChineseConversionMode chineseMode = ChineseConversionMode.original,
+  }) async {
+    final convertedContent = ChineseConversion.convert(
+      chapter.content,
+      chineseMode,
+    );
+    final content = await _pipeline.purifyAsync(
+      convertedContent,
+      bookName: bookName,
+      sourceName: source?.name,
+      sourceUrl: source?.bookSourceUrl,
+    );
+    if (content.trim().isEmpty && chapter.content.trim().isNotEmpty) {
+      throw const ChapterLoadException('章节内容为空或解析失败，请重试或更换书源');
+    }
+    final title = await _pipeline.purifyTitle(
+      ChineseConversion.convert(chapter.title, chineseMode),
+      bookName: bookName,
+      sourceName: source?.name,
+      sourceUrl: source?.bookSourceUrl,
+    );
+    return Chapter(
+      id: chapter.id,
+      bookId: chapter.bookId,
+      title: title,
+      content: content,
+      index: chapter.index,
+      sourceId: chapter.sourceId,
+      cachedAt: chapter.cachedAt,
+    );
   }
 
   /// 章节缓存 key：本地书使用固定前缀；网络书源包含规则指纹，
@@ -676,19 +923,35 @@ class ReaderRepositoryImpl implements ReaderRepository {
     }
   }
 
-  /// 缓存上限控制：超过 [maxEntries] 时淘汰最旧的章节
+  /// 缓存上限控制：条目数 [maxEntries] + 总字节预算（§三-6；长章节下
+  /// 500 条可能体积过大，双限并行，超限淘汰最旧条目。体积以 content
+  /// 长度（UTF-16 码元数）近似计——预算为量级控制，非精确字节审计）。
   static const int maxEntries = 500;
+  static const int _defaultCacheByteBudget = 64 * 1024 * 1024;
 
   Future<void> _trimCache(Box<ChapterModel> box) async {
-    if (box.length <= maxEntries) return;
+    final budget = cacheByteBudget ?? _defaultCacheByteBudget;
+    var totalUnits = 0;
+    for (final entry in box.values) {
+      totalUnits += entry.content.length;
+    }
+    if (box.length <= maxEntries && totalUnits <= budget) return;
     final entries = box.values.toList()
       ..sort((a, b) {
         final at = a.cachedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
         final bt = b.cachedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
         return at.compareTo(bt);
       });
-    final toRemove = entries.take(entries.length - maxEntries).map((e) => e.key);
-    await box.deleteAll(toRemove);
+    // 从最旧开始淘汰，直到条目数与字节预算同时达标
+    final victims = <String>[];
+    var count = box.length;
+    for (final entry in entries) {
+      if (count <= maxEntries && totalUnits <= budget) break;
+      victims.add(entry.key);
+      count--;
+      totalUnits -= entry.content.length;
+    }
+    await box.deleteAll(victims);
   }
 }
 

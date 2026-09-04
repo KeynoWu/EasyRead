@@ -8,10 +8,53 @@ import 'package:easy_read/features/reader/data/models/reading_progress_model.dar
 import 'package:easy_read/features/reader/data/repositories/reader_repository_impl.dart';
 import 'package:easy_read/features/reader/domain/entities/chapter_catalog.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'dart:typed_data';
 import 'package:hive/hive.dart';
 
 /// 按 URL 返回不同 HTML 的 mock 客户端（同既有 reader 测试惯例）
 class _DynamicClient implements DioClient {
+  @override
+  Future<String> requestString(
+    String url, {
+    String method = 'GET',
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    int retry = 0,
+    CancelToken? cancelToken,
+  }) async {
+    if (method.toUpperCase() == 'POST' && body != null) {
+      return postForm(
+        url,
+        headers: headers,
+        body: body,
+        sourceId: sourceId,
+        concurrentRate: concurrentRate,
+        charset: charset,
+        cancelToken: cancelToken,
+      );
+    }
+    return getString(
+      url,
+      headers: headers,
+      sourceId: sourceId,
+      concurrentRate: concurrentRate,
+      charset: charset,
+      cancelToken: cancelToken,
+    );
+  }
+
+  @override
+  Future<Uint8List> getBytes(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? concurrentRate,
+    CancelToken? cancelToken,
+  }) async => Uint8List(0);
+
   _DynamicClient(this.responder);
 
   final String Function(String url) responder;
@@ -30,6 +73,19 @@ class _DynamicClient implements DioClient {
     CancelToken? cancelToken,
   }) async {
     return responder(url);
+  }
+
+  @override
+  @override
+  Future<(String, Map<String, List<String>>, int)> getResponse(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    return ('', const <String, List<String>>{}, 200);
   }
 
   @override
@@ -55,6 +111,19 @@ class _DynamicClient implements DioClient {
     CancelToken? cancelToken,
   }) async {
     return {};
+  }
+
+  @override
+  Future<(String, Map<String, List<String>>)> postFormFull(
+    String url, {
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    return ('', const <String, List<String>>{});
   }
 
   @override
@@ -529,7 +598,7 @@ void main() {
       );
     });
 
-    test('bookUrlPattern 不匹配时仅告警、不阻塞目录拉取', () async {
+    test('bookUrlPattern 不匹配时拒绝（Legado「链接为详情页」判定）', () async {
       const source = BookSource(
         id: 'pattern-src',
         name: '匹配源',
@@ -551,9 +620,45 @@ void main() {
         client: client,
         sourceRepo: _SourceRepo(source),
       );
+      // 详情页 URL 与 pattern 不匹配 → 报错（换源时无效候选被拒）
+      await expectLater(
+        repo.getCatalog(
+          bookId: 'book1',
+          sourceId: 'pattern-src',
+          detailUrl: 'https://example.com/book/1',
+        ),
+        throwsA(
+          isA<ChapterLoadException>()
+              .having((e) => e.message, 'message', contains('bookUrlPattern')),
+        ),
+      );
+    });
+
+    test('bookUrlPattern 匹配时正常拉取目录', () async {
+      const source = BookSource(
+        id: 'pattern-src-ok',
+        name: '匹配源',
+        bookSourceUrl: 'https://example.com',
+        rules: {
+          'bookUrlPattern': r'^https://example\.com/',
+          'chapterList': 'ul > li',
+          'chapterName': 'a',
+          'chapterUrl': 'a@href',
+        },
+      );
+      final client = _DynamicClient((url) {
+        if (url.contains('/book/')) {
+          return '<ul><li><a href="https://example.com/ch/1">第一章</a></li></ul>';
+        }
+        return '<div><p>正文。</p></div>';
+      });
+      final repo = ReaderRepositoryImpl(
+        client: client,
+        sourceRepo: _SourceRepo(source),
+      );
       final catalog = await repo.getCatalog(
         bookId: 'book1',
-        sourceId: 'pattern-src',
+        sourceId: 'pattern-src-ok',
         detailUrl: 'https://example.com/book/1',
       );
       expect(catalog.chapters, hasLength(1));

@@ -89,13 +89,163 @@ class JsBridge {
     return cache;
   }
 
-  static Map<String, String> extractGetStringCache(String html, String body) {
+  /// getString/getStringList 调用参数解析（逐字符，不依赖正则组）：
+  /// 返回 (path, mContent, isUrl, unescape)。
+  /// 引号参数为 mContent；布尔按位置：第 1 参布尔=unescape（Legado
+  /// getString(rule, unescape) 重载）、第 2 参布尔=isUrl。
+  static ({String path, String? mContent, bool isUrl, bool unescape})
+  _parseGetStringCall(String call) {
+    final open = call.indexOf('(');
+    final close = call.lastIndexOf(')');
+    if (open < 0 || close <= open) {
+      return (path: '', mContent: null, isUrl: false, unescape: false);
+    }
+    var rest = call.substring(open + 1, close);
+    final args = <String>[];
+    while (rest.trim().isNotEmpty) {
+      // 跳过前导逗号/空白（`('a', '', true)` 中的分隔符不作为参数）
+      var r = rest.trimLeft();
+      while (r.startsWith(',')) {
+        r = r.substring(1).trimLeft();
+      }
+      if (r.isEmpty) break;
+      if (r.startsWith("'") || r.startsWith('"')) {
+        final quote = r[0];
+        var end = 1;
+        while (end < r.length && r[end] != quote) {
+          end++;
+        }
+        args.add(r.substring(1, end));
+        rest = end + 1 < r.length ? r.substring(end + 1) : '';
+      } else {
+        final comma = r.indexOf(',');
+        if (comma < 0) {
+          args.add(r);
+          rest = '';
+        } else {
+          args.add(r.substring(0, comma).trim());
+          rest = r.substring(comma + 1);
+        }
+      }
+    }
+    var path = args.isNotEmpty ? args[0] : '';
+    String? mContent;
+    var isUrl = false;
+    var unescape = false;
+    if (args.length > 1) {
+      final second = args[1];
+      if (second == 'true' || second == 'false') {
+        unescape = second == 'true'; // Legado getString(rule, unescape)
+      } else {
+        mContent = second;
+      }
+    }
+    if (args.length > 2) {
+      final third = args[2];
+      if (third == 'true' || third == 'false') {
+        isUrl = third == 'true';
+      } else if (mContent == null && third.isNotEmpty) {
+        mContent = third;
+      }
+    }
+    if (path.startsWith("'") || path.startsWith('"')) {
+      path = path.substring(1, path.length - 1);
+    }
+    return (path: path, mContent: mContent, isUrl: isUrl, unescape: unescape);
+  }
+
+  /// HTML 实体反转义（Legado getString(rule, unescape) 语义）：
+  /// 命名实体（amp/lt/gt/quot/apos）与数值实体（&#N; / &#xN;）
+  static String htmlUnescape(String input) {
+    if (!input.contains('&')) return input;
+    final buffer = StringBuffer();
+    final named = <String, String>{
+      'amp': '&',
+      'lt': '<',
+      'gt': '>',
+      'quot': '"',
+      'apos': "'",
+    };
+    var i = 0;
+    while (i < input.length) {
+      final amp = input.indexOf('&', i);
+      if (amp < 0) {
+        buffer.write(input.substring(i));
+        break;
+      }
+      buffer.write(input.substring(i, amp));
+      final semi = input.indexOf(';', amp);
+      if (semi < 0 || semi - amp > 12) {
+        buffer.write('&');
+        i = amp + 1;
+        continue;
+      }
+      final entity = input.substring(amp + 1, semi);
+      String? decoded;
+      if (entity.startsWith('#x') || entity.startsWith('#X')) {
+        final code = int.tryParse(entity.substring(2), radix: 16);
+        if (code != null) decoded = String.fromCharCode(code);
+      } else if (entity.startsWith('#')) {
+        final code = int.tryParse(entity.substring(1));
+        if (code != null) decoded = String.fromCharCode(code);
+      } else {
+        decoded = named[entity];
+      }
+      if (decoded != null) {
+        buffer.write(decoded);
+        i = semi + 1;
+      } else {
+        buffer.write('&');
+        i = amp + 1;
+      }
+    }
+    return buffer.toString();
+  }
+
+  /// 相对 URL 解析为绝对（Legado getString(rule, mContent, isUrl) 语义）
+  static String resolveIfUrl(String value, String baseUrl) {
+    if (!value.startsWith('http://') && !value.startsWith('https://')) {
+      try {
+        final uri = Uri.parse(baseUrl).resolve(value);
+        if (uri.scheme == 'http' || uri.scheme == 'https') {
+          return uri.toString();
+        }
+      } catch (_) {}
+    }
+    return value;
+  }
+
+  static Map<String, String> extractGetStringCache(
+    String html,
+    String body, {
+    String baseUrl = '',
+  }) {
     final cache = <String, String>{};
-    final re = RegExp("java\\.getString\\(\\s*('([^']*)'|\"([^\"]*)\")");
-    for (final m in re.allMatches(body)) {
-      final path = m.group(2) ?? m.group(3) ?? '';
-      if (path.isEmpty || cache.containsKey(path)) continue;
-      cache[path] = queryGetString(html, path);
+    // java.getString('path'[, mContent][, isUrl]) / (rule, unescape)
+    // 用调用级扫描 + 参数解析器（正则捕获组在 Dart RegExp 下嵌套可选组
+    // 行为不稳，此处只找调用边界，参数逐字符解析）
+    for (final call in RegExp(r'java\.getString\([^)]*\)').allMatches(body)) {
+      final parsed = _parseGetStringCall(call.group(0)!);
+      final path = parsed.path;
+      if (path.isEmpty) continue;
+      var mContent = parsed.mContent;
+      var isUrlFlag = parsed.isUrl ? 'true' : '';
+      var unescapeFlag = parsed.unescape ? 'true' : '';
+      if (mContent != null && (mContent == 'true' || mContent == 'false')) {
+        // 2 参单布尔重载：unescape（Legado AnalyzeRule.kt:251）
+        unescapeFlag = mContent;
+        mContent = null;
+      }
+      final key = '$path|${mContent ?? ''}|$isUrlFlag|$unescapeFlag';
+      if (cache.containsKey(key)) continue;
+      var value = queryGetString(html, path);
+      if (mContent != null && mContent.isNotEmpty) {
+        final fromContent = queryGetString(mContent, path);
+        if (fromContent.isNotEmpty) value = fromContent;
+      }
+      if (isUrlFlag == 'true') value = resolveIfUrl(value, baseUrl);
+      if (unescapeFlag == 'true') value = htmlUnescape(value);
+      cache[key] = value;
     }
     return cache;
   }
@@ -131,11 +281,29 @@ class JsBridge {
     String body,
   ) {
     final cache = <String, List<String>>{};
-    final re = RegExp("java\\.getStringList\\(\\s*('([^']*)'|\"([^\"]*)\")");
-    for (final m in re.allMatches(body)) {
-      final path = m.group(2) ?? m.group(3) ?? '';
-      if (path.isEmpty || cache.containsKey(path)) continue;
-      cache[path] = queryGetStringList(html, path);
+    for (final call
+        in RegExp(r'java\.getStringList\([^)]*\)').allMatches(body)) {
+      final parsed = _parseGetStringCall(call.group(0)!);
+      final path = parsed.path;
+      if (path.isEmpty) continue;
+      var mContent = parsed.mContent;
+      var isUrlFlag = parsed.isUrl ? 'true' : '';
+      var unescapeFlag = parsed.unescape ? 'true' : '';
+      if (mContent != null && (mContent == 'true' || mContent == 'false')) {
+        unescapeFlag = mContent;
+        mContent = null;
+      }
+      final key = '$path|${mContent ?? ''}|$isUrlFlag|$unescapeFlag';
+      if (cache.containsKey(key)) continue;
+      var values = queryGetStringList(html, path);
+      if (mContent != null && mContent.isNotEmpty) {
+        final fromContent = queryGetStringList(mContent, path);
+        if (fromContent.isNotEmpty) values = fromContent;
+      }
+      if (unescapeFlag == 'true') {
+        values = [for (final v in values) htmlUnescape(v)];
+      }
+      cache[key] = values;
     }
     return cache;
   }
@@ -173,10 +341,14 @@ class JsBridge {
     Map<String, List<String>> getStringListCache = const {},
     Map<String, String>? cookies,
     String? jsLib,
+    Map<String, String>? variables,
+    Map<String, String>? cacheStore,
   }) {
     final cacheJson = jsonEncode(cache);
+    final cacheStoreJson = jsonEncode(cacheStore ?? const {});
     final getStringCacheJson = jsonEncode(getStringCache);
     final getStringListCacheJson = jsonEncode(getStringListCache);
+    final variablesJson = jsonEncode(variables ?? const {});
     // jsLib 不在此注入：与规则体同一次 eval 才能共享顶层声明，
     // 由 JsRuleExecutor._libPrefix 拼接（见 jsLibScript 文档）。
     return '''
@@ -185,18 +357,104 @@ globalThis.baseUrl = ${quote(baseUrl)};
 globalThis.__javaCache = $cacheJson;
 globalThis.__getStringCache = $getStringCacheJson;
 globalThis.__getStringListCache = $getStringListCacheJson;
-globalThis.__putMap = {};
+globalThis.__putMap = $variablesJson;
 globalThis.__ajaxUrls = [];
 globalThis.__ajaxCache = {};
 globalThis.__postOps = [];
 globalThis.__headOps = [];
+globalThis.__ops = [];
+globalThis.__docIndex = 0;
+globalThis.__get2Ops = [];
+globalThis.__get2Cache = globalThis.__get2Cache || {};
+globalThis.__connectOps = [];
+globalThis.__connectCache = globalThis.__connectCache || {};
+globalThis.__g2h = (attr) => {
+  try {
+    return JSON.stringify(typeof attr === 'object' && attr !== null ? attr : JSON.parse(attr));
+  } catch (e) { return '{}'; }
+};
+globalThis.__cacheStore = $cacheStoreJson;
+globalThis.__cachePutOps = [];
+globalThis.cache = {
+  get: (key) => __cacheStore.hasOwnProperty(String(key)) ? __cacheStore[String(key)] : '',
+  put: (key, value, saveTime) => {
+    const v = String(value);
+    const t = saveTime === undefined || saveTime === null ? 0 : saveTime;
+    __cacheStore[String(key)] = v;
+    __cachePutOps.push([String(key), v, t]);
+    return '';
+  }
+};
 globalThis.java = {
   put: (key, value) => { __putMap[String(key)] = String(value); return ''; },
-  getString: (path) => __putMap[String(path)] || __getStringCache[String(path)] || __jsonPathGet(String(path), result) || '',
-  getStringList: (path) => __getStringListCache[String(path)] || __jsonPathGetAll(String(path), result),
-  get: (sel, attr) => __putMap[String(sel)] || __javaCache[sel + '|' + (attr || '')] || '',
+  cache: cache,
+  getString: (path, mContent, isUrl, unescape) => {
+    let mc = '', isu = '', un = '';
+    if (typeof mContent === 'boolean') { un = mContent ? 'true' : 'false'; }
+    else { mc = mContent === undefined || mContent === null ? '' : String(mContent); }
+    if (typeof isUrl === 'boolean') isu = isUrl ? 'true' : 'false';
+    if (typeof unescape === 'boolean') un = unescape ? 'true' : 'false';
+    const key = String(path) + '|' + mc + '|' + isu + '|' + un;
+    return __putMap[String(path)] || __getStringCache[key] || __jsonPathGet(String(path), result) || '';
+  },
+  getStringList: (path, mContent, isUrl, unescape) => {
+    let mc = '', isu = '', un = '';
+    if (typeof mContent === 'boolean') { un = mContent ? 'true' : 'false'; }
+    else { mc = mContent === undefined || mContent === null ? '' : String(mContent); }
+    if (typeof isUrl === 'boolean') isu = isUrl ? 'true' : 'false';
+    if (typeof unescape === 'boolean') un = unescape ? 'true' : 'false';
+    const key = String(path) + '|' + mc + '|' + isu + '|' + un;
+    return __getStringListCache[key] || __jsonPathGetAll(String(path), result);
+  },
+  get: (sel, attr) => {
+    if (__putMap.hasOwnProperty(String(sel))) return __putMap[String(sel)];
+    if (String(sel) === 'url') return baseUrl;
+    if (attr !== undefined && attr !== null && (typeof attr === 'object' || (typeof attr === 'string' && attr.trim().startsWith('{')))) {
+      const h = __g2h(attr);
+      const key = String(sel) + '|' + h;
+      if (__get2Cache[key] !== undefined) return __get2Cache[key];
+      __get2Ops.push([String(sel), h]);
+      return '';
+    }
+    // 静态预提取缓存 miss（运行时拼接的动态选择器）：记录 op 走
+    // 记录-重放路径（P1-7），不再静默返回空
+    const cached = __javaCache[sel + '|' + (attr || '')];
+    if (cached !== undefined) return cached;
+    __ops.push(['get', String(sel), attr === undefined ? null : String(attr), 0]);
+    return '';
+  },
   getElement: (sel, attr) => __putMap[String(sel)] || __javaCache[sel + '|' + (attr || '')] || '',
-  ajax: (url) => { __ajaxUrls.push(String(url)); return ''; },
+  ajax: (url) => {
+    const cached = __ajaxCache[String(url)];
+    if (cached !== undefined) return cached;
+    __ajaxUrls.push(String(url));
+    return '';
+  },
+  ajaxAll: (urls) => {
+    const missing = [];
+    (urls || []).forEach(function (u) {
+      const k = String(u);
+      if (__ajaxCache[k] === undefined) missing.push(k);
+    });
+    if (missing.length > 0) { __ajaxUrls.push.apply(__ajaxUrls, missing); return []; }
+    return (urls || []).map(function (u) { return __ajaxCache[String(u)] || ''; });
+  },
+  connect: (url, headerJson) => {
+    const h = headerJson === undefined || headerJson === null ? '{}' : (typeof headerJson === 'string' ? headerJson : JSON.stringify(headerJson));
+    const key = String(url) + '|' + h;
+    const cached = __connectCache[key];
+    if (cached !== undefined) {
+      return {
+        status: () => cached.status || 0,
+        header: (name) => cached.headers[String(name).toLowerCase()] || cached.headers[String(name)] || '',
+        headers: () => cached.headers,
+        cookies: () => cached.cookies,
+        body: () => cached.body
+      };
+    }
+    __connectOps.push([String(url), h]);
+    return { status: () => 0, header: () => '', headers: () => ({}), cookies: () => '', body: () => '' };
+  },
   post: (url, body, headers) => {
     __postOps.push([String(url), body === undefined || body === null ? '' : String(body), headers === undefined || headers === null ? {} : headers]);
     return { header: () => '', headers: () => ({}), cookies: () => '', body: () => '' };
@@ -240,9 +498,13 @@ ${cookieBridge(cookies ?? const {}, seed: true)}''';
     Map<String, String> getStringCache = const {},
     Map<String, List<String>> getStringListCache = const {},
     Map<String, String>? cookies,
+    Map<String, String>? variables,
+    Map<String, String>? cacheStore,
   }) {
     final getStringCacheJson = jsonEncode(getStringCache);
     final getStringListCacheJson = jsonEncode(getStringListCache);
+    final variablesJson = jsonEncode(variables ?? const {});
+    final cacheStoreJson = jsonEncode(cacheStore ?? const {});
     return '''
 globalThis.result = ${quote(html)};
 globalThis.baseUrl = ${quote(baseUrl)};
@@ -252,23 +514,69 @@ globalThis.__ajaxUrls = [];
 globalThis.__ajaxCache = {};
 globalThis.__postOps = [];
 globalThis.__headOps = [];
-globalThis.__putMap = {};
+globalThis.__get2Ops = [];
+globalThis.__get2Cache = globalThis.__get2Cache || {};
+globalThis.__connectOps = [];
+globalThis.__connectCache = globalThis.__connectCache || {};
+globalThis.__g2h = (attr) => {
+  try {
+    return JSON.stringify(typeof attr === 'object' && attr !== null ? attr : JSON.parse(attr));
+  } catch (e) { return '{}'; }
+};
+globalThis.__putMap = $variablesJson;
+globalThis.__cacheStore = $cacheStoreJson;
+globalThis.__cachePutOps = [];
+globalThis.cache = {
+  get: (key) => __cacheStore.hasOwnProperty(String(key)) ? __cacheStore[String(key)] : '',
+  put: (key, value, saveTime) => {
+    const v = String(value);
+    const t = saveTime === undefined || saveTime === null ? 0 : saveTime;
+    __cacheStore[String(key)] = v;
+    __cachePutOps.push([String(key), v, t]);
+    return '';
+  }
+};
 globalThis.__getStringCache = $getStringCacheJson;
 globalThis.__getStringListCache = $getStringListCacheJson;
 globalThis.java = {
   put: (key, value) => { __putMap[String(key)] = String(value); return ''; },
-  getString: (path) => __putMap[String(path)] || __getStringCache[String(path)] || __jsonPathGet(String(path), result) || '',
-  getStringList: (path) => __getStringListCache[String(path)] || __jsonPathGetAll(String(path), result),
+  cache: cache,
+  getString: (path, mContent, isUrl, unescape) => {
+    let mc = '', isu = '', un = '';
+    if (typeof mContent === 'boolean') { un = mContent ? 'true' : 'false'; }
+    else { mc = mContent === undefined || mContent === null ? '' : String(mContent); }
+    if (typeof isUrl === 'boolean') isu = isUrl ? 'true' : 'false';
+    if (typeof unescape === 'boolean') un = unescape ? 'true' : 'false';
+    const key = String(path) + '|' + mc + '|' + isu + '|' + un;
+    return __putMap[String(path)] || __getStringCache[key] || __jsonPathGet(String(path), result) || '';
+  },
+  getStringList: (path, mContent, isUrl, unescape) => {
+    let mc = '', isu = '', un = '';
+    if (typeof mContent === 'boolean') { un = mContent ? 'true' : 'false'; }
+    else { mc = mContent === undefined || mContent === null ? '' : String(mContent); }
+    if (typeof isUrl === 'boolean') isu = isUrl ? 'true' : 'false';
+    if (typeof unescape === 'boolean') un = unescape ? 'true' : 'false';
+    const key = String(path) + '|' + mc + '|' + isu + '|' + un;
+    return __getStringListCache[key] || __jsonPathGetAll(String(path), result);
+  },
   get: (sel, attr) => {
     if (__putMap.hasOwnProperty(String(sel))) return __putMap[String(sel)];
     if (String(sel) === 'url') return baseUrl;
+    if (attr !== undefined && attr !== null && (typeof attr === 'object' || (typeof attr === 'string' && attr.trim().startsWith('{')))) {
+      __get2Ops.push([String(sel), __g2h(attr)]);
+      return '';
+    }
     __ops.push(['get', String(sel), attr === undefined ? null : String(attr), __docIndex]);
     return '';
   },
   getElement: (sel, attr) => {
     if (__putMap.hasOwnProperty(String(sel))) return __putMap[String(sel)];
     if (String(sel) === 'url') return baseUrl;
-    __ops.push(['get', String(sel), attr === undefined ? null : String(attr), __docIndex]);
+    if (attr === undefined || attr === null) {
+      __ops.push(['getElement', String(sel), null, __docIndex]);
+      return { html: () => '', text: () => '', ownText: () => '', attr: () => '' };
+    }
+    __ops.push(['get', String(sel), String(attr), __docIndex]);
     return '';
   },
   getElements: (sel) => {
@@ -290,7 +598,37 @@ globalThis.java = {
     __docIndex++;
     return '';
   },
-  ajax: (url) => { __ajaxUrls.push(String(url)); return ''; },
+  ajax: (url) => {
+    const cached = __ajaxCache[String(url)];
+    if (cached !== undefined) return cached;
+    __ajaxUrls.push(String(url));
+    return '';
+  },
+  ajaxAll: (urls) => {
+    const missing = [];
+    (urls || []).forEach(function (u) {
+      const k = String(u);
+      if (__ajaxCache[k] === undefined) missing.push(k);
+    });
+    if (missing.length > 0) { __ajaxUrls.push.apply(__ajaxUrls, missing); return []; }
+    return (urls || []).map(function (u) { return __ajaxCache[String(u)] || ''; });
+  },
+  connect: (url, headerJson) => {
+    const h = headerJson === undefined || headerJson === null ? '{}' : (typeof headerJson === 'string' ? headerJson : JSON.stringify(headerJson));
+    const key = String(url) + '|' + h;
+    const cached = __connectCache[key];
+    if (cached !== undefined) {
+      return {
+        status: () => cached.status || 0,
+        header: (name) => cached.headers[String(name).toLowerCase()] || cached.headers[String(name)] || '',
+        headers: () => cached.headers,
+        cookies: () => cached.cookies,
+        body: () => cached.body
+      };
+    }
+    __connectOps.push([String(url), h]);
+    return { status: () => 0, header: () => '', headers: () => ({}), cookies: () => '', body: () => '' };
+  },
   post: (url, body, headers) => {
     __postOps.push([String(url), body === undefined || body === null ? '' : String(body), headers === undefined || headers === null ? {} : headers]);
     return { header: () => '', headers: () => ({}), cookies: () => '', body: () => '' };
@@ -307,17 +645,58 @@ $cryptoRecordBridge
 ${cookieBridge(cookies ?? const {}, seed: true)}''';
   }
 
-  /// 最终执行环境：get 按记录顺序消费提取值表，setContent 为 no-op
+  /// 最终执行环境：get 按记录顺序消费提取值表，setContent 为 no-op。
+  /// 两参 get(url, headers) 走网络缓存（__get2Cache，键= url|headersJson，
+  /// 与 Dart 侧 NetworkOp.key 归一规则一致）。
   static const finalPrelude = '''
 globalThis.__getIdx = 0;
+globalThis.__docIndex = 0;
 globalThis.__getSelectors = [];
+globalThis.__get2Cache = globalThis.__get2Cache || {};
+globalThis.__g2h = (attr) => {
+  try {
+    return JSON.stringify(typeof attr === 'object' && attr !== null ? attr : JSON.parse(attr));
+  } catch (e) { return '{}'; }
+};
+globalThis.__cacheStore = globalThis.__cacheStore || {};
+globalThis.__cachePutOps = globalThis.__cachePutOps || [];
+globalThis.cache = {
+  get: (key) => __cacheStore.hasOwnProperty(String(key)) ? __cacheStore[String(key)] : '',
+  put: (key, value, saveTime) => {
+    const v = String(value);
+    const t = saveTime === undefined || saveTime === null ? 0 : saveTime;
+    __cacheStore[String(key)] = v;
+    __cachePutOps.push([String(key), v, t]);
+    return '';
+  }
+};
 globalThis.java = {
   put: (key, value) => { __putMap[String(key)] = String(value); return ''; },
-  getString: (path) => __putMap[String(path)] || __getStringCache[String(path)] || __jsonPathGet(String(path), result) || '',
-  getStringList: (path) => __getStringListCache[String(path)] || __jsonPathGetAll(String(path), result),
+  cache: cache,
+  getString: (path, mContent, isUrl, unescape) => {
+    let mc = '', isu = '', un = '';
+    if (typeof mContent === 'boolean') { un = mContent ? 'true' : 'false'; }
+    else { mc = mContent === undefined || mContent === null ? '' : String(mContent); }
+    if (typeof isUrl === 'boolean') isu = isUrl ? 'true' : 'false';
+    if (typeof unescape === 'boolean') un = unescape ? 'true' : 'false';
+    const key = String(path) + '|' + mc + '|' + isu + '|' + un;
+    return __putMap[String(path)] || __getStringCache[key] || __jsonPathGet(String(path), result) || '';
+  },
+  getStringList: (path, mContent, isUrl, unescape) => {
+    let mc = '', isu = '', un = '';
+    if (typeof mContent === 'boolean') { un = mContent ? 'true' : 'false'; }
+    else { mc = mContent === undefined || mContent === null ? '' : String(mContent); }
+    if (typeof isUrl === 'boolean') isu = isUrl ? 'true' : 'false';
+    if (typeof unescape === 'boolean') un = unescape ? 'true' : 'false';
+    const key = String(path) + '|' + mc + '|' + isu + '|' + un;
+    return __getStringListCache[key] || __jsonPathGetAll(String(path), result);
+  },
   get: (sel, attr) => {
     if (__putMap.hasOwnProperty(String(sel))) return __putMap[String(sel)];
     if (String(sel) === 'url') return baseUrl;
+    if (attr !== undefined && attr !== null && (typeof attr === 'object' || (typeof attr === 'string' && attr.trim().startsWith('{')))) {
+      return __get2Cache[String(sel) + '|' + __g2h(attr)] || '';
+    }
     __getSelectors.push('g|' + String(sel) + '|' + (attr === undefined || attr === null ? '' : String(attr)));
     const v = __getValues[__getIdx++];
     return v === undefined || v === null ? '' : v;
@@ -325,13 +704,22 @@ globalThis.java = {
   getElement: (sel, attr) => {
     if (__putMap.hasOwnProperty(String(sel))) return __putMap[String(sel)];
     if (String(sel) === 'url') return baseUrl;
-    __getSelectors.push('g|' + String(sel) + '|' + (attr === undefined || attr === null ? '' : String(attr)));
+    if (attr === undefined || attr === null) {
+      const items = __elementCaches[__docIndex + '|' + String(sel)] || [];
+      const e = items.length > 0 ? items[0] : null;
+      return {
+        html: () => e ? e.html : '',
+        text: () => e ? e.text : '',
+        ownText: () => e ? e.ownText : '',
+        attr: (name) => e ? (name ? e.attrs[String(name)] || '' : '') : ''
+      };
+    }
+    __getSelectors.push('g|' + String(sel) + '|' + String(attr));
     const v = __getValues[__getIdx++];
     return v === undefined || v === null ? '' : v;
   },
   getElements: (sel) => {
-    __getSelectors.push('e|' + String(sel));
-    const items = __elementCaches[__getElementsIdx++] || [];
+    const items = __elementCaches[__docIndex + '|' + String(sel)] || [];
     const arr = items.map((snapshot) => ({
       html: () => snapshot.html,
       text: () => snapshot.text,
@@ -348,8 +736,21 @@ globalThis.java = {
     arr.last = () => arr[arr.length - 1] || null;
     return arr;
   },
-  setContent: (html) => '',
+  setContent: (html) => { __docIndex++; return ''; },
   ajax: (url) => __ajaxCache[String(url)] || '',
+  ajaxAll: (urls) => (urls || []).map(function (u) { return __ajaxCache[String(u)] || ''; }),
+  connect: (url, headerJson) => {
+    const h = headerJson === undefined || headerJson === null ? '{}' : (typeof headerJson === 'string' ? headerJson : JSON.stringify(headerJson));
+    const key = String(url) + '|' + h;
+    const item = __connectCache[key] || {status: 0, headers: {}, cookies: '', body: ''};
+    return {
+      status: () => item.status,
+      header: (name) => item.headers[String(name).toLowerCase()] || item.headers[String(name)] || '',
+      headers: () => item.headers,
+      cookies: () => item.cookies,
+      body: () => item.body
+    };
+  },
   log: () => '',
   toast: () => '',
   longToast: () => ''
@@ -507,8 +908,45 @@ globalThis.__jsonPathGet = (path, source) => {
   return values.length > 0 ? values[0] : '';
 };
 globalThis.source = { getKey: () => baseUrl };
+// cookie 二级域名归一化（§三-7，Legado CookieStore.getSubDomain 语义）：
+// 取 URL 的主机名；主机为 IP 或不足两段时原样返回，否则取末两段
+// （www.ex.com / m.ex.com → ex.com）。
+globalThis.__subdomainOf = (url) => {
+  try {
+    const m = String(url).match(/^[a-zA-Z][a-zA-Z0-9+.-]*:\\/\\/([^\\/?#]+)/);
+    if (!m) return String(url);
+    const host = String(m[1]).split('@').pop().split(':')[0];
+    if (/^\\d{1,3}(\\.\\d{1,3}){3}\$/.test(host) || host.indexOf('.') < 0) return host;
+    const parts = host.split('.');
+    if (parts.length <= 2) return host;
+    return parts.slice(-2).join('.');
+  } catch (e) { return String(url); }
+};
+// 键查找：精确键 → 同主机键 → 同二级域名键兜底（登录 cookie 存于 www
+// 域时 m 域请求仍可读到；同源主机精确命中优先）
+globalThis.__hostOf = (url) => {
+  try {
+    const m = String(url).match(/^[a-zA-Z][a-zA-Z0-9+.-]*:\\/\\/([^\\/?#]+)/);
+    if (!m) return String(url);
+    return String(m[1]).split('@').pop().split(':')[0];
+  } catch (e) { return String(url); }
+};
+globalThis.__cookieLookup = (key) => {
+  const exact = __cookieStore[String(key)];
+  if (exact !== undefined && exact !== '') return exact;
+  const host = __hostOf(key);
+  const domain = __subdomainOf(key);
+  const keys = Object.keys(__cookieStore);
+  for (const k of keys) {
+    if (__hostOf(k) === host) return __cookieStore[k];
+  }
+  for (const k of keys) {
+    if (__subdomainOf(k) === domain) return __cookieStore[k];
+  }
+  return '';
+};
 globalThis.cookie = {
-  getCookie: (key) => __cookieStore[String(key)] || '',
+  getCookie: (key) => __cookieLookup(key),
   setCookie: (key, value) => { __cookieStore[String(key)] = String(value); return ''; },
   removeCookie: (key) => { delete __cookieStore[String(key)]; return ''; },
   replaceCookie: (key, name) => {
@@ -519,7 +957,7 @@ globalThis.cookie = {
   }
 };
 globalThis.java.getCookie = (url, name) => {
-  const raw = String(__cookieStore[String(url)] || '');
+  const raw = String(__cookieLookup(url));
   if (name === undefined || name === null || name === '') return raw;
   const pair = raw.split(';').map((part) => part.trim()).find((part) => part.split('=')[0] === String(name));
   return pair ? pair.split('=').slice(1).join('=') : '';
@@ -738,7 +1176,9 @@ class JsCryptoCaches {
       },
       md5ShortCache: {
         for (final arg in md5ShortArgs)
-          arg: md5.convert(utf8.encode(arg)).toString().substring(0, 16),
+          // Legado md5Encode16 = md5 hex 中段 16 位（MD5Utils.kt:27-30
+          // substring(8, 24)），非前 16 位
+          arg: md5.convert(utf8.encode(arg)).toString().substring(8, 24),
       },
       base64Cache: {
         for (final arg in base64Args) arg: base64Encode(utf8.encode(arg)),

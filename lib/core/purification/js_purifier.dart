@@ -151,13 +151,17 @@ class JsPurifier {
   }
 
   /// 展开 replacement 中的 `$N` 捕获组反向引用（N = 0 为整个匹配，
-  /// 与 JS `String.replace` 语义一致）。捕获组缺失时替换为空串。
+  /// 与 JS `String.replace` 语义一致；`$&` 同整匹配；`$$`/`\$` 为字面
+  /// `$`，后者兼容 Legado 存量规则的 Java 转义写法）。捕获组缺失时
+  /// 替换为空串。与 Dart 路径 regex_purifier.expandCaptures 语义一致。
   static String _expandCaptures(String replacement, _JsMatch match) {
-    if (!replacement.contains(r'$')) return replacement;
+    if (!replacement.contains(r'$') && !replacement.contains(r'\')) {
+      return replacement;
+    }
     return replacement.replaceAllMapped(
-      RegExp(r'\$\$|\$&|\$(\d+)'),
+      RegExp(r'\$\$|\$&|\\\$|\$(\d+)'),
       (m) {
-        if (m.group(0) == r'$$') return r'$';
+        if (m.group(0) == r'$$' || m.group(0) == r'\$') return r'$';
         if (m.group(0) == r'$&') return match.text;
         final index = int.parse(m.group(1)!);
         if (index == 0) return match.text;

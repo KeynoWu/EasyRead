@@ -15,12 +15,17 @@ class BookSourceTestRecord {
   /// 失败原因（null 表示成功）
   final String? error;
 
+  /// 失效分组标签（§三-11，Legado addGroup 语义：搜索失效/目录失效/
+  /// 正文失效/目录规则为空/详情链接缺失；空 = 无分组问题）
+  final List<String> groups;
+
   const BookSourceTestRecord({
     required this.usable,
     required this.responseTimeMs,
     required this.testedAt,
     this.resultCount = 0,
     this.error,
+    this.groups = const [],
   });
 
   /// 速度档位：>= 阈值标记为慢
@@ -34,6 +39,7 @@ class BookSourceTestRecord {
         'tested_at': testedAt.toIso8601String(),
         'result_count': resultCount,
         if (error != null) 'error': error,
+        if (groups.isNotEmpty) 'groups': groups,
       };
 
   factory BookSourceTestRecord.fromJson(Map<String, dynamic> json) {
@@ -48,6 +54,9 @@ class BookSourceTestRecord {
           ? (json['result_count'] as num).toInt()
           : 0,
       error: json['error']?.toString(),
+      groups: json['groups'] is List
+          ? (json['groups'] as List).map((e) => e.toString()).toList()
+          : const [],
     );
   }
 }

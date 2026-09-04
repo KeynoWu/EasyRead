@@ -21,3 +21,6 @@ keystore.properties
 # OS files
 .DS_Store
 Thumbs.db
+
+# 会话产物
+.test_baseline.log

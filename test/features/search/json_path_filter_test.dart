@@ -206,10 +206,21 @@ void main() {
       );
     });
 
-    test('Legado && 组合与过滤器共存：前者有结果则优先', () {
+    test('Legado && 组合与过滤器共存：全非空顺序拼接', () {
       expect(
         JsonPathEngine.queryString(json, r'$.data[?(@.id==1)].name&&$.list[0].value'),
+        ['书籍A', 1],
+      );
+    });
+
+    test('Legado || 组合与过滤器共存：首非空即止', () {
+      expect(
+        JsonPathEngine.queryString(json, r'$.data[?(@.id==1)].name||$.list[0].value'),
         ['书籍A'],
+      );
+      expect(
+        JsonPathEngine.queryString(json, r'$.data[?(@.id==99)]||$.list[0].value'),
+        [1],
       );
     });
 

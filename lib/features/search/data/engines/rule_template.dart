@@ -18,16 +18,15 @@ class RuleTemplate {
     int? page,
     bool encodeValues = false,
   }) {
-    // Legado `<page1,page2,...>` 翻页占位符:page 从 1 起,
-    // 取第 page 段(越界取最后一段)。page 未提供(null)按第 1 页处理,
-    // 避免占位符原样残留在 URL 中(与 {{page}} null→空串的旧行为对齐前,
-    // 先保证 URL 可用;legado 调试/部分 explore 路径 page 即为 null)。
+    // Legado `<page1,page2,...>` 翻页占位符（AnalyzeUrl.kt:192-202）：
+    // page 从 1 起，取第 page 段（越界取最后一段）；
+    // page 未提供（null）时占位符**原样保留**（Legado `page?.let` 语义），
+    // 由后续真实翻页时再解析
     var source = template;
-    final effectivePage = (page != null && page > 0) ? page : 1;
-    if (source.contains('<')) {
+    if (source.contains('<') && page != null && page > 0) {
       source = source.replaceAllMapped(RegExp(r'<([^<>]*)>'), (match) {
         final pages = match.group(1)!.split(',');
-        final idx = effectivePage - 1;
+        final idx = page - 1;
         final picked = idx < pages.length ? pages[idx] : pages.last;
         return picked.trim();
       });

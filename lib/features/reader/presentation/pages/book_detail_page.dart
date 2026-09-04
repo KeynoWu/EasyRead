@@ -13,6 +13,7 @@ import '../../domain/entities/book_detail.dart';
 import '../../domain/entities/chapter_catalog.dart';
 import '../../domain/entities/reading_progress.dart';
 import '../providers/reader_provider.dart';
+import '../widgets/cover_image.dart';
 
 /// 书籍详情页：展示简介/作者/封面/目录，再决定开始阅读或指定章节阅读。
 class BookDetailPage extends ConsumerStatefulWidget {
@@ -321,11 +322,15 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
                         height: 124,
                         color: AppColors.separator.withValues(alpha: 0.3),
                         child: cover != null
-                            ? Image.network(
-                                cover,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, _, _) =>
-                                    const Icon(Icons.auto_stories, size: 40),
+                            ? CoverImage(
+                                url: cover,
+                                sourceId: widget.result.sourceId,
+                                width: 88,
+                                height: 124,
+                                fallbackIcon: const Icon(
+                                  Icons.auto_stories,
+                                  size: 40,
+                                ),
                               )
                             : const Icon(Icons.auto_stories, size: 40),
                       ),

@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../data/services/source_subscription_store.dart';
 import '../../domain/usecases/import_book_source.dart';
 import '../../domain/usecases/parse_book_source_rule.dart';
 import '../providers/book_source_provider.dart';
@@ -13,7 +14,12 @@ class BookSourceImportPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final repo = ref.watch(bookSourceRepositoryProvider);
     final parser = ParseBookSourceRule();
-    final useCase = ImportBookSource(repository: repo, parser: parser);
+    final useCase = ImportBookSource(
+      repository: repo,
+      parser: parser,
+      // Hive 持久订阅盒（§三-9）：URL 导入成功即记录订阅，源列表页可一键刷新
+      subscriptionStore: SourceSubscriptionStore(),
+    );
 
     return Scaffold(
       appBar: AppBar(title: const Text('导入书源')),

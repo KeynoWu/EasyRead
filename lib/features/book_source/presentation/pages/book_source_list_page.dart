@@ -5,8 +5,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../../core/data/cookie_jar_service.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../search/data/repositories/search_repository_impl.dart';
 import '../../domain/entities/book_source.dart';
 import '../../domain/entities/book_source_test_record.dart';
+import '../../domain/usecases/import_book_source.dart';
+import '../../domain/usecases/parse_book_source_rule.dart';
+import '../../data/services/source_subscription_store.dart';
 import '../providers/book_source_provider.dart';
 import '../widgets/book_source_card.dart';
 
@@ -77,6 +81,30 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
     }
   }
 
+  /// 订阅一键更新（§三-9）：重拉全部订阅地址并合并。
+  Future<void> _refreshSubscriptions() async {
+    final useCase = ImportBookSource(
+      repository: ref.read(bookSourceRepositoryProvider),
+      parser: ParseBookSourceRule(),
+      // Hive 持久订阅盒：导入页记录的订阅在此读取
+      subscriptionStore: SourceSubscriptionStore(),
+    );
+    final results = await useCase.refreshSubscriptions();
+    if (!mounted) return;
+    final ok = results.where((r) => r.isSuccess).length;
+    final total = results.fold<int>(0, (sum, r) => sum + (r.updated ?? 0));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          results.isEmpty
+              ? '暂无订阅，导入页按 URL 导入书源后自动记录订阅'
+              : '订阅刷新完成：$ok/${results.length} 成功，合并 $total 个书源',
+        ),
+      ),
+    );
+    if (total > 0) ref.invalidate(bookSourceListProvider);
+  }
+
   Future<void> _showSourceMenu(BookSource source) async {
     final action = await showModalBottomSheet<String>(
       context: context,
@@ -97,10 +125,24 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
                 subtitle: const Text('WebView 登录并保存 Cookie'),
                 onTap: () => Navigator.pop(context, 'login'),
               ),
+            if ((source.loginUrl?.isNotEmpty ?? false) ||
+                (source.bookSourceUrl?.isNotEmpty ?? false))
+              ListTile(
+                leading: const Icon(Icons.logout),
+                title: const Text('退出登录'),
+                subtitle: const Text('清除该书源已保存的登录 Cookie'),
+                onTap: () => Navigator.pop(context, 'logout'),
+              ),
             ListTile(
               leading: const Icon(Icons.checklist),
               title: const Text('进入多选'),
               onTap: () => Navigator.pop(context, 'select'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.refresh),
+              title: const Text('刷新订阅'),
+              subtitle: const Text('重新拉取全部订阅地址并合并更新'),
+              onTap: () => Navigator.pop(context, 'refreshSubs'),
             ),
           ],
         ),
@@ -130,6 +172,18 @@ class _BookSourceListPageState extends ConsumerState<BookSourceListPage> {
             const SnackBar(content: Text('登录 Cookie 已保存')),
           );
         }
+      case 'logout':
+        // 登出入口（§三-7）：经搜索仓库 logoutSource 同步清除登录态——
+        // 加密盒 Cookie + 仓库内存会话缓存（TTL 内命中，必须立即失效）
+        await SearchRepositoryImpl().logoutSource(source.id);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('已退出登录，Cookie 已清除')),
+          );
+        }
+      case 'refreshSubs':
+        // 订阅一键更新（§三-9）：重拉全部订阅地址并合并（本地较新跳过）
+        await _refreshSubscriptions();
     }
   }
 

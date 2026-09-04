@@ -68,14 +68,15 @@ void main() {
       expect(gapMs(stamps, 1, 2), greaterThanOrEqualTo(280));
     });
 
-    test('滑窗模式 N/M：窗口内 N 次放行，超出等待窗口重置', () async {
-      // 3/300：300ms 窗口内最多 3 次；第 4 次需等到窗口重置
+    test('滑窗模式 N/M：窗口内 N+1 次放行（Legado freq 初值 1），超出等待重置', () async {
+      // 3/300：对齐 Legado ConcurrentRateLimiter——首请求建记录不计数，
+      // 实际同窗放行 N+1=4 次；第 5 次需等到窗口重置
       final stamps =
-          await stamp(makeDio(RateLimitInterceptor()), count: 4, rate: '3/300');
-      // 前 3 次同窗放行（几乎无等待）
-      expect(gapMs(stamps, 0, 2), lessThan(250));
-      // 第 4 次等待窗口重置：距第 1 次约 >= 300ms
-      expect(stamps[3].difference(stamps[0]).inMilliseconds,
+          await stamp(makeDio(RateLimitInterceptor()), count: 5, rate: '3/300');
+      // 前 4 次同窗放行（几乎无等待）
+      expect(gapMs(stamps, 0, 3), lessThan(250));
+      // 第 5 次等待窗口重置：距第 1 次约 >= 300ms
+      expect(stamps[4].difference(stamps[0]).inMilliseconds,
           greaterThanOrEqualTo(290));
     });
 

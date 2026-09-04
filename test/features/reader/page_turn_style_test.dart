@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:easy_read/features/book_source/domain/entities/book_source.dart';
 import 'package:easy_read/features/book_source/domain/repositories/book_source_repository.dart';
 import 'package:easy_read/features/reader/data/repositories/reader_repository_impl.dart';
+import 'package:easy_read/features/settings/domain/entities/chinese_conversion.dart';
 import 'package:easy_read/features/reader/domain/entities/chapter.dart';
 import 'package:easy_read/features/reader/domain/entities/reading_progress.dart';
 import 'package:easy_read/features/reader/presentation/providers/reader_provider.dart';
@@ -45,6 +46,7 @@ class _FakeRepo extends ReaderRepositoryImpl {
     required String sourceId,
     String? detailUrl,
     Map<String, String> variables = const {},
+    ChineseConversionMode chineseMode = ChineseConversionMode.original,
   }) async {
     // 足够多的段落，保证 400x600 视口下能分成多页
     const paragraph = '这是一段用于分页测试的正文内容，包含足够多的文字以保证分页引擎能把章节切分成多页。';

@@ -1,4 +1,7 @@
 import 'package:dio/dio.dart';
+import '../../../reader/domain/entities/chapter_catalog.dart';
+import '../../../reader/domain/repositories/reader_repository.dart';
+import '../../../reader/data/repositories/reader_repository_impl.dart' show ChapterLoadException;
 import '../../../search/data/repositories/search_repository_impl.dart';
 import '../../../search/domain/entities/search_result.dart';
 import '../../../search/domain/repositories/search_repository.dart';
@@ -19,14 +22,22 @@ class BookSourceTestResult {
   });
 }
 
-/// 测试书源是否可用（用搜索 URL 尝试抓取）
+/// 测试书源是否可用（用搜索 URL 尝试抓取；支持全链路检测）
 class TestBookSource {
   final SearchRepository _searchRepo;
 
-  TestBookSource({SearchRepository? searchRepo})
+  /// 目录/正文检测仓库（null 时仅做搜索检测）
+  final ReaderRepository? readerRepo;
+
+  /// 全链路检测时的虚拟 bookId（检测结果不与真实书架冲突）
+  static const String _testBookId = '__source_check__';
+
+  TestBookSource({SearchRepository? searchRepo, this.readerRepo})
       : _searchRepo = searchRepo ?? SearchRepositoryImpl();
 
-  /// 用关键词测试书源搜索是否正常
+  /// 用关键词测试书源搜索是否正常。
+  /// [keyword] 为批测统一关键词；源自带 `checkKeyWord` 时优先（Legado
+  /// BookSource.getCheckKeyword 语义：源级检测词覆盖默认词）。
   Future<BookSourceTestResult> testSearch(
     BookSource source,
     String keyword, {
@@ -38,9 +49,12 @@ class TestBookSource {
         message: '书源缺少搜索 URL 或书籍列表规则',
       );
     }
+    final effectiveKeyword = (source.checkKeyWord?.trim().isNotEmpty ?? false)
+        ? source.checkKeyWord!.trim()
+        : keyword;
     try {
       final results = await _searchRepo.searchWithSource(
-        keyword,
+        effectiveKeyword,
         source,
         cancelToken: cancelToken,
         throwOnError: true,
@@ -103,5 +117,81 @@ class TestBookSource {
       default:
         return '请求失败';
     }
+  }
+
+  /// 全链路检测（§三-11，Legado CheckSourceService doCheckSource +
+  /// checkBook）：搜索 → 目录（前 2 章）→ 首章正文，逐级打失效分组标签。
+  /// 返回分组列表（空 = 全链路可用）；[samples] 透传搜索样例供 UI 预览。
+  Future<(List<String>, List<SearchResult>)> testFullChain(
+    BookSource source,
+    String keyword, {
+    CancelToken? cancelToken,
+  }) async {
+    final groups = <String>[];
+    // 源级检测词优先（Legado getCheckKeyword）；在此解析使子类覆写
+    // testSearch 时同样生效
+    final effectiveKeyword = (source.checkKeyWord?.trim().isNotEmpty ?? false)
+        ? source.checkKeyWord!.trim()
+        : keyword;
+    // 1. 搜索
+    final search =
+        await testSearch(source, effectiveKeyword, cancelToken: cancelToken);
+    if (!search.success) {
+      // 搜索失败即全链路失败，不继续目录/正文（Legado 同样短路）
+      return (['搜索失效'], const <SearchResult>[]);
+    }
+    final samples = search.samples;
+    if (samples.isEmpty) return (['搜索失效'], const <SearchResult>[]);
+    final readerRepo = this.readerRepo;
+    if (readerRepo == null) return (groups, samples);
+
+    final first = samples.first;
+    final detailUrl = first.detailUrl;
+    if (detailUrl == null || detailUrl.isEmpty) {
+      return (['详情链接缺失'], samples);
+    }
+    // 2. 目录（前 2 章可定位即视为有效，Legado toc.take(2)）
+    if (source.chapterListRule == null) {
+      groups.add('目录规则为空');
+      return (groups, samples);
+    }
+    final List<ChapterItem> toc;
+    try {
+      final catalog = await readerRepo.getCatalog(
+        bookId: _testBookId,
+        sourceId: source.id,
+        detailUrl: detailUrl,
+        variables: first.variables,
+      );
+      toc = catalog.chapters;
+    } on ChapterLoadException {
+      return (['目录失效'], samples);
+    } catch (_) {
+      return (['目录失效'], samples);
+    }
+    if (toc.isEmpty) return (['目录失效'], samples);
+
+    // 3. 首章正文（非空即通过；Legado getContentAwait 失败打正文失效）
+    try {
+      final chapter = await readerRepo.getChapter(
+        bookId: _testBookId,
+        chapterIndex: 0,
+        sourceId: source.id,
+        detailUrl: detailUrl,
+        variables: first.variables,
+      );
+      if (chapter.content.trim().isEmpty) {
+        groups.add('正文失效');
+      }
+    } on ChapterLoadException catch (e) {
+      if (e.message.contains('为空') || e.message.contains('空内容')) {
+        groups.add('正文失效');
+      } else {
+        groups.add('正文失效');
+      }
+    } catch (_) {
+      groups.add('正文失效');
+    }
+    return (groups, samples);
   }
 }

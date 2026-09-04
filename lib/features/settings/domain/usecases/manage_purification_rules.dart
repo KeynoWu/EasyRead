@@ -209,6 +209,9 @@ class ManagePurificationRules {
             scope: rule.scope,
             excludeScope: rule.excludeScope,
             timeoutMs: _validTimeoutMs(rule.timeoutMillisecond),
+            // 非正则规则 replacement 纯字面（对齐 Legado String.replace），
+            // 不展开 $N（金额等字面 $ 不受影响）
+            literalReplacement: !rule.isRegex,
           ));
         }
       } catch (_) {

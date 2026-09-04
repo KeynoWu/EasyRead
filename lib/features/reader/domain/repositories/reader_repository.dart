@@ -1,3 +1,4 @@
+import '../../../settings/domain/entities/chinese_conversion.dart';
 import '../entities/chapter.dart';
 import '../entities/chapter_catalog.dart';
 import '../entities/book_detail.dart';
@@ -21,13 +22,16 @@ abstract class ReaderRepository {
     Map<String, String> variables = const {},
   });
 
-  /// 获取章节内容（优先缓存，无缓存时从网络获取）
+  /// 获取章节内容（优先缓存，无缓存时从网络获取）。
+  /// [chineseMode]：简繁转换在用户净化规则前套用（Legado ContentProcessor
+  /// getContent 顺序：chineseConvert → 替换规则），繁体站配简体净化规则可命中。
   Future<Chapter> getChapter({
     required String bookId,
     required int chapterIndex,
     required String sourceId,
     String? detailUrl,
     Map<String, String> variables = const {},
+    ChineseConversionMode chineseMode = ChineseConversionMode.original,
   });
 
   /// 保存阅读进度

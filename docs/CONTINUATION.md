@@ -1,7 +1,129 @@
-# EasyRead 多格式书源兼容 — 续接文档（2026-08-05，最新：2026-08-19）
+# EasyRead 多格式书源兼容 — 续接文档（2026-08-05，最新：2026-09-03）
 
 > 重开会话请先读此文件 + 最近 git log。
-> **当前主线：docs/core-first-plan.md（v2 核心优先+减法）已取代 docs/refactoring-plan.md。**
+> **当前主线：docs/LEGADO_PARITY_PLAN.md（对标 Legado）+ .research/00_学习路线图.md。**
+> **🎉 路线图全部完成（2026-09-03 十四轮）：P0 13/13 + §二 15/15 + §三 12/12。**
+
+## ⚠️ 最新状态（2026-09-03 十五轮）：全量自查 → 6 项修复（546 测试全绿 + analyze 0）
+
+- **审查发现与修复**（全部有回归测试）：①流式分页 await 后补 seq 防护（reader_provider loadChapter/setChineseMode——旧加载的部分页不得覆盖新章状态）；②订阅容器子地址 `allowContainer:false`（容器不递归，防恶意容器链）；③reader 仓库 `_getStringWithLoginCheck` 补登录失效检测（error:/startBrowser+无 Cookie → ChapterLoadException(sourceError)）+ cookieHeader 透传（消除与 search 仓库的实现漂移；行为变化：需网页登录且未登录的源在阅读流程现在明确报「登录已失效」而非静默继续）；④`SearchRepositoryImpl.logoutSource`（内存会话缓存立即失效 + 加密盒清除），书源菜单「退出登录」改走此 API（原实现 TTL 30 分钟内仍带旧 Cookie）；⑤dio `_decodeBody` 补 UTF-16LE/BE 解码（BOM 定端序，无 BOM 按 RFC 2781 大端）；⑥`requestString` 重试白名单化（仅 connection/send/receiveTimeout/connectionError/badCertificate，cancel 与 badResponse 不重试）；⑦.gitignore 加 `.test_baseline.log` 并删除该日志。
+- **回归测试 +7**：reader 登录失效分类、订阅容器不递归、logoutSource 缓存失效、UTF-16 解码×2、badResponse 不重试、取消不重试。
+- **进度：P0 13/13 ✅；§二 15/15 ✅；§三 12/12 ✅；546 全绿。待用户 review/commit。**
+
+## ⚠️ 最新状态（2026-09-03 十四轮）：§三 12/12——流式分批排版（539 测试全绿 + analyze 0）
+
+- **§三-12 流式排版**：`PageLayout.paginateStreaming`——节点按批（默认 40）处理，批间 `Future.delayed(Duration.zero)` 让渡事件循环，长章节排版不再一次性阻塞主 isolate 数百毫秒；`onPartial` 渐进回调（已完成页快照）、`isCancelled` 提前停止；与同步 `paginate` 结果逐页一致（共用 `_processNode` 单节点核心 + `_PaginationCursor`）。**引擎约束（实验证实）**：TextPainter 依赖 ParagraphBuilder，后台 isolate 抛 "UI actions are only available on root isolate"——无法下沉 compute/isolate.run，分批让渡是本引擎版本下的等价方案（已写入代码注释）。
+- **接线**：reader_provider `loadChapter`/`setChineseMode` 改走 `_paginateStreamingCached`（与 `_paginate` 共用缓存键 + LRU；isCancelled= seq 检查，被新加载取代时丢弃结果不落缓存）；`setViewport` 保持同步（旋转罕见且缓存命中）。
+- **测试**：page_layout_test(+4)：流式==同步、onPartial 增长前缀、isCancelled 部分结果、批大小无关性。
+- **进度：P0 13/13 ✅；§二 15/15 ✅；§三 12/12 ✅；全绿。路线图收口。**
+
+## ⚠️ 最新状态（2026-09-03 十三轮）：§三 11/12——书源检测全链路深化（535 测试全绿 + analyze 0）
+
+- **§三-11 检测深化**：①`TestBookSource.testFullChain`——搜索 → 目录（chapterList 规则缺失打「目录规则为空」）→ 首章正文，逐级打失效分组标签（搜索失效/目录失效/正文失效/详情链接缺失，Legado CheckSourceService addGroup 语义）；搜索失败短路；readerRepo 可选注入（null 时退化为纯搜索检测）。②`BookSourceTestRecord.groups` 字段（序列化 round trip），批测 `_testOne` 改走全链路，groups 非空判不可用、error=groups.join('、')。③源级 `checkKeyWord` 覆盖批测统一词（testFullChain 内解析，使覆写 testSearch 的测试桩同样生效；Legado BookSource.getCheckKeyword）。④`perSourceTimeout` 从 static const 改实例字段可注入（默认 8s）。测试 source_full_chain_test(+5：全链路可用/目录失效/正文失效/groups 持久化/检测词覆盖)
+- **进度：P0 13/13；§二 15/15；§三 11/12（剩余 1：isolate 流式排版）；全绿。**
+
+## ⚠️ 最新状态（2026-09-03 十二轮）：§三 10/12——书源订阅最小方案（530 测试全绿 + analyze 0）
+
+- **§三-9 订阅**：①订阅容器——导入内容为 `{"sourceUrls":[...]}` 时递归拉取子地址合并书源（Legado ImportBookSourceViewModel $.sourceUrls；深度 1、总数封顶 20、单地址失败不中断、全失败给明确文案）；②订阅盒 `SourceSubscriptionStore`（Hive JSON 盒）+ 内存默认实现（usecase 默认内存实现零依赖，应用入口注入 Hive 实现；recordChecked 失败不阻断导入）；③URL 导入成功即记录订阅（url+lastCheckedAt+源数）；④`refreshSubscriptions()` 一键更新（合并语义沿用 _saveMerged：本地较新跳过/保留启用与分组）；⑤入口——导入页传持久盒 + 源列表菜单「刷新订阅」（汇总 N/M 成功、合并总数，刷新列表）。测试 import_book_source_test(+4：容器递归+失败容忍/全失败文案/一键更新/空订阅)
+- **进度：P0 13/13；§二 15/15；§三 10/12（剩余 2：isolate 流式排版/书源检测深化）；全绿。**
+
+## ⚠️ 最新状态（2026-09-03 十一轮）：§三 9/12——登录补口 + 章节缓存字节预算收尾（526 测试全绿 + analyze 0）
+
+- **§三-7 登录补口**：①`SourceLoginExpiredException`（登录失效专用错误）——loginCheckJs 结果或规则原文带 `error:` 前缀 → 透传失效原因；loginCheckJs 需 startBrowser 交互登录（本应用无 WebView 通道，桥返回空）且无登录 Cookie → 明确「登录已失效」引导重新登录，不与笼统书源失败混淆（throwOnError 流程透传到检测/聚合上层）；②登出入口——书源菜单「退出登录」清 CookieJarService 加密盒会话；③cookie 二级域名归一化（Legado CookieStore.getSubDomain）——JS 桥 `__cookieLookup`：精确键 → 同主机键 → 同二级域名键（www 存 m 读），`cookie.getCookie`/`java.getCookie` 均走该链。测试 js_rule_executor_test(+3) + search_repository_headers_test(+2)
+- **§三-6 收尾（charset 三级检测/BOM 已在 P1-12）**：章节缓存加**字节预算**（条目数 500 + 总字节 64MB 双限并行，超限淘汰最旧；体积按 content 码元数近似，`cacheByteBudget` 可注入）。测试 chapter_cache_budget_test(+2)
+- **进度：P0 13/13；§二 15/15；§三 9/12（剩余 3：isolate 流式排版/书源检测深化/订阅）；全绿。**
+
+## ⚠️ 最新状态（2026-09-03 十轮）：§三 7/12——简繁转换移至净化前 + getChapter 失败重试（519 测试全绿 + analyze 0）
+
+- **§三-11 简繁转换移至净化前**（对齐 ContentProcessor.getContent 顺序 chineseConvert → 替换规则）：`ReaderRepository.getChapter` 增 `chineseMode` 参数（domain 接口 import settings 实体）；`_applyUserPurify` 内先 `ChineseConversion.convert` 正文/标题再套净化规则——**繁体站配简体净化规则可命中**；缓存仍存源层原文（转换属阅读时变换，不落缓存）；provider 在 getChapter 前加载模式并传入，`_parseChapterContent` 不再二次转换。测试 chapter_preprocess_test（繁体內容+简体规则命中/默认原文不命中）
+- **§三-12 getChapter 失败重试**（对齐 CacheBook 失败重试 3 次）：`_fetchContentPageWithRetry` 包住正文首取 + nextContentUrl 翻页两处抓取——仅重试瞬时网络异常（DioException，书源级 ChapterLoadException 立即抛），默认 3 次/1s 间隔（`contentRetryInterval` 可注入供测试）；耗尽后 rethrow → 归 networkError（不触发自动换源，与 §三-2 闭环）。测试 chapter_preprocess_test（重试成功/耗尽抛错计数）
+- **进度：P0 13/13；§二 15/15；§三 7/12（剩余 5：isolate 排版/HTTP charset 检测深化/登录补口/书源检测深化/订阅）；全绿。**
+
+## ⚠️ 最新状态（2026-09-03 九轮）：§三 5/12——自动换源判定重做 + 目录标题净化/bookUrlPattern 生效（515 测试全绿 + analyze 0）
+
+- **§三-2 自动换源判定重做**（对齐 ReadBookViewModel.autoChangeSource）：①`ChapterErrorKind`（sourceError/networkError）——getChapter 兜底 catch 归 networkError，瞬时网络异常**不触发**自动换源；②AutoSwitchSource 重写为**并发池 16**（mapParallelSafe(threadCount).take(1) 语义：next 游标分发、首个通过 completer 胜出、其余跑完忽略）；③候选验证 = 目录非空 + **当前章正文可取**（getChapter(chapterIndex)，越界取最后一章 Legado getOrElse{last}；验证成功还会预热该源章节缓存）；④ReaderState 增 errorKind/errorChapterIndex，reader_page 仅 sourceError 触发并传出错章索引。测试 auto_switch_source_test(+5) + chapter_empty_error_test(+2 kind 分类)
+- **§三-10 目录标题净化 + bookUrlPattern 生效**：①getCatalog 两条出口（内存缓存命中/新取）统一经 `_purifyCatalogTitles` 套标题作用域规则（缓存存原始标题，改规则即生效，与正文双层同原则）；②bookUrlPattern 从 no-op 变生效（Legado BookList.kt:50「链接为详情页」判定）——详情页 URL 不匹配 pattern 抛 sourceError（换源候选被拒/正常加载明确报错），空 pattern 放行。测试 catalog_title_purify_test(+2) + rule_wiring_test bookUrlPattern 重写(+1)
+- **进度：P0 13/13；§二 15/15；§三 5/12（剩余：isolate 排版/HTTP charset 检测深化/登录补口/书源检测深化/订阅/简繁顺序/getChapter 重试 7 项）；全绿。**
+
+## ⚠️ 最新状态（2026-09-03 八轮）：§三 体验 3/12——净化双层时机 + 图片管线 + 封面防盗链（505 测试全绿 + analyze 0）
+
+- **§三-1 净化双层时机**（对齐 Legado BookContent/ContentProcessor 分层）：章节缓存只存「源规则后原文」（含图片 URL 解析 + 重复标题去除，源层）；用户净化规则（正文/标题作用域）**阅读时套用**（`_applyUserPurify`，getChapter 缓存命中与新取两条路径统一出口）——改用户规则无需清缓存即生效；净化后为空且原文非空仍报「章节内容为空」。测试 purify_layering_test.dart（2）
+- **§三-4 图片管线**（对齐 HtmlFormatter.formatKeepImg）：resolveImageUrls 取值优先级 = src 含 `{...}` 模板（拆 `,{json}` 参数：URL 解析绝对、参数原样保留）→ data-* 懒加载兜底 → 普通 src；img 统一归一 `<img src>`（去其余属性）；属性实体由 html 解析器解码（&amp;→&）。测试 image_url_resolve_test.dart（8）
+- **§三-3 封面防盗链**（对齐 OkHttpStreamFetcher）：DioClient.getBytes（二进制走完整 _send 管线：SSRF/cookie 回写/限流）→ ReaderRepositoryImpl.fetchImageBytes（书源 requestHeaders（header 规则+Referer 兜底）+ cookie，相对 URL 基于书源地址解析）→ CoverImage widget（Image.memory + 失败 URL 会话级缓存防请求风暴），接入 book_detail_page；9 个测试 fake 补 getBytes stub。测试 cover_image_test.dart（4）
+- **进度：P0 13/13；§二 15/15；§三 3/12（下一批：自动换源判定重做 / 目录标题净化 / getChapter 重试）；分析器与测试全绿。**
+
+## ⚠️ 最新状态（2026-09-03 七轮）：P1 URL,{json} 选项 + 全 JS URL——§二 文法/引擎 15/15 全完成（494 测试全绿 + analyze 0）
+
+- **URL,{json} 选项**（新 lib/features/search/data/engines/url_spec.dart，对齐 AnalyzeUrl.kt UrlOption）：切分 `\s*,\s*(?=\{)`；选项 method/headers（对象或 JSON 串，值 toString）/body/charset/type/retry（int，失败重试）/js（result=已解析 URL，结果覆盖 URL）；webView/webJs/serverID 仅识别不实现（本应用无 WebView）；单引号 JSON 容错；选项 JSON 解析失败退化为纯 GET URL
+- **全 JS URL**（AnalyzeUrl analyzeJs 语义）：`@js:`/`<js>…</js>` 多段交错，段间文本以 `@result` 引用前段结果、**无标记时覆盖结果**（Legado 语义）；求值顺序=先 JS 段→再切选项→最后选项内 js 字段。JsRuleExecutor.evalUrlJs（新）：绑定 key/page/baseUrl/result + java 桥（模板同款两遍记录-重放，md5/base64 取真实值）；黑名单命中返回空串
+- **接入面**：searchUrl/exploreUrl/debugSearch/loginUrl（search_repository_impl，替换原 _parseSearchUrl/_SearchSpec——method/body/charset 之外新增 headers 覆盖源级/retry/js）；tocUrl/nextTocUrl/contentUrl/nextContentUrl（reader_repository_impl._fetchRuleUrl 统一封装，无选项时保持原 headers 引用语义使 Cookie 回写继续传播）
+- **DioClient.requestString**（新）：GET/POST(+body) 统一入口，POST 默认表单 Content-Type、显式头优先；retry=N 失败重试；body 不随 GET 发送
+- 新增测试 28：url_spec_test(18)、evalUrlJs(3：key/page 绑定、两遍桥真实值、黑名单)、search 全 JS searchUrl+选项 headers(2)、reader tocUrl 选项+JS 段(2)、dio requestString(3)
+
+**进度：P0 13/13；§二 文法/引擎 15/15 全完成；§三 体验 12 项未开始（净化双层时机/自动换源判定/封面防盗链/图片管线/isolate 排版/登录补口/检测深化/订阅/目录标题净化/简繁顺序/getChapter 重试等）。**
+
+## ⚠️ 最新状态（2026-09-03 五/六轮）：P1-15 限流非串行 + P1-14 createSymmetricCrypto 完整 transformation（466 测试全绿 + analyze 0）
+
+- **P1-15** concurrentRate N/M 窗口不串行（rate_limit_interceptor 重写，对齐 ConcurrentRateLimiter.kt）：固定窗口内放行 N+1 个（`window.count > n` 才等待），等待时长按窗口期 `_computeIntervalWaitMs`；不再逐请求串行 sleep。测试：3/300 前 4 次同窗瞬发、第 5 次等 ≥290ms
+- **P1-14** `java.createSymmetricCrypto` 完整 JCE transformation 直通（js_crypto.symmetricProcess 重写，对齐 hutool SymmetricCrypto→Cipher.getInstance 语义）：
+  - **CTR/SIC**：pointycastle `StreamCipher('AES|DESede/CTR')`（SIC 整计数器大端自增，任意长度）
+  - **CFB-N/OFB-N**（N 缺省=块长×8）：手工流式实现（pointycastle 块模式只整块推进，尾部不齐块按 JCE 流语义取密钥流前缀异或；CFB 密文反馈、OFB 密钥流独立），openssl 向量逐字节对齐
+  - **GCM**：仅 AES/NoPadding（JCE 同），IvParameterSpec 原样作 nonce（不截断/不散列），tag 固定 128bit、加密封文尾随 tag、解密 tag 校验失败→空串；python cryptography 向量对齐
+  - **padding 语义**：省略段=PKCS5（JCE 默认；ECB/CBC 走 PaddedBlockCipher，流式模式手工 PKCS7 填充/剥离）；省略 mode='ECB'；`AES` 单段等价 `AES/ECB/PKCS5Padding`
+  - **decodeAesData 对齐 hutool SecureUtil.decode**：纯 hex（任意偶数长度）→hex，否则 base64（旧 `>=32 && %32==0` 限制会误判流式密文）
+  - 顺带修复存量 latent bug：ECB/CBC NoPadding 多块数据此前 `BlockCipher.process` 只处理首块（BaseBlockCipher.process 单块语义），改 `_processWholeBlocks` 整块循环 + 长度对齐校验
+  - 已知架构限制（非本次引入）：crypto 结果作内层参数的链式调用（`decryptStr(encryptBase64(x))`）在记录-重放两遍模型下回放为空（热身遍内层为占位 ''，final 遍缓存键错位）——crypto 参数依赖 ajax 的场景已由热身重录覆盖
+- 新增回归测试 3 个（js_rule_executor_test）：流式三模式 openssl 向量、GCM 加解密/篡改/不支持形态、省略段与默认 padding
+
+**剩余 P1（.research/00_学习路线图.md §二）**：URL,{json} 选项接入 tocUrl/contentUrl、全 JS URL；§三 体验 12 项（净化双层时机/自动换源判定/封面防盗链/图片管线/isolate 排版/登录补口/检测深化/订阅/目录标题净化/简繁顺序/getChapter 重试等）。
+
+## ⚠️ 最新状态（2026-09-03）：P0 语义错误 13 项全部修复（未提交，442 测试全绿）
+
+五路对照研究产出 `.research/00_学习路线图.md` + 01~05 分报告（Legado 源码/反编译 × EasyRead 逐行对照）。按 `.research/实施计划_P0.md` 分 4 批完成全部 13 项 P0 修复，**442 测试全绿 + analyze 0**（基线 417，新增 25 回归测试）：
+
+- **P0-1** legacy 索引 `:` 语义反转 → 离散索引（rule_parser.parseLegacyIndexes，对齐 AnalyzeByJSoup.kt:283）；顺带暴露并修复 `applyReplaceSuffixToValue` replaceFirst 只返回替换串未拼接的存量 bug
+- **P0-2** java.get 语义：1参=变量读取（putMap→种子变量→url→DOM 兜底）、2参=get2 网络 GET（js_network 新 kind，键=url|headersJson）
+- **P0-3** Dart 侧 variables 注入 `__putMap`（prelude/recordPrelude/全部重置点，变量跨遍可见）
+- **P0-4** java.post 返回真实 body（DioClient.postFormFull 新方法）
+- **P0-5** ajax/post/get2 网络错误返回 `Exception: <msg>` 错误串（Legado stackTraceStr 语义）
+- **P0-6** md5Encode16 = 中段 16 位 substring(8,24)（对齐 MD5Utils.kt）
+- **P0-7** timeFormat 1参默认 `yyyy/MM/dd HH:mm`（对齐 AppConst.dateFormat）
+- **P0-8** ruleContent.replaceRegex = 完整规则语义：`##` 链（删除/替换/第4段仅首）+ @js: 全规则 + 存量 JSON 数组与 `||` 兼容（applyContentReplaceRegex 转 async）
+- **P0-9** nextContentUrl 跨章守卫（nextUrl==下一章 URL 即停，目录取 nextChapterUrl 含相对解析）
+- **P0-10** 目录 chapterList `-/+` 前缀（倒序/剥除）+ 章节 URL 空兜底（卷=标题+序号、普通=baseUrl，BookChapterList.kt:230-244）；isVolume 元素级 CSS 查询补 root-inclusive（Jsoup 语义）
+- **P0-11** Cookie 全局回写：DioClient._send 逐跳捕获 Set-Cookie → CookieJarService.absorb 按名合并持久化（修复登录态静默衰减）；js_network 出站请求经 execute(cookieHeader:) 注入存储 Cookie（baseHeaders 不覆盖规则自带头、不污染缓存键）
+- **P0-12** 书源导入冲突：lastUpdateTime 新者胜（BookSource.lastUpdateTime getter + ImportBookSource._saveMerged——本地较新跳过、导入较新覆盖但保留本地 enabled/group）
+
+已知注意点：purify_rules_test 的 C2 deadline 超时测试在部分子集运行顺序下偶发（全量/单跑均绿，与指令中断预算的时序相关，非本次改动引入）。
+
+**下一步（P1，见 .research/00_学习路线图.md §二/§三）**：URL,{json} 选项接入 tocUrl/contentUrl、全 JS URL、JSON 响应默认 JSONPath、JSONPath &&/|| 语义、索引 [:3]/[3:]/降序、XPath last()/or/!=、java.cache 对象、getElements 动态选择器、jsLib 单次 eval+URL 磁盘缓存、connect/ajaxAll、净化双层时机、自动换源判定重做、封面防盗链等。
+
+## ⚠️ 最新状态（2026-09-03 二轮）：P1 文法/引擎补齐第一批 6 项（452 测试全绿）
+
+- **P1-1** JSONPath 组合语义对齐 Legado AnalyzeByJSonPath：`&&`=全非空拼接、`||`=首个非空、`%%`=下标交错；混合取最后分隔符类型（json_path.dart，原 `&&`=首非空系误读已修正）
+- **P1-2** 索引 DSL 端点省略（`[:3]`/`[3:]`/`[:]`）+ end<start 降序（`[3:1]`、`[-1:0]` 反向即降序路径），对齐 AnalyzeByJSoup:431-453（rule_parser.parseIndexSet startOpen/endOpen + selector_engine.expandIndexes）
+- **P1-3** JSON 内容 + 裸规则默认 JSONPath（AnalyzeRule.kt:533-536 isJSON 分支）：extractElements/evalString/evalStringList 三处插入，isBareRule+looksLikeJson 辅助
+- **P1-4** `<page,N>` page=null 保留占位符（AnalyzeUrl.kt:192 page?.let）——旧「审查修复」按第1页取段系误读，两处旧测试已改
+- **P1-5** XPath 补 last()/last()-N、`!=`、starts-with()、or、not()（xpathCondition+xpathElementMatches+非 CSS 可表达条件走元素级过滤）
+- **P1-6** java.cache 对象（Legado bindings["cache"]=CacheManager）：裸 `cache` + `java.cache` 双暴露，Hive 盒持久 + TTL 秒 + 过期清理 + 未初始化（Hive 2.2.3 openBox 双发坑）首败永久降级内存（js_cache_store.dart）
+
+**剩余 P1（.research/00_学习路线图.md §二）**：URL,{json} 选项接入 tocUrl/contentUrl（headers/retry/js）、全 JS URL、getElements 动态选择器、getElement Element 风格、jsLib 单次 eval+URL 磁盘缓存、connect/ajaxAll、getString isUrl/unescape 重载、createSymmetricCrypto 完整 transformation、限流 N/M 不串行；§三 体验类 12 项。
+
+## ⚠️ 最新状态（2026-09-03 三轮）：P1 第二批 3 项（458 测试全绿）
+
+- **P1-7** getElements 动态选择器：元素缓存改选择器键控（'docIndex|sel'，js_record_replay.replayOps），final 遍按选择器取缓存（不再依赖调用序号）；java.get 动态选择器（首参变量/含 `+` 拼接）整体路由到记录-重放路径（hasDynamicGet 检测）；序列一致性检查收紧为仅 get
+- **P1-8** jsLib：URL 条目下载 + JsCacheStore 磁盘缓存（7 天 TTL，fetcher 桩可测）；lib 仅第一次 eval 注入（QuickJS 全局词法环境 let/const 重复声明抛 SyntaxError——原每次 eval 拼入导致 const 类 lib 整规则降级 null）
+- **P1-9** getString/getStringList isUrl/unescape 重载：调用级扫描 + 逐字符参数解析（`_parseGetStringCall`，正则嵌套可选组在 Dart RegExp 下行为不稳已弃用）；Legado 重载语义——2 参单布尔=unescape（AnalyzeRule.kt:251）、3 参 (rule, content, isUrl)=isUrl；htmlUnescape + resolveIfUrl 辅助；JS/Dart 两侧 key 归一一致
+
+**剩余 P1（.research/00_学习路线图.md §二）**：URL,{json} 选项接入 tocUrl/contentUrl、全 JS URL、connect/ajaxAll、getElement Element 风格、createSymmetricCrypto 完整 transformation、限流 N/M 不串行；§三 体验 12 项。
+
+## ⚠️ 最新状态（2026-09-03 四轮）：P1 第三批 3 项（463 测试全绿）
+
+- **P1-10** java.connect/ajaxAll：connect 返回完整 StrResponse（status/header/headers/cookies/body）——DioClient 新增 getResponse（body+headers+status）；fetchNetworkResults 加 'connect' kind（fetcher 桩优先）；键=url|headersJson（缺省 '{}' 归一）；ajaxAll 复用 ajax 管道（__ajaxUrls 收集 + 缓存优先 stub）；executor 外层条件补 hasAjaxAll/hasConnect
+- **P1-11** getElement 单参返回 Element 风格对象（html/text/ownText/attr）：record 模式 push 'getElement' op → replayOps 取首元素快照（'docIndex|sel' 键）→ final 返回快照对象；两参保持字符串行为；单参规则经 hasGetElement 路由到记录-重放路径（静态预提取只缓存字符串）
+- **P1-12** HTTP charset 三级检测（规则 charset → Content-Type 头 charset → UTF-8 兜底）+ UTF-8/UTF-16 BOM 剥离（dio_client._decodeBody，对齐 Legado OkHttpUtils 三级语义）
+
+**剩余 P1（.research/00_学习路线图.md §二）**：URL,{json} 选项接入 tocUrl/contentUrl、全 JS URL、createSymmetricCrypto 完整 transformation、限流 N/M 不串行；§三 体验 12 项（净化双层时机/自动换源判定/封面防盗链/图片管线/isolate 排版/charset 其余/登录补口/检测深化/订阅/目录标题净化/简繁顺序/getChapter 重试）。
 
 ## ⚠️ 最新状态（2026-08-19）：产品收敛为「简单小说阅读器」
 

@@ -29,6 +29,27 @@ class RuleParser {
     return t.startsWith(r'$') || t.toLowerCase().startsWith('@json:');
   }
 
+  /// 规则无任何模式前缀（JS/CSS/JSONPath/XPath/AllInOne）：
+  /// 内容为 JSON 时裸规则默认走 JSONPath（Legado isJSON 分支）
+  static bool isBareRule(String rule) {
+    final t = rule.trim();
+    return !isJsRule(t) &&
+        !isCssRule(t) &&
+        !isJsonPath(t) &&
+        !isXPathRule(t) &&
+        !isAllInOneRule(t);
+  }
+
+  /// 内容是否 JSON 形态（首个非空白字符为 { 或 [）
+  static bool looksLikeJson(String content) {
+    for (var i = 0; i < content.length && i < 64; i++) {
+      final c = content.codeUnitAt(i);
+      if (c == 0x7B || c == 0x5B) return true; // { [
+      if (c != 0x20 && c != 0x09 && c != 0x0A && c != 0x0D) return false;
+    }
+    return false;
+  }
+
   /// 规则是否 CSS 模式（@css: 开头）
   static bool isCssRule(String rule) {
     final t = rule.trim();
@@ -319,30 +340,23 @@ static CascadeStep? parseStep(String segment) {
 }
 
 /// 解析旧式索引串：`.0` / `.0:2` / `!0` / `!-1:2`。
-/// 冒号分隔按**范围**语义解析（与 `[]` 语法的 [IndexRange] 一致），
-/// 修复旧实现把 `.0:2` 当作离散索引 {0, 2}（丢 1）与 Legado 语义相悖的问题。
+/// Legado 旧写法中 `:` 为**离散索引分隔符**（AnalyzeByJSoup.kt:283-284：
+/// 「阅读原有写法，':'分隔索引」），`tag.div!0:3` = 排除 {0, 3}；
+/// 旧写法无步长/区间概念，`-1:10:2` 即三个离散索引（-1 = 倒数第一）。
+/// 区间/步长/反向（`[-1:0]` 反向列表）是 `[]` 新语法专属，由
+/// [parseIndexSet] 解析，两套语义不可混淆。
   static (List<Object>, bool)? parseLegacyIndexes(String suffix) {
   if (suffix.isEmpty) return null;
   final separator = suffix[0];
   if (separator != '.' && separator != '!') return null;
   final indexBody = suffix.substring(1);
   if (!RegExp(r'^-?\d+(?::-?\d+)*$').hasMatch(indexBody)) return null;
-  final parts = indexBody.split(':').map(int.parse).toList();
-  if (parts.length == 1) {
-    return ([parts[0]], separator == '!');
-  }
-  final step = parts.length > 2 ? parts[2] : 1;
-  // 与 parseIndexSet 对齐：step=0 会在 expandIndexes 中形成 "i += 0"
-  // 死循环冻结主 isolate（如 `.5:0:0` 这类用户可控规则），按无索引处理。
-  if (step == 0) return null;
-  return ([
-    IndexRange(
-      start: parts[0],
-      end: parts[1],
-      step: step,
-      reverse: parts[0] == -1 && parts[1] == 0 && step == 1,
-    ),
-  ], separator == '!');
+  // 离散索引：负索引转正与越界跳过由 SelectorEngine.expandIndexes 的
+  // int 路径处理（与 Legado getElementsSingle 的 indexDefault 消费一致）。
+  // 离散 int 不存在 "i += 0" 死循环风险（区间/步长只在 [] 新语法出现，
+  // 那里的 step==0 仍由 parseIndexSet 拒绝）。
+  final indexes = indexBody.split(':').map(int.parse).toList();
+  return (indexes, separator == '!');
 }
 
 /// 解析 `[]` 索引集合：数字、`start:end`、`start:end:step`、`-1:0` 反向。
@@ -357,11 +371,16 @@ static CascadeStep? parseStep(String segment) {
       continue;
     }
     final range =
-        RegExp(r'^(-?\d+):(-?\d+)(?::(-?\d+))?$').firstMatch(item);
+        RegExp(r'^(-?\d+)?:(-?\d+)?(?::(-?\d+))?$').firstMatch(item);
     if (range != null) {
-      final start = int.parse(range.group(1)!);
-      final end = int.parse(range.group(2)!);
-      final step = range.group(3) == null ? 1 : int.parse(range.group(3)!);
+      // Legado 端点省略：start 省略=0、end 省略=len-1（AnalyzeByJSoup
+      // startX/endX 可空语义）；end<start 为降序（[-1:0] 反向即此路径）
+      final startStr = range.group(1);
+      final endStr = range.group(2);
+      final start = startStr == null ? 0 : int.parse(startStr);
+      final end = endStr == null ? 0 : int.parse(endStr);
+      final stepStr = range.group(3);
+      final step = stepStr == null ? 1 : int.parse(stepStr);
       // step=0 会在 _expandIndexes 中形成 "i += 0" 死循环冻结主 isolate
       // （[5:0:0] 这类用户可控规则），直接拒绝该索引集（按无索引处理）。
       if (step == 0) return null;
@@ -369,7 +388,8 @@ static CascadeStep? parseStep(String segment) {
         start: start,
         end: end,
         step: step,
-        reverse: start == -1 && end == 0 && step == 1,
+        startOpen: startStr == null,
+        endOpen: endStr == null,
       ));
       continue;
     }
@@ -421,11 +441,18 @@ class IndexRange {
   final int step;
   final bool reverse;
 
+  /// Legado 端点省略语义：start 省略=0、end 省略=len-1
+  /// （展开时按实际列表长度解析）
+  final bool startOpen;
+  final bool endOpen;
+
   const IndexRange({
     required this.start,
     required this.end,
     required this.step,
     this.reverse = false,
+    this.startOpen = false,
+    this.endOpen = false,
   });
 }
 

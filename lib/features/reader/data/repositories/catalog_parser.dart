@@ -6,6 +6,7 @@ import '../../domain/entities/chapter_catalog.dart';
 import '../../../search/data/engines/js_rule_executor.dart';
 import '../../../search/data/engines/js_template.dart';
 import '../../../search/data/engines/rule_engine.dart';
+import '../../../search/data/engines/rule_parser.dart';
 import '../../../search/data/engines/rule_template.dart';
 import '../../../search/data/engines/rule_variables.dart';
 
@@ -87,11 +88,15 @@ class CatalogParser {
   ) async {
     final listRule = source.chapterListRule;
     if (listRule == null) return [];
+    // bookList 同款 `-`/`+` 前缀（Legado BookChapterList.kt:49-56）：
+    // `-chapterList` 结果倒序，`+` 仅剥除
+    final (listRuleBody, listReverse) =
+        RuleParser.splitListRulePrefix(listRule);
     final List<dynamic> items;
-    if (RuleEngine.isJsRule(listRule)) {
+    if (RuleEngine.isJsRule(listRuleBody)) {
       final value = await JsRuleExecutor.execute(
         html,
-        listRule,
+        listRuleBody,
         baseUrl: baseUrl,
         charset: source.responseCharset,
         variables: variables,
@@ -99,7 +104,10 @@ class CatalogParser {
       );
       items = decodeJsListItems(value);
     } else {
-      items = RuleEngine.extractElements(html, listRule);
+      items = RuleEngine.extractElements(html, listRuleBody);
+    }
+    if (listReverse && items.length > 1) {
+      items.setAll(0, items.reversed.toList());
     }
     final chapters = <ChapterItem>[];
     for (var i = 0; i < items.length; i++) {
@@ -158,6 +166,11 @@ class CatalogParser {
           charset: source.responseCharset,
         );
       }
+      // 章节 URL 空兜底（Legado BookChapterList.kt:230-244）：
+      // 卷节点 = 标题+序号，普通章节 = baseUrl（目录页）
+      if (finalUrl.isEmpty) {
+        finalUrl = (hasIsVolumeRule && isVolume) ? '$finalTitle$i' : baseUrl;
+      }
       chapters.add(ChapterItem(
         title: finalTitle,
         url: finalUrl,
@@ -211,7 +224,21 @@ class CatalogParser {
       return jsTruthy(value);
     }
     final value = RuleEngine.getElementText(item, rule);
-    return value != null && value.trim().isNotEmpty;
+    if (value != null && value.trim().isNotEmpty) return true;
+    // Jsoup/Legado 语义：元素级 CSS 查询含元素自身（root-inclusive）——
+    // isVolume 规则常直接命中目录项自身（如 item 即 class.vol 节点）。
+    // 直接查询未命中时包一层探测节点重试。
+    if (item is dom.Element) {
+      final wrapped = parser.parse('<div id="__probe">${item.outerHtml}</div>');
+      final wrapper = wrapped.body?.children.isNotEmpty == true
+          ? wrapped.body!.children.first
+          : null;
+      if (wrapper != null) {
+        final selfValue = RuleEngine.getElementText(wrapper, rule);
+        if (selfValue != null && selfValue.trim().isNotEmpty) return true;
+      }
+    }
+    return false;
   }
 
   static bool jsTruthy(String? value) {

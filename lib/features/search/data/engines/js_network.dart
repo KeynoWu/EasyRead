@@ -18,6 +18,7 @@ class JsNetwork {
     List<String> urls, {
     String baseUrl = '',
     String? charset,
+    Map<String, String> baseHeaders = const {},
   }) async {
     if (urls.length > maxFetchUrls) {
       urls = urls.sublist(0, maxFetchUrls);
@@ -40,11 +41,18 @@ class JsNetwork {
           final html = JsRuleExecutor.fetcher != null
               ? await JsRuleExecutor.fetcher!(resolved).timeout(JsRuleExecutor.ajaxTimeout)
               : await client
-                    .getString(resolved, charset: charset)
+                    .getString(
+                      resolved,
+                      charset: charset,
+                      headers: baseHeaders.isEmpty ? null : baseHeaders,
+                    )
                     .timeout(JsRuleExecutor.ajaxTimeout);
           results[url] = html;
-        } catch (_) {
-          results[url] = '';
+        } catch (e) {
+          // 对齐 Legado：网络错误返回可识别错误串（AnalyzeRule.kt:783
+          // stackTraceStr 语义），JS 侧可据此感知失败，而非拿到与
+          // 空页面不可区分的 ''
+          results[url] = 'Exception: $e';
         }
       }
     }
@@ -74,6 +82,24 @@ class JsNetwork {
                     .value,
               )
               as List;
+      // java.connect(url[, headerJson])：完整 StrResponse（Legado JsExtensions.kt:136）
+      final connects =
+          jsonDecode(
+                (await engine
+                        .eval('JSON.stringify(__connectOps || [])')
+                        .timeout(JsRuleExecutor.evalTimeout))
+                    .value,
+              )
+              as List;
+      // java.get(url, headers) 两参形式 = 网络 GET（Legado JsExtensions.kt:359）
+      final get2s =
+          jsonDecode(
+                (await engine
+                        .eval('JSON.stringify(__get2Ops || [])')
+                        .timeout(JsRuleExecutor.evalTimeout))
+                    .value,
+              )
+              as List;
       return [
         for (final raw in posts)
           NetworkOp(
@@ -88,10 +114,39 @@ class JsNetwork {
             url: raw is List && raw.isNotEmpty ? raw[0].toString() : '',
             headers: stringMap(raw is List && raw.length > 1 ? raw[1] : null),
           ),
+        for (final raw in get2s)
+          NetworkOp(
+            kind: 'get2',
+            url: raw is List && raw.isNotEmpty ? raw[0].toString() : '',
+            headers: _headersFromJson(
+              raw is List && raw.length > 1 ? raw[1] : null,
+            ),
+          ),
+        for (final raw in connects)
+          NetworkOp(
+            kind: 'connect',
+            url: raw is List && raw.isNotEmpty ? raw[0].toString() : '',
+            headers: _headersFromJson(
+              raw is List && raw.length > 1 ? raw[1] : null,
+            ),
+          ),
       ];
     } catch (_) {
       return [];
     }
+  }
+
+  /// get2 操作的 headers 参数为 JSON 串（JS 侧已 JSON.stringify 归一）
+  static Map<String, String> _headersFromJson(dynamic value) {
+    if (value is Map) return stringMap(value);
+    if (value is String && value.trim().startsWith('{')) {
+      try {
+        return stringMap(jsonDecode(value));
+      } catch (_) {
+        return {};
+      }
+    }
+    return {};
   }
   static Map<String, String> stringMap(dynamic value) {
     if (value is! Map) return {};
@@ -104,6 +159,7 @@ class JsNetwork {
     List<NetworkOp> ops, {
     String baseUrl = '',
     String? charset,
+    Map<String, String> baseHeaders = const {},
   }) async {
     // post/head 与 ajax 一样限制总量：否则恶意规则可在 3s eval 内 push
     // 海量操作，后续以 4 并发串行消费导致总时长与请求量近似无界。
@@ -111,6 +167,7 @@ class JsNetwork {
       ops = ops.sublist(0, maxFetchUrls);
     }
     final results = <String, Map<String, dynamic>>{};
+    final connectStatus = <String, int>{};
     final client = JsRuleExecutor.networkClient ?? DioClient();
     var nextIndex = 0;
 
@@ -129,18 +186,62 @@ class JsNetwork {
             };
             continue;
           }
+          // 缓存键只由规则自带头构成（与 JS 侧一致）；基础头（如登录
+          // Cookie）仅在发请求时合并，且不覆盖规则自带同名头
           final headers = op.headers;
+          final requestHeaders = headers.isEmpty && baseHeaders.isEmpty
+              ? null
+              : {...baseHeaders, ...headers};
           final Map<String, List<String>> responseHeaders;
+          var body = '';
           if (op.kind == 'post') {
-            responseHeaders = await client.postFormHeaders(
+            // Legado java.post 返回完整 Response（body + headers），
+            // 读 POST 响应体的源（API 型）依赖 body
+            final (postBody, postHeaders) = await client.postFormFull(
               resolved,
-              headers: headers.isEmpty ? null : headers,
+              headers: requestHeaders,
               body: op.body,
+              charset: charset,
             );
+            body = postBody;
+            responseHeaders = postHeaders;
+          } else if (op.kind == 'connect') {
+            // 与 ajax 一致：fetcher 测试桩优先（无响应头/状态 200）
+            if (JsRuleExecutor.fetcher != null) {
+              body = await JsRuleExecutor
+                  .fetcher!(resolved)
+                  .timeout(JsRuleExecutor.ajaxTimeout);
+              responseHeaders = const {};
+              connectStatus[op.key] = 200;
+            } else {
+              final (cBody, cHeaders, cStatus) = await client.getResponse(
+                resolved,
+                headers: requestHeaders,
+                charset: charset,
+              );
+              body = cBody;
+              responseHeaders = cHeaders;
+              connectStatus[op.key] = cStatus;
+            }
+          } else if (op.kind == 'get2') {
+            // 与 ajax 一致：优先注入的 fetcher 测试桩（headers 不透传），
+            // 否则走 DioClient 带 headers 的 GET
+            body = JsRuleExecutor.fetcher != null
+                ? await JsRuleExecutor
+                    .fetcher!(resolved)
+                    .timeout(JsRuleExecutor.ajaxTimeout)
+                : await client
+                    .getString(
+                      resolved,
+                      headers: requestHeaders,
+                      charset: charset,
+                    )
+                    .timeout(JsRuleExecutor.ajaxTimeout);
+            responseHeaders = {};
           } else {
             responseHeaders = await client.getResponseHeaders(
               resolved,
-              headers: headers.isEmpty ? null : headers,
+              headers: requestHeaders,
             );
           }
           final flattened = <String, String>{};
@@ -155,13 +256,16 @@ class JsNetwork {
           results[op.key] = {
             'headers': flattened,
             'cookies': setCookies.map((v) => v.split(';').first).join('; '),
-            'body': '',
+            'body': body,
+            if (connectStatus.containsKey(op.key))
+              'status': connectStatus[op.key],
           };
-        } catch (_) {
+        } catch (e) {
+          // 网络错误对齐 Legado 错误串语义（不静默 ''）
           results[op.key] = {
             'headers': <String, String>{},
             'cookies': '',
-            'body': '',
+            'body': 'Exception: $e',
           };
         }
       }

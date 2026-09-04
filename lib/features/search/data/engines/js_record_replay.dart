@@ -32,16 +32,24 @@ class JsRecordReplay {
     final docs = <dom.Document>[parser.parse(html)];
     final values = <String>[];
     final elementCaches = <String, List<Map<String, dynamic>>>{};
-    var elementCallIndex = 0;
     for (var i = 0; i < ops.length; i++) {
       final op = ops[i];
       if (op[0] == 'setContent') {
         docs.add(parser.parse(op[1] as String));
+      } else if (op[0] == 'getElement') {
+        final idx = op[3] as int;
+        final doc = idx >= 0 && idx < docs.length ? docs[idx] : docs.last;
+        final elements = RuleEngine.queryIn(doc, op[1] as String);
+        elementCaches['$idx|${op[1]}'] = [
+          if (elements.isNotEmpty) elementSnapshot(elements.first),
+        ];
       } else if (op[0] == 'getElements') {
         final idx = op[3] as int;
         final doc = idx >= 0 && idx < docs.length ? docs[idx] : docs.last;
         final elements = RuleEngine.queryIn(doc, op[1] as String);
-        elementCaches['${elementCallIndex++}'] = [
+        // 选择器键控（含 docIndex）：支持运行时拼接的动态选择器——
+        // final 遍按 'docIndex|sel' 取缓存，不再依赖调用序号
+        elementCaches['$idx|${op[1]}'] = [
           for (final element in elements) elementSnapshot(element),
         ];
       } else {
@@ -73,12 +81,11 @@ class JsRecordReplay {
     JsEngine engine,
     List<List<dynamic>> ops,
   ) async {
+    // getElements 已选择器键控（'docIndex|sel'）自校正，无需序号比对；
+    // get 仍按序号消费值表，需校验两遍调用序列一致
     final expected = <String>[
       for (final op in ops)
-        if (op[0] == 'get')
-          'g|${op[1]}|${op[2] ?? ''}'
-        else if (op[0] == 'getElements')
-          'e|${op[1]}',
+        if (op[0] == 'get') 'g|${op[1]}|${op[2] ?? ''}',
     ];
     final actual = await readStringList(engine, '__getSelectors');
     if (actual.length != expected.length) return true;
@@ -111,12 +118,15 @@ class JsRecordReplay {
     Map<String, dynamic> json,
     String html,
     String baseUrl,
-    int? page,
-  ) {
+    int? page, {
+    String? key,
+    String? result,
+  }) {
     return '''
-globalThis.result = ${JsBridge.quote(html)};
+globalThis.result = ${JsBridge.quote(result ?? html)};
 globalThis.baseUrl = ${JsBridge.quote(baseUrl)};
 globalThis.page = ${page ?? 'undefined'};
+${key == null ? '' : 'globalThis.key = ${JsBridge.quote(key)};'}
 globalThis.__jsonPaths = [];
 globalThis.__htmlPaths = [];
 globalThis.__md5 = [];

@@ -49,6 +49,7 @@ class _FakeRepo extends ReaderRepositoryImpl {
     required String sourceId,
     String? detailUrl,
     Map<String, String> variables = const {},
+    ChineseConversionMode chineseMode = ChineseConversionMode.original,
   }) async {
     return Chapter(
       id: '$bookId#$chapterIndex',

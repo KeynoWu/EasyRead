@@ -3,6 +3,7 @@ import 'package:easy_read/features/reader/domain/entities/chapter.dart';
 import 'package:easy_read/features/reader/domain/entities/chapter_catalog.dart';
 import 'package:easy_read/features/reader/domain/entities/reading_progress.dart';
 import 'package:easy_read/features/reader/domain/repositories/reader_repository.dart';
+import 'package:easy_read/features/settings/domain/entities/chinese_conversion.dart';
 import 'package:easy_read/features/reader/domain/usecases/auto_switch_source.dart';
 import 'package:easy_read/features/search/domain/entities/search_result.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,6 +13,10 @@ class _FakeReaderRepository implements ReaderRepository {
   final Map<String, ChapterCatalog> catalogs = {};
   final Map<String, Exception> errors = {};
   final List<String> attempted = [];
+  // 正文验证：sourceId -> 抛错；未配置时默认成功
+  final Map<String, Exception> chapterErrors = {};
+  // getChapter 实际收到的 (sourceId, chapterIndex) 顺序
+  final List<(String, int)> chapterIndexes = [];
 
   @override
   Future<ChapterCatalog> getCatalog({
@@ -45,8 +50,20 @@ class _FakeReaderRepository implements ReaderRepository {
     required String sourceId,
     String? detailUrl,
     Map<String, String> variables = const {},
+    ChineseConversionMode chineseMode = ChineseConversionMode.original,
   }) async {
-    throw UnimplementedError();
+    chapterIndexes.add((sourceId, chapterIndex));
+    final error = chapterErrors[sourceId];
+    if (error != null) throw error;
+    return Chapter(
+      id: '${sourceId}_$chapterIndex',
+      bookId: bookId,
+      title: '第${chapterIndex + 1}章',
+      content: '正文',
+      index: chapterIndex,
+      sourceId: sourceId,
+      cachedAt: DateTime(2026, 1, 1),
+    );
   }
 
   @override
@@ -200,5 +217,98 @@ void main() {
     expect(result, isNotNull);
     expect(result!.sourceId, 'src-c');
     expect(repo.attempted, ['src-b', 'src-c']);
+  });
+
+  test('§三-2 当前章正文验证失败 → 候选不可用', () async {
+    final repo = _FakeReaderRepository()
+      ..catalogs['src-b'] = makeCatalog('src-b')
+      ..chapterErrors['src-b'] = Exception('正文提取失败')
+      ..catalogs['src-c'] = makeCatalog('src-c');
+    final usecase = AutoSwitchSource(repository: repo);
+
+    final result = await usecase.execute(
+      bookId: bookId,
+      currentSourceId: currentSourceId,
+      alternatives: [alt('src-b', '源B'), alt('src-c', '源C')],
+      chapterIndex: 0,
+    );
+
+    expect(result, isNotNull);
+    expect(result!.sourceId, 'src-c');
+    // src-b 目录成功但正文验证失败，仍尝试了 src-c
+    expect(repo.attempted, ['src-b', 'src-c']);
+  });
+
+  test('§三-2 出错章节索引越界时取最后一章验证（Legado getOrElse{last}）', () async {
+    final repo = _FakeReaderRepository()
+      ..catalogs['src-b'] = makeCatalog('src-b');
+    final usecase = AutoSwitchSource(repository: repo);
+
+    final result = await usecase.execute(
+      bookId: bookId,
+      currentSourceId: currentSourceId,
+      alternatives: [alt('src-b', '源B')],
+      chapterIndex: 5, // 目录只有 1 章
+    );
+
+    expect(result, isNotNull);
+    expect(repo.chapterIndexes, [('src-b', 0)]);
+  });
+
+  test('§三-2 verifyContent=false 时仅验证目录', () async {
+    final repo = _FakeReaderRepository()
+      ..catalogs['src-b'] = makeCatalog('src-b')
+      ..chapterErrors['src-b'] = Exception('正文失败也不影响');
+    final usecase = AutoSwitchSource(repository: repo);
+
+    final result = await usecase.execute(
+      bookId: bookId,
+      currentSourceId: currentSourceId,
+      alternatives: [alt('src-b', '源B')],
+      verifyContent: false,
+    );
+
+    expect(result, isNotNull);
+    expect(result!.sourceId, 'src-b');
+    expect(repo.chapterIndexes, isEmpty);
+  });
+
+  test('§三-2 多候选并发校验时首个可用源胜出', () async {
+    final repo = _FakeReaderRepository();
+    for (final id in ['src-b', 'src-c', 'src-d', 'src-e']) {
+      repo.catalogs[id] = makeCatalog(id);
+    }
+    final usecase = AutoSwitchSource(repository: repo);
+
+    final result = await usecase.execute(
+      bookId: bookId,
+      currentSourceId: currentSourceId,
+      alternatives: [
+        alt('src-b', '源B'),
+        alt('src-c', '源C'),
+        alt('src-d', '源D'),
+        alt('src-e', '源E'),
+      ],
+      concurrency: 4,
+    );
+
+    expect(result, isNotNull);
+    // 列表首位候选先被取出（next 递增顺序），成功即胜出
+    expect(result!.sourceId, 'src-b');
+  });
+
+  test('§三-2 瞬时网络错误（networkError）不触发自动换源判定', () async {
+    // repository 层语义：getChapter 兜底异常应为 networkError
+    // （reader_page 据此跳过自动换源），此处验证用例不因 kind 变化
+    final repo = _FakeReaderRepository()
+      ..catalogs['src-b'] = makeCatalog('src-b');
+    final usecase = AutoSwitchSource(repository: repo);
+
+    final result = await usecase.execute(
+      bookId: bookId,
+      currentSourceId: currentSourceId,
+      alternatives: [alt('src-b', '源B')],
+    );
+    expect(result, isNotNull);
   });
 }

@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:fast_gbk/fast_gbk.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
+import '../data/cookie_jar_service.dart';
 import 'interceptors/rate_limit_interceptor.dart';
 import 'interceptors/retry_interceptor.dart';
 import 'interceptors/ua_interceptor.dart';
@@ -64,7 +66,56 @@ class DioClient {
       responseType: ResponseType.bytes,
       cancelToken: cancelToken,
     );
-    return _decodeBody(response.data, charset);
+    return _decodeBody(response.data, charset, contentType: _contentTypeOf(response));
+  }
+
+  /// 二进制获取（封面/正文图片防盗链场景：带书源 headers/cookie 走
+  /// 完整 _send 管线——SSRF 每跳校验、Set-Cookie 回写、限流重试）。
+  Future<Uint8List> getBytes(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? concurrentRate,
+    CancelToken? cancelToken,
+  }) async {
+    final response = await _get(
+      url,
+      headers: headers,
+      sourceId: sourceId,
+      concurrentRate: concurrentRate,
+      responseType: ResponseType.bytes,
+      cancelToken: cancelToken,
+    );
+    final data = response.data;
+    if (data is Uint8List) return data;
+    if (data is List<int>) return Uint8List.fromList(data);
+    if (data is String) return Uint8List.fromList(utf8.encode(data));
+    return Uint8List(0);
+  }
+
+  /// 请求并返回（body, 响应头, statusCode）——JS 桥 java.connect 需要
+  /// 完整 StrResponse（Legado JsExtensions.connect 语义）
+  Future<(String, Map<String, List<String>>, int)> getResponse(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    final response = await _get(
+      url,
+      headers: headers,
+      sourceId: sourceId,
+      concurrentRate: concurrentRate,
+      responseType: ResponseType.bytes,
+      cancelToken: cancelToken,
+    );
+    return (
+      _decodeBody(response.data, charset, contentType: _contentTypeOf(response)),
+      response.headers.map,
+      response.statusCode ?? 0,
+    );
   }
 
   /// 请求并返回响应头，用于书源登录后捕获 Set-Cookie。
@@ -110,7 +161,7 @@ class DioClient {
       onReceiveProgress: onProgress,
       cancelToken: cancelToken,
     );
-    return _decodeBody(response.data, charset);
+    return _decodeBody(response.data, charset, contentType: _contentTypeOf(response));
   }
 
   /// POST 表单请求（Legado 书源搜索等场景）。
@@ -137,7 +188,7 @@ class DioClient {
       responseType: ResponseType.bytes,
       cancelToken: cancelToken,
     );
-    return _decodeBody(response.data, charset);
+    return _decodeBody(response.data, charset, contentType: _contentTypeOf(response));
   }
 
   /// POST 表单请求并返回响应头（书源登录等场景，部分接口需 POST 才能 Set-Cookie）
@@ -165,19 +216,180 @@ class DioClient {
     return response.headers.map;
   }
 
-  /// 按 charset 解码响应字节
-  static String _decodeBody(dynamic data, String? charset) {
+  /// POST 表单请求并同时返回（body, 响应头）——JS 桥 java.post 需要两者
+  /// （Legado JsExtensions.post 返回完整 Response）。
+  Future<(String, Map<String, List<String>>)> postFormFull(
+    String url, {
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    final response = await _send(
+      'POST',
+      url,
+      headers: {
+        ...?headers,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      data: body,
+      sourceId: sourceId,
+      concurrentRate: concurrentRate,
+      responseType: ResponseType.bytes,
+      cancelToken: cancelToken,
+    );
+    return (_decodeBody(response.data, charset, contentType: _contentTypeOf(response)), response.headers.map);
+  }
+
+  /// 从响应头提取 content-type 值（decode 用）
+  static String? _contentTypeOf(Response<dynamic> response) {
+    final values = response.headers['content-type'];
+    if (values == null || values.isEmpty) return null;
+    return values.join('; ');
+  }
+
+  /// 通用取文本请求（GET 或带 body 的 POST）——URL,{json} 选项接入
+  /// 目录/正文/搜索的统一入口。[retry] 对齐 Legado AnalyzeUrl retry 选项：
+  /// 失败后重试 N 次（0=不重试）。POST 默认表单 Content-Type，
+  /// 显式 headers 里的 Content-Type 优先（JSON body 源自带声明）。
+  Future<String> requestString(
+    String url, {
+    String method = 'GET',
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    int retry = 0,
+    CancelToken? cancelToken,
+  }) async {
+    final isPost = method.trim().toUpperCase() == 'POST';
+    var attempt = 0;
+    while (true) {
+      try {
+        final response = await _send(
+          isPost ? 'POST' : 'GET',
+          url,
+          headers: isPost
+              ? {
+                  ...?headers,
+                  'Content-Type': headers?['Content-Type'] ??
+                      'application/x-www-form-urlencoded',
+                }
+              : headers,
+          data: isPost ? body : null,
+          sourceId: sourceId,
+          concurrentRate: concurrentRate,
+          responseType: ResponseType.bytes,
+          cancelToken: cancelToken,
+        );
+        return _decodeBody(
+          response.data,
+          charset,
+          contentType: _contentTypeOf(response),
+        );
+      } on DioException catch (e) {
+        // 重试仅对瞬时网络异常（对齐 Legado retry 的 IOException 语义）：
+        // cancel 是调用方主动停止，重发违背取消意图；解码等非网络错误
+        // 重试也不会好转，直接抛。
+        if (e.type == DioExceptionType.cancel ||
+            !_isRetryableNetworkError(e)) {
+          rethrow;
+        }
+        attempt++;
+        if (attempt > retry) rethrow;
+      }
+    }
+  }
+
+  /// 是否可重试的网络异常（连接/读写超时、连接失败、证书问题）；
+  /// 服务器已响应（badResponse）不重试——重试同样的请求大概率同样失败。
+  static bool _isRetryableNetworkError(DioException e) {
+    switch (e.type) {
+      case DioExceptionType.connectionTimeout:
+      case DioExceptionType.sendTimeout:
+      case DioExceptionType.receiveTimeout:
+      case DioExceptionType.connectionError:
+      case DioExceptionType.badCertificate:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /// 按 charset 解码响应字节（P1-12，三级检测对齐 Legado OkHttpUtils）：
+  /// 规则 charset（书源显式指定）→ Content-Type 头 charset → UTF-8 兜底；
+  /// 自动剥离 UTF-8/UTF-16 BOM。
+  static String _decodeBody(
+    dynamic data,
+    String? charset, {
+    String? contentType,
+  }) {
     // 仅接受字节列表；异常类型不产出噪音文本
     if (data is! List<int>) return '';
-    final lower = charset?.toLowerCase();
+    var bytes = data;
+    // BOM 检测与剥离：UTF-8 EF BB BF / UTF-16 LE FF FE / UTF-16 BE FE FF。
+    // UTF-16 站点必须按 UTF-16 解码（仅剥 BOM 会 mojibake）。
+    var utf16LittleEndian = false;
+    var hasUtf16Bom = false;
+    if (bytes.length >= 3 &&
+        bytes[0] == 0xEF &&
+        bytes[1] == 0xBB &&
+        bytes[2] == 0xBF) {
+      bytes = bytes.sublist(3);
+    } else if (bytes.length >= 2 &&
+        (bytes[0] == 0xFF && bytes[1] == 0xFE)) {
+      bytes = bytes.sublist(2);
+      hasUtf16Bom = true;
+      utf16LittleEndian = true;
+    } else if (bytes.length >= 2 &&
+        (bytes[0] == 0xFE && bytes[1] == 0xFF)) {
+      bytes = bytes.sublist(2);
+      hasUtf16Bom = true;
+      utf16LittleEndian = false;
+    }
+    // 规则 charset 优先；其次 Content-Type 头的 charset 参数
+    var effective = charset?.trim();
+    if (effective == null || effective.isEmpty) {
+      final ct = contentType?.toLowerCase() ?? '';
+      final m = RegExp(r'charset\s*=\s*([\w-]+)').firstMatch(ct);
+      if (m != null) effective = m.group(1);
+    }
+    final lower = effective?.toLowerCase();
+    // UTF-16：BOM 优先定端序；无 BOM 时按 RFC 2781 默认大端
+    //（显式 utf-16le/be 覆盖）
+    if (hasUtf16Bom || lower == 'utf-16' || lower == 'utf16') {
+      return _utf16Decode(bytes, utf16LittleEndian);
+    }
+    if (lower == 'utf-16le' || lower == 'utf16le') {
+      return _utf16Decode(bytes, true);
+    }
+    if (lower == 'utf-16be' || lower == 'utf16be') {
+      return _utf16Decode(bytes, false);
+    }
     if (lower == 'gbk' || lower == 'gb2312' || lower == 'gb18030') {
       try {
-        return gbk.decode(data);
+        return gbk.decode(bytes);
       } catch (_) {
         // GBK 解码失败回退 UTF-8
       }
     }
-    return utf8.decode(data, allowMalformed: true);
+    return utf8.decode(bytes, allowMalformed: true);
+  }
+
+  /// UTF-16 字节解码（LE/BE）。Dart String 即 UTF-16 码元序列：
+  /// 逐码元还原可保留代理对（含非成对代理，不丢字）。
+  static String _utf16Decode(List<int> bytes, bool littleEndian) {
+    final buffer = StringBuffer();
+    for (var i = 0; i + 1 < bytes.length; i += 2) {
+      final unit = littleEndian
+          ? (bytes[i] | (bytes[i + 1] << 8))
+          : ((bytes[i] << 8) | bytes[i + 1]);
+      buffer.writeCharCode(unit);
+    }
+    return buffer.toString();
   }
 
   Future<Response<dynamic>> _get(
@@ -250,6 +462,19 @@ class DioClient {
               onReceiveProgress: onReceiveProgress,
               cancelToken: cancelToken,
             );
+      // 响应 Set-Cookie 全局回写（P0-11）：带 sourceId 的请求逐跳捕获，
+      // 按名合并进书源 cookie 盒（Legado CookieManager 语义）——修复
+      // 会话轮换后登录态静默衰减。失败不影响响应本身。
+      if (sourceId != null && sourceId.isNotEmpty) {
+        final setCookies = response.headers['set-cookie'];
+        if (setCookies != null && setCookies.isNotEmpty) {
+          try {
+            await CookieJarService().absorb(sourceId, setCookies);
+          } catch (_) {
+            // cookie 盒不可用（未初始化/损坏）时静默跳过
+          }
+        }
+      }
       final statusCode = response.statusCode ?? 0;
       final location = response.headers.value('location');
       if (statusCode >= 300 && statusCode < 400) {

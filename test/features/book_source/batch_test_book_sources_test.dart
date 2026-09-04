@@ -7,6 +7,7 @@ import 'package:easy_read/features/book_source/data/services/book_source_test_st
 import 'package:easy_read/features/book_source/domain/entities/book_source.dart';
 import 'package:easy_read/features/book_source/domain/usecases/batch_test_book_sources.dart';
 import 'package:easy_read/features/book_source/domain/usecases/test_book_source.dart';
+import 'package:easy_read/features/search/domain/entities/search_result.dart';
 
 /// 可控的假测试器：按源名返回预设结果，模拟耗时
 class _FakeTester extends TestBookSource {
@@ -28,6 +29,18 @@ class _FakeTester extends TestBookSource {
       success: usable,
       message: usable ? 'ok' : '规则不匹配',
       resultCount: usable ? 3 : 0,
+      // 全链路检测（§三-11）取首个样例继续目录/正文校验
+      samples: usable
+          ? [
+              SearchResult(
+                bookId: 'b_${source.id}',
+                name: '样例书',
+                detailUrl: 'https://${source.id}.example.com/book/1',
+                sourceId: source.id,
+                sourceName: source.name,
+              ),
+            ]
+          : const [],
     );
   }
 }

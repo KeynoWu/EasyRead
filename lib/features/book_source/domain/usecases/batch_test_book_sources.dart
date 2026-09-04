@@ -56,15 +56,16 @@ class BatchTestBookSources {
   /// 检测并发上限
   static const int maxConcurrent = 6;
 
-  /// 单源检测超时（超出判定不可用）
-  static const Duration perSourceTimeout = Duration(seconds: 8);
+  /// 单源检测超时（超出判定不可用；§三-11 可注入覆盖，默认 8 秒）
+  final Duration perSourceTimeout;
 
-  /// 检测统一关键词（保证源间可比性）
+  /// 检测统一关键词（保证源间可比性；源自带 checkKeyWord 时被源级覆盖）
   static const String testKeyword = '小说';
 
   BatchTestBookSources({
     TestBookSource? tester,
     BookSourceTestStore? store,
+    this.perSourceTimeout = const Duration(seconds: 8),
   })  : tester = tester ?? TestBookSource(),
         store = store ?? BookSourceTestStore();
 
@@ -156,16 +157,19 @@ class BatchTestBookSources {
   ) async {
     final stopwatch = Stopwatch()..start();
     try {
-      final result = await tester
-          .testSearch(source, testKeyword, cancelToken: cancelToken)
+      // 全链路检测（§三-11）：搜索 → 目录 → 正文，逐级打失效分组标签
+      final (groups, samples) = await tester
+          .testFullChain(source, testKeyword, cancelToken: cancelToken)
           .timeout(perSourceTimeout);
       stopwatch.stop();
+      final chainFailed = groups.isNotEmpty;
       return BookSourceTestRecord(
-        usable: result.success,
+        usable: !chainFailed,
         responseTimeMs: stopwatch.elapsedMilliseconds,
         testedAt: DateTime.now(),
-        resultCount: result.resultCount,
-        error: result.success ? null : result.message,
+        resultCount: samples.length,
+        error: chainFailed ? groups.join('、') : null,
+        groups: groups,
       );
     } on TimeoutException {
       stopwatch.stop();

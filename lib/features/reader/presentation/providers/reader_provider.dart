@@ -54,6 +54,12 @@ class ReaderState {
   /// 与 showSettings 两级分离：菜单是轻量入口层，设置面板是二级弹层。
   final bool showMenu;
   final String? errorMessage;
+  /// 错误类别（自动换源判定依据，对齐 Legado 仅书源级失败才自动换源）：
+  /// sourceError=书源层失败可自动换源；networkError=瞬时网络异常不触发；
+  /// null=非章节加载错误。
+  final ChapterErrorKind? errorKind;
+  /// 出错章节索引（自动换源时验证替代源「当前章正文」用）。
+  final int? errorChapterIndex;
   final ReadingMode readingMode;
   /// 翻页动画样式
   final PageTurnStyle pageTurnStyle;
@@ -76,6 +82,8 @@ class ReaderState {
     this.showSettings = false,
     this.showMenu = false,
     this.errorMessage,
+    this.errorKind,
+    this.errorChapterIndex,
     this.viewportSize = const Size(400, 600),
     this.nodes = const [],
     this.chineseMode = ChineseConversionMode.original,
@@ -95,6 +103,8 @@ class ReaderState {
     bool? showSettings,
     bool? showMenu,
     Object? errorMessage = _unset,
+    Object? errorKind = _unset,
+    Object? errorChapterIndex = _unset,
     ReadingMode? readingMode,
     PageTurnStyle? pageTurnStyle,
     Size? viewportSize,
@@ -117,6 +127,10 @@ class ReaderState {
       errorMessage: errorMessage == _unset
           ? this.errorMessage
           : errorMessage as String?,
+      errorKind: errorKind == _unset ? this.errorKind : errorKind as ChapterErrorKind?,
+      errorChapterIndex: errorChapterIndex == _unset
+          ? this.errorChapterIndex
+          : errorChapterIndex as int?,
       readingMode: readingMode ?? this.readingMode,
       pageTurnStyle: pageTurnStyle ?? this.pageTurnStyle,
       viewportSize: viewportSize ?? this.viewportSize,
@@ -272,6 +286,8 @@ class ReaderNotifier extends Notifier<ReaderState> {
       catalog: null,
       isLoading: false,
       errorMessage: null,
+      errorKind: null,
+      errorChapterIndex: null,
     );
   }
 
@@ -294,7 +310,15 @@ class ReaderNotifier extends Notifier<ReaderState> {
     _lastChapterIndex = chapterIndex;
     _lastSourceId = sourceId;
     _lastDetailUrl = widgetDetailUrl;
-    state = state.copyWith(isLoading: true, errorMessage: null);
+    state = state.copyWith(
+      isLoading: true,
+      errorMessage: null,
+      errorKind: null,
+      errorChapterIndex: null,
+    );
+    // 简繁模式先于取章加载：仓库在净化规则前套用转换（§三-11，
+    // Legado getContent 顺序 chineseConvert → 替换规则）
+    final mode = await _loadChineseMode();
     try {
       final chapter = await _repository.getChapter(
         bookId: bookId,
@@ -302,10 +326,11 @@ class ReaderNotifier extends Notifier<ReaderState> {
         sourceId: sourceId,
         detailUrl: detailUrl,
         variables: effectiveVariables,
+        chineseMode: mode,
       );
       if (seq != _loadSeq) return; // 已被更新的请求取代
 
-      final mode = await _loadChineseMode();
+      // 正文/标题已在仓库读取时完成简繁转换（§三-11），此处直接解析
       final nodes = _parseChapterContent(chapter, mode);
       _currentNodes = nodes;
 
@@ -314,9 +339,18 @@ class ReaderNotifier extends Notifier<ReaderState> {
 
       // 视口未上报真实尺寸（首次打开）时延迟分页：等 setViewport 触发，避免双分页
       final viewportReady = _viewportReported;
+      // §三-12 流式分页：长章节批间让渡事件循环，不阻塞 UI；换章请求
+      // 已取代本次加载时提前停止
       final pages = viewportReady
-          ? _paginate(nodes, chapter)
+          ? await _paginateStreamingCached(
+              nodes,
+              chapter,
+              isCancelled: () => seq != _loadSeq,
+            )
           : const <PageContent>[];
+      // 流式分页多次让渡事件循环，窗口内可能已有更新请求取代本次加载：
+      // 旧结果（可能是 isCancelled 截断的部分页）不得覆盖新章状态
+      if (seq != _loadSeq) return;
       // 进度属于当前章节才恢复页码：翻章后读回的 progress 可能仍是
       // 上一章的（防抖落盘未完成/上章未写），直接套用会让新章从
       // 随机/末页打开。chapterIndex 不匹配时从首页开始。
@@ -332,6 +366,8 @@ class ReaderNotifier extends Notifier<ReaderState> {
         progress: progress,
         isLoading: false,
         errorMessage: null,
+        errorKind: null,
+        errorChapterIndex: null,
         chineseMode: mode,
       );
 
@@ -369,6 +405,10 @@ class ReaderNotifier extends Notifier<ReaderState> {
           catalog: null,
           isLoading: false,
           errorMessage: e is ChapterLoadException ? e.message : '章节加载失败，请重试',
+          // 网络异常置 networkError：阅读页据此不触发自动换源；
+          // 记录出错章节索引供自动换源做「当前章正文验证」
+          errorKind: e is ChapterLoadException ? e.kind : null,
+          errorChapterIndex: chapterIndex,
         );
       }
     }
@@ -395,8 +435,10 @@ class ReaderNotifier extends Notifier<ReaderState> {
     Chapter chapter,
     ChineseConversionMode mode,
   ) {
-    var nodes = _parser.parse(ChineseConversion.convert(chapter.content, mode));
-    final title = ChineseConversion.convert(chapter.title, mode).trim();
+    // 正文/标题已在仓库读取时完成简繁转换（§三-11，先于净化规则），
+    // 此处不再转换（避免二次转换）；去重比较基于转换后的 title。
+    var nodes = _parser.parse(chapter.content);
+    final title = chapter.title.trim();
     if (title.isNotEmpty && !nodes.any((n) => n.text.trim() == title)) {
       nodes = [
         TextNode(type: NodeType.heading, text: title, headingLevel: 1),
@@ -574,9 +616,16 @@ class ReaderNotifier extends Notifier<ReaderState> {
     _pageCache.clear();
     final nodes = _parseChapterContent(chapter, mode);
     _currentNodes = nodes;
+    // §三-12 流式分页：切转换模式重排长章节同样不阻塞 UI
     final pages = _viewportReported
-        ? _paginate(nodes, chapter)
+        ? await _paginateStreamingCached(
+            nodes,
+            chapter,
+            isCancelled: () => seq != _loadSeq,
+          )
         : const <PageContent>[];
+    // 让渡窗口内已有更新加载（新章/换书）时不得用旧章重排覆盖
+    if (seq != _loadSeq) return;
     final currentPage = _alignPage(state.currentPage, pages.length);
     state = state.copyWith(
       nodes: nodes,
@@ -614,6 +663,17 @@ class ReaderNotifier extends Notifier<ReaderState> {
         '|cm=${_chineseMode?.index ?? ChineseConversionMode.original.index}';
   }
 
+  /// 当前视口与排版配置对应的分页引擎（横屏双栏：分页宽度减半，
+  /// 每屏并排渲染两页（左=当前页、右=下一页）。仅调整 viewWidth。
+  PageLayout _layoutForCurrent() {
+    final vp = state.viewportSize;
+    return PageLayout(
+      viewWidth: vp.width > vp.height ? vp.width / 2 : vp.width,
+      viewHeight: vp.height,
+      config: state.layoutConfig,
+    );
+  }
+
   /// 使用当前视口与排版配置分页（命中缓存直接返回，避免重复 TextPainter 重排）
   List<PageContent> _paginate(List<TextNode> nodes, Chapter chapter) {
     final key = _pageCacheKey(chapter);
@@ -625,17 +685,41 @@ class ReaderNotifier extends Notifier<ReaderState> {
       return cached;
     }
 
-    final vp = state.viewportSize;
-    // 横屏双栏：分页宽度减半，每屏并排渲染两页（左=当前页、右=下一页）。
-    // 仅调整传入分页引擎的 viewWidth，分页引擎本身不改。
-    final layout = PageLayout(
-      viewWidth: vp.width > vp.height ? vp.width / 2 : vp.width,
-      viewHeight: vp.height,
-      config: state.layoutConfig,
-    );
+    final layout = _layoutForCurrent();
     final pages = layout.paginate(nodes);
     _pageCache[key] = pages;
     // LRU 淘汰：命中已重插到末尾，keys.first 即最久未使用
+    if (_pageCache.length > _pageCacheMax) {
+      _pageCache.remove(_pageCache.keys.first);
+    }
+    return pages;
+  }
+
+  /// 流式分页（§三-12）：与 [_paginate] 结果一致并共用同一缓存；长章节
+  /// 按 [PageLayout.paginateStreaming] 分批让渡事件循环，避免一次性阻塞
+  /// 主 isolate。[isCancelled] 命中时返回已处理部分（调用方 seq 防护下
+  /// 该结果会被丢弃，不落缓存）。
+  Future<List<PageContent>> _paginateStreamingCached(
+    List<TextNode> nodes,
+    Chapter chapter, {
+    bool Function()? isCancelled,
+  }) async {
+    final key = _pageCacheKey(chapter);
+    final cached = _pageCache[key];
+    if (cached != null) {
+      // LRU 刷新
+      _pageCache.remove(key);
+      _pageCache[key] = cached;
+      return cached;
+    }
+
+    final layout = _layoutForCurrent();
+    final pages = await layout.paginateStreaming(
+      nodes,
+      isCancelled: isCancelled,
+    );
+    if (isCancelled?.call() ?? false) return pages;
+    _pageCache[key] = pages;
     if (_pageCache.length > _pageCacheMax) {
       _pageCache.remove(_pageCache.keys.first);
     }

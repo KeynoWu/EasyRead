@@ -9,6 +9,7 @@ import '../../domain/repositories/search_repository.dart';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as parser;
 import '../engines/js_rule_executor.dart';
+import '../engines/url_spec.dart';
 import '../engines/js_template.dart';
 import '../engines/rule_engine.dart';
 import '../engines/rule_parser.dart';
@@ -42,10 +43,21 @@ class SearchRepositoryImpl implements SearchRepository {
     }
 
     try {
-      // 解析 Legado 搜索地址：URL 或 `URL,{json参数}`（method/body/charset）
-      final spec = _parseSearchUrl(source.searchUrl!);
-      final charset = spec?.charset ?? source.responseCharset;
-      final rawSearchPath = spec?.url ?? source.searchUrl!;
+      // 解析 Legado 搜索地址（AnalyzeUrl 语义：先 JS 段后 `,{json}` 选项）：
+      // 全 JS URL 绑定 key/page 求值；选项含 method/headers/body/charset/
+      // retry/js（js 以已解析 URL 为 result，结果覆盖 URL）
+      final spec = await UrlSpec.parse(
+        source.searchUrl!,
+        evalJs: (js, result) => JsRuleExecutor.evalUrlJs(
+          js,
+          key: keyword,
+          page: page,
+          baseUrl: source.bookSourceUrl,
+          result: result,
+        ),
+      );
+      final charset = spec.charset ?? source.responseCharset;
+      final rawSearchPath = spec.url;
       final searchPath =
           (await JsRuleExecutor.evalTemplate(
             rawSearchPath,
@@ -65,7 +77,11 @@ class SearchRepositoryImpl implements SearchRepository {
         ),
       );
 
-      final headers = <String, String>{...source.requestHeaders};
+      final headers = <String, String>{
+        ...source.requestHeaders,
+        // 选项 headers 覆盖源级（Legado headerMap putAll 顺序）
+        ...spec.headers,
+      };
       if (source.enabledCookieJar) {
         final storedCookie = await _cookieJar.get(source.id);
         if (storedCookie != null && storedCookie.isNotEmpty) {
@@ -82,13 +98,11 @@ class SearchRepositoryImpl implements SearchRepository {
         } else {
           try {
             // loginUrl 支持 GET 或 Legado POST 格式（URL,{json}）
-            final loginSpec = _parseSearchUrl(source.loginUrl!);
-            final loginPath = loginSpec?.url ?? source.loginUrl!;
+            final loginSpec = await UrlSpec.parse(source.loginUrl!);
+            final loginPath = loginSpec.url;
             final loginUrl = _resolveUrl(source.bookSourceUrl, loginPath);
             final Map<String, List<String>> loginHeaders;
-            if (loginSpec != null &&
-                loginSpec.method == 'POST' &&
-                loginSpec.body != null) {
+            if (loginSpec.isPost && loginSpec.hasBody) {
               loginHeaders = await _client.postFormHeaders(
                 loginUrl,
                 headers: headers.isEmpty ? null : headers,
@@ -122,7 +136,7 @@ class SearchRepositoryImpl implements SearchRepository {
       }
 
       final String html;
-      if (spec != null && spec.method == 'POST' && spec.body != null) {
+      if (spec.isPost && spec.hasBody) {
         // POST 表单：body 里 {{key}} 用表单编码替换
         final rawBody = spec.body!;
         final bodyTemplate =
@@ -139,22 +153,25 @@ class SearchRepositoryImpl implements SearchRepository {
           page: page,
           encodeValues: true,
         );
-        html = await _client.postForm(
+        html = await _client.requestString(
           searchUrl,
+          method: 'POST',
           headers: headers.isEmpty ? null : headers,
           body: body,
           sourceId: source.id,
           concurrentRate: source.concurrentRate,
           charset: charset,
+          retry: spec.retry,
           cancelToken: cancelToken,
         );
       } else {
-        html = await _client.getString(
+        html = await _client.requestString(
           searchUrl,
           headers: headers.isEmpty ? null : headers,
           sourceId: source.id,
           concurrentRate: source.concurrentRate,
           charset: charset,
+          retry: spec.retry,
           cancelToken: cancelToken,
         );
       }
@@ -312,9 +329,17 @@ class SearchRepositoryImpl implements SearchRepository {
   }) async {
     if (!source.enabled || url.trim().isEmpty) return [];
     try {
-      final spec = _parseSearchUrl(url);
-      final charset = spec?.charset ?? source.responseCharset;
-      final rawPath = spec?.url ?? url;
+      final spec = await UrlSpec.parse(
+        url,
+        evalJs: (js, result) => JsRuleExecutor.evalUrlJs(
+          js,
+          page: page,
+          baseUrl: source.bookSourceUrl,
+          result: result,
+        ),
+      );
+      final charset = spec.charset ?? source.responseCharset;
+      final rawPath = spec.url;
       final path =
           (await JsRuleExecutor.evalTemplate(
             rawPath,
@@ -336,7 +361,7 @@ class SearchRepositoryImpl implements SearchRepository {
         }
       }
       await _ensureLoginHeaders(source, headers, resolvedUrl, cancelToken);
-      final rawBody = spec?.body;
+      final rawBody = spec.body;
       final bodyTemplate =
           rawBody == null
               ? null
@@ -347,22 +372,25 @@ class SearchRepositoryImpl implements SearchRepository {
                   charset: charset,
                 )) ??
                   rawBody;
-      final html = spec != null && spec.method == 'POST' && bodyTemplate != null
-          ? await _client.postForm(
+      final html = spec.isPost && spec.hasBody && bodyTemplate != null
+          ? await _client.requestString(
               resolvedUrl,
+              method: 'POST',
               headers: headers.isEmpty ? null : headers,
               body: RuleTemplate.interpolate(bodyTemplate, page: page),
               sourceId: source.id,
               concurrentRate: source.concurrentRate,
               charset: charset,
+              retry: spec.retry,
               cancelToken: cancelToken,
             )
-          : await _client.getString(
+          : await _client.requestString(
               resolvedUrl,
               headers: headers.isEmpty ? null : headers,
               sourceId: source.id,
               concurrentRate: source.concurrentRate,
               charset: charset,
+              retry: spec.retry,
               cancelToken: cancelToken,
             );
       final responseHtml = await _applyLoginCheck(
@@ -507,8 +535,8 @@ class SearchRepositoryImpl implements SearchRepository {
       return const BookSourceDebugResult(error: '书源缺少搜索 URL 或书籍列表规则');
     }
     try {
-      final spec = _parseSearchUrl(source.searchUrl!);
-      final path = spec?.url ?? source.searchUrl!;
+      final spec = await UrlSpec.parse(source.searchUrl!);
+      final path = spec.url;
       final searchUrl = _resolveUrl(
         source.bookSourceUrl,
         RuleTemplate.interpolate(
@@ -517,8 +545,11 @@ class SearchRepositoryImpl implements SearchRepository {
           encodeValues: true,
         ),
       );
-      final headers = <String, String>{...source.requestHeaders};
-      final charset = spec?.charset ?? source.responseCharset;
+      final headers = <String, String>{
+        ...source.requestHeaders,
+        ...spec.headers,
+      };
+      final charset = spec.charset ?? source.responseCharset;
       if (source.enabledCookieJar) {
         final cookie = await _cookieJar.get(source.id);
         if (cookie != null && cookie.isNotEmpty) {
@@ -529,22 +560,25 @@ class SearchRepositoryImpl implements SearchRepository {
       // 避免"调试成功、实际搜索失败"的误导
       await _ensureLoginHeaders(source, headers, searchUrl, null);
       final String html;
-      if (spec != null && spec.method == 'POST' && spec.body != null) {
-        html = await _client.postForm(
+      if (spec.isPost && spec.hasBody) {
+        html = await _client.requestString(
           searchUrl,
+          method: 'POST',
           headers: headers.isEmpty ? null : headers,
           body: spec.body!.replaceAll('{{key}}', Uri.encodeQueryComponent(keyword)),
           sourceId: source.id,
           concurrentRate: source.concurrentRate,
           charset: charset,
+          retry: spec.retry,
         );
       } else {
-        html = await _client.getString(
+        html = await _client.requestString(
           searchUrl,
           headers: headers.isEmpty ? null : headers,
           sourceId: source.id,
           concurrentRate: source.concurrentRate,
           charset: charset,
+          retry: spec.retry,
         );
       }
       final responseHtml = await _applyLoginCheck(
@@ -763,38 +797,6 @@ class SearchRepositoryImpl implements SearchRepository {
     return '${sourceId}_$index';
   }
 
-  /// 解析 Legado 搜索地址：`URL` 或 `URL,{json参数}`。
-  /// 参数：method（GET/POST）、body（POST 表单体）、charset（响应编码）。
-  static _SearchSpec? _parseSearchUrl(String raw) {
-    final comma = raw.indexOf(',{');
-    if (comma <= 0 || comma >= raw.length - 2) return null;
-    final url = raw.substring(0, comma).trim();
-    if (url.isEmpty) return null;
-    final params = _decodeParams(raw.substring(comma + 1));
-    if (params == null) return null;
-    return _SearchSpec(
-      url: url,
-      method: (params['method']?.toString() ?? 'GET').toUpperCase(),
-      body: params['body']?.toString(),
-      charset: params['charset']?.toString(),
-    );
-  }
-
-  /// 解析参数 JSON：先按标准双引号解析；失败再尝试 Legado 单引号格式
-  /// （盲替换单引号为双引号，body 值内含单引号时按失败处理退化 GET）
-  static Map<String, dynamic>? _decodeParams(String jsonStr) {
-    try {
-      return jsonDecode(jsonStr) as Map<String, dynamic>;
-    } catch (_) {
-      // 单引号 JSON（Legado 惯例）转双引号后重试
-      try {
-        return jsonDecode(jsonStr.replaceAll("'", '"')) as Map<String, dynamic>;
-      } catch (_) {
-        return null;
-      }
-    }
-  }
-
   /// 相对路径基于书源域名拼接（如 /modules/article/search.php → https://host/modules/...）
   static String _resolveUrl(String? base, String path) {
     if (path.isEmpty) return '';
@@ -820,13 +822,11 @@ class SearchRepositoryImpl implements SearchRepository {
       return;
     }
     try {
-      final loginSpec = _parseSearchUrl(source.loginUrl!);
-      final loginPath = loginSpec?.url ?? source.loginUrl!;
+      final loginSpec = await UrlSpec.parse(source.loginUrl!);
+      final loginPath = loginSpec.url;
       final loginUrl = _resolveUrl(source.bookSourceUrl, loginPath);
       final Map<String, List<String>> loginHeaders;
-      if (loginSpec != null &&
-          loginSpec.method == 'POST' &&
-          loginSpec.body != null) {
+      if (loginSpec.isPost && loginSpec.hasBody) {
         loginHeaders = await _client.postFormHeaders(
           loginUrl,
           headers: headers.isEmpty ? null : headers,
@@ -879,8 +879,36 @@ class SearchRepositoryImpl implements SearchRepository {
       baseUrl: url,
       charset: charset,
       cookies: cookieStore,
+      cookieHeader: storedCookie,
       jsLib: source.jsLib,
     );
+    // 登录失效检测（§三-7，对齐 Legado WebBook 检测书源是否已登录）：
+    // 1) 源 JS 显式约定 error: 前缀（执行结果或规则原文）→ 透传为登录
+    //    失效错误
+    final trimmed = value?.trim() ?? '';
+    final rawCheck = loginCheckJs.trim();
+    final expiredReason = trimmed.startsWith('error:')
+        ? trimmed.substring(6).trim()
+        : rawCheck.startsWith('error:')
+            ? rawCheck.substring(6).trim()
+            : null;
+    if (expiredReason != null) {
+      throw SourceLoginExpiredException(
+        expiredReason.isEmpty ? '登录已失效，请重新登录书源' : '登录已失效：$expiredReason',
+      );
+    }
+    // 2) loginCheckJs 需要网页交互登录（startBrowser，本应用无 WebView
+    //    通道，桥返回空）且当前无登录 Cookie → 明确「登录已失效」而非
+    //    笼统的书源失败，引导用户走 WebView 登录
+    final hasCookie =
+        (storedCookie?.isNotEmpty ?? false) || (headers['Cookie']?.isNotEmpty ?? false);
+    if (trimmed.isEmpty &&
+        !hasCookie &&
+        loginCheckJs.contains('startBrowser')) {
+      throw const SourceLoginExpiredException(
+        '登录已失效，请在书源列表重新登录（该源校验需要网页登录）',
+      );
+    }
     final updatedCookie = cookieStore[source.id] ??
         cookieStore[source.bookSourceUrl ?? ''] ??
         cookieStore[url] ??
@@ -898,23 +926,30 @@ class SearchRepositoryImpl implements SearchRepository {
     }
     return value != null && value.isNotEmpty ? value : html;
   }
+
+  /// 登出（§三-7）：立即清除该书源登录态——内存会话缓存（TTL 内仍会
+  /// 命中，登出必须同步失效，不能等 TTL）+ 加密盒 Cookie。书源列表
+  /// 「退出登录」入口调用。
+  Future<void> logoutSource(String sourceId) async {
+    if (sourceId.isEmpty) return;
+    _cookieCache.remove(sourceId);
+    await _cookieJar.remove(sourceId);
+  }
+}
+
+/// 书源登录态失效（§三-7）：loginCheckJs 明确报错（error: 前缀）或需要
+/// 网页交互登录而本地无 Cookie 时抛出；上层据此提示重新登录，不与普通
+/// 书源失败混为一谈。
+class SourceLoginExpiredException implements Exception {
+  final String message;
+
+  const SourceLoginExpiredException([this.message = '登录已失效，请重新登录书源']);
+
+  @override
+  String toString() => message;
 }
 
 /// 解析后的搜索请求规格
-class _SearchSpec {
-  final String url;
-  final String method;
-  final String? body;
-  final String? charset;
-
-  const _SearchSpec({
-    required this.url,
-    required this.method,
-    this.body,
-    this.charset,
-  });
-}
-
 /// 登录 Cookie 会话缓存条目：记录抓取时间，TTL 过期后重新登录
 class _CookieSession {
   final String cookie;

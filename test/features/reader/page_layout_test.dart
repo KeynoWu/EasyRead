@@ -99,4 +99,69 @@ void main() {
       expect(totalText.length, greaterThan(1000));
     });
   });
+
+  group('§三-12 paginateStreaming 流式分批排版', () {
+    PageLayout makeLayout({double viewHeight = 150}) =>
+        PageLayout(viewWidth: 400, viewHeight: viewHeight);
+
+    List<TextNode> makeNodes({int count = 120}) => List.generate(
+          count,
+          (i) => TextNode(
+            type: NodeType.paragraph,
+            text: '第${i + 1}段文字内容用于流式分页验证，内容足够长需要换行排版。' * 2,
+          ),
+        );
+
+    test('流式结果与同步分页完全一致', () async {
+      final nodes = makeNodes(count: 60);
+      final syncPages = makeLayout().paginate(nodes);
+      final streamed = await makeLayout().paginateStreaming(nodes);
+      expect(syncPages.length, greaterThan(1));
+      expect(streamed.length, syncPages.length);
+      for (var i = 0; i < syncPages.length; i++) {
+        expect(streamed[i].pageIndex, syncPages[i].pageIndex);
+        expect(
+          streamed[i].nodes.map((n) => n.text).join(),
+          syncPages[i].nodes.map((n) => n.text).join(),
+        );
+      }
+    });
+
+    test('onPartial 渐进回调：增长前缀，最终快照不超前完整结果', () async {
+      final nodes = makeNodes(count: 60);
+      final partials = <List<PageContent>>[];
+      final finalPages = await makeLayout()
+          .paginateStreaming(nodes, batchSize: 10, onPartial: partials.add);
+      // 多批处理 → 多次回调（60 节点 / 批 10 → 至少 5 次）
+      expect(partials.length, greaterThanOrEqualTo(5));
+      for (var i = 1; i < partials.length; i++) {
+        // 每次回调的页数不减少（增长前缀）
+        expect(partials[i].length,
+            greaterThanOrEqualTo(partials[i - 1].length));
+      }
+      // 末次快照页数与完整结果一致（尾页可能在最后一批内合并）
+      expect(partials.last.length, lessThanOrEqualTo(finalPages.length));
+      expect(partials.last.length, greaterThanOrEqualTo(finalPages.length - 1));
+    });
+
+    test('isCancelled 提前停止并返回部分结果', () async {
+      final nodes = makeNodes(count: 60);
+      var processed = 0;
+      final pages = await makeLayout().paginateStreaming(
+        nodes,
+        batchSize: 10,
+        isCancelled: () => ++processed > 25,
+      );
+      expect(pages.length, lessThan(makeLayout().paginate(nodes).length));
+    });
+
+    test('batchSize 不影响最终分页结果（批大小无关性）', () async {
+      final nodes = makeNodes(count: 45);
+      final by10 = await makeLayout().paginateStreaming(nodes, batchSize: 10);
+      final by7 = await makeLayout().paginateStreaming(nodes, batchSize: 7);
+      final byAll = await makeLayout().paginateStreaming(nodes, batchSize: 1000);
+      expect(by10.length, by7.length);
+      expect(by10.length, byAll.length);
+    });
+  });
 }

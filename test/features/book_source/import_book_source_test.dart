@@ -1,11 +1,15 @@
+import 'dart:io';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:easy_read/core/network/dio_client.dart';
+import 'package:easy_read/features/book_source/data/services/source_subscription_store.dart';
 import 'package:easy_read/features/book_source/domain/entities/book_source.dart';
 import 'package:easy_read/features/book_source/domain/repositories/book_source_repository.dart';
 import 'package:easy_read/features/book_source/domain/usecases/import_book_source.dart';
 import 'package:easy_read/features/book_source/domain/usecases/parse_book_source_rule.dart';
+import 'package:hive/hive.dart';
 
 class _MockSourceRepo implements BookSourceRepository {
   final saved = <BookSource>[];
@@ -27,7 +31,64 @@ class _MockSourceRepo implements BookSourceRepository {
 }
 
 /// 模拟 DioClient：慢速但持续传输的下载
+/// P0-12：带已存在书源的仓储桩（getById 命中，save 按 id 覆盖）
+class _SeededSourceRepo extends _MockSourceRepo {
+  final Map<String, BookSource> existing;
+  _SeededSourceRepo(this.existing);
+
+  @override
+  Future<BookSource?> getById(String id) async => existing[id];
+
+  @override
+  Future<void> save(BookSource source) async {
+    saved.removeWhere((s) => s.id == source.id);
+    saved.add(source);
+  }
+}
+
 class _SlowDownloadClient implements DioClient {
+  @override
+  Future<Uint8List> getBytes(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? concurrentRate,
+    CancelToken? cancelToken,
+  }) async => Uint8List(0);
+
+  @override
+  Future<String> requestString(
+    String url, {
+    String method = 'GET',
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    int retry = 0,
+    CancelToken? cancelToken,
+  }) async {
+    if (method.toUpperCase() == 'POST' && body != null) {
+      return postForm(
+        url,
+        headers: headers,
+        body: body,
+        sourceId: sourceId,
+        concurrentRate: concurrentRate,
+        charset: charset,
+        cancelToken: cancelToken,
+      );
+    }
+    return getString(
+      url,
+      headers: headers,
+      sourceId: sourceId,
+      concurrentRate: concurrentRate,
+      charset: charset,
+      cancelToken: cancelToken,
+    );
+  }
+
   final int totalChunks;
 
   _SlowDownloadClient({this.totalChunks = 20});
@@ -39,6 +100,19 @@ class _SlowDownloadClient implements DioClient {
   Future<String> getString(String url, {Map<String, String>? headers, String? sourceId,
  String? concurrentRate, String? charset, CancelToken? cancelToken}) async {
     return '';
+  }
+
+  @override
+  @override
+  Future<(String, Map<String, List<String>>, int)> getResponse(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    return ('', const <String, List<String>>{}, 200);
   }
 
   @override
@@ -64,6 +138,19 @@ class _SlowDownloadClient implements DioClient {
     CancelToken? cancelToken,
   }) async {
     return {};
+  }
+
+  @override
+  Future<(String, Map<String, List<String>>)> postFormFull(
+    String url, {
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    return ('', const <String, List<String>>{});
   }
 
   @override
@@ -132,6 +219,48 @@ class _NeverSendsClient extends _StalledClient {
 }
 
 class _StalledClient implements DioClient {
+  @override
+  Future<Uint8List> getBytes(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? concurrentRate,
+    CancelToken? cancelToken,
+  }) async => Uint8List(0);
+
+  @override
+  Future<String> requestString(
+    String url, {
+    String method = 'GET',
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    int retry = 0,
+    CancelToken? cancelToken,
+  }) async {
+    if (method.toUpperCase() == 'POST' && body != null) {
+      return postForm(
+        url,
+        headers: headers,
+        body: body,
+        sourceId: sourceId,
+        concurrentRate: concurrentRate,
+        charset: charset,
+        cancelToken: cancelToken,
+      );
+    }
+    return getString(
+      url,
+      headers: headers,
+      sourceId: sourceId,
+      concurrentRate: concurrentRate,
+      charset: charset,
+      cancelToken: cancelToken,
+    );
+  }
+
   final Duration stall;
   bool sawCancelled = false;
 
@@ -144,6 +273,19 @@ class _StalledClient implements DioClient {
   Future<String> getString(String url, {Map<String, String>? headers, String? sourceId,
  String? concurrentRate, String? charset, CancelToken? cancelToken}) async {
     return '';
+  }
+
+  @override
+  @override
+  Future<(String, Map<String, List<String>>, int)> getResponse(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    return ('', const <String, List<String>>{}, 200);
   }
 
   @override
@@ -172,6 +314,20 @@ class _StalledClient implements DioClient {
   }
 
 @override
+  @override
+  Future<(String, Map<String, List<String>>)> postFormFull(
+    String url, {
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    return ('', const <String, List<String>>{});
+  }
+
+  @override
   Future<String> postForm(
     String url, {
     Map<String, String>? headers,
@@ -207,12 +363,67 @@ class _StalledClient implements DioClient {
 
 class _TooLargeClient implements DioClient {
   @override
+  Future<Uint8List> getBytes(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? concurrentRate,
+    CancelToken? cancelToken,
+  }) async => Uint8List(0);
+
+  @override
+  Future<String> requestString(
+    String url, {
+    String method = 'GET',
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    int retry = 0,
+    CancelToken? cancelToken,
+  }) async {
+    if (method.toUpperCase() == 'POST' && body != null) {
+      return postForm(
+        url,
+        headers: headers,
+        body: body,
+        sourceId: sourceId,
+        concurrentRate: concurrentRate,
+        charset: charset,
+        cancelToken: cancelToken,
+      );
+    }
+    return getString(
+      url,
+      headers: headers,
+      sourceId: sourceId,
+      concurrentRate: concurrentRate,
+      charset: charset,
+      cancelToken: cancelToken,
+    );
+  }
+
+  @override
   Dio get dio => Dio();
 
   @override
   Future<String> getString(String url, {Map<String, String>? headers, String? sourceId,
  String? concurrentRate, String? charset, CancelToken? cancelToken}) async {
     return '';
+  }
+
+  @override
+  @override
+  Future<(String, Map<String, List<String>>, int)> getResponse(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    return ('', const <String, List<String>>{}, 200);
   }
 
   @override
@@ -241,6 +452,20 @@ class _TooLargeClient implements DioClient {
   }
 
 @override
+  @override
+  Future<(String, Map<String, List<String>>)> postFormFull(
+    String url, {
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    return ('', const <String, List<String>>{});
+  }
+
+  @override
   Future<String> postForm(
     String url, {
     Map<String, String>? headers,
@@ -388,5 +613,241 @@ void main() {
       expect(repo.saved.length, 1);
       expect(repo.saved.first.name, '剪贴板源');
     });
+
+    test('P0-12 本地 lastUpdateTime 较新：导入跳过不覆盖', () async {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.getData') {
+          return {
+            'text': '[{"bookSourceName":"旧导入","bookSourceUrl":"https://example.com","lastUpdateTime":1000}]',
+          };
+        }
+        return null;
+      });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+      });
+
+      final repo = _SeededSourceRepo({
+        'https://example.com': const BookSource(
+          id: 'https://example.com',
+          name: '本地版',
+          bookSourceUrl: 'https://example.com',
+          rules: {'lastUpdateTime': 2000},
+        ),
+      });
+      final useCase = ImportBookSource(
+        repository: repo,
+        parser: ParseBookSourceRule(),
+        client: _SlowDownloadClient(),
+      );
+      final result = await useCase.fromClipboard();
+      expect(result.isRight, isTrue);
+      expect(repo.saved, isEmpty, reason: '本地较新时导入应跳过');
+    });
+
+    test('P0-12 导入较新：覆盖规则但保留本地启用与分组', () async {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.getData') {
+          return {
+            'text': '[{"bookSourceName":"新导入","bookSourceUrl":"https://example.com","lastUpdateTime":3000,"bookSourceGroup":"新组"}]',
+          };
+        }
+        return null;
+      });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+      });
+
+      final repo = _SeededSourceRepo({
+        'https://example.com': const BookSource(
+          id: 'https://example.com',
+          name: '本地版',
+          bookSourceUrl: 'https://example.com',
+          enabled: false,
+          bookSourceGroup: '本地组',
+          rules: {'lastUpdateTime': 1000},
+        ),
+      });
+      final useCase = ImportBookSource(
+        repository: repo,
+        parser: ParseBookSourceRule(),
+        client: _SlowDownloadClient(),
+      );
+      final result = await useCase.fromClipboard();
+      expect(result.isRight, isTrue);
+      expect(repo.saved.length, 1);
+      expect(repo.saved.first.name, '新导入');
+      expect(repo.saved.first.enabled, isFalse, reason: '保留本地启用状态');
+      expect(repo.saved.first.bookSourceGroup, '本地组', reason: '保留本地分组');
+    });
   });
+
+  group('§三-9 书源订阅', () {
+    late Directory tempDir;
+
+    setUp(() async {
+      tempDir = Directory.systemTemp.createTempSync('hive_sub');
+      Hive.init(tempDir.path);
+    });
+
+    tearDown(() async {
+      await Hive.deleteFromDisk();
+      tempDir.deleteSync(recursive: true);
+    });
+
+    test('订阅容器 {"sourceUrls": [...]} 递归拉取，单地址失败不中断', () async {
+      final client = _UrlMapClient(responses: {
+        'https://ex.com/sub.json':
+            '{"sourceUrls":["https://ex.com/a.json","https://ex.com/b.json","https://ex.com/broken.json"]}',
+        'https://ex.com/a.json':
+            '[{"bookSourceName":"源A","bookSourceUrl":"https://a.com"}]',
+        'https://ex.com/b.json':
+            '[{"bookSourceName":"源B","bookSourceUrl":"https://b.com"}]',
+      }, failing: {
+        'https://ex.com/broken.json',
+      });
+      final store = SourceSubscriptionStore();
+      final useCase = ImportBookSource(
+        repository: _MockSourceRepo(),
+        parser: ParseBookSourceRule(),
+        client: client,
+        subscriptionStore: store,
+      );
+
+      final result = await useCase.fromUrl('https://ex.com/sub.json');
+      expect(result.isRight, isTrue);
+      result.fold((l) => fail('不应失败: $l'), (sources) {
+        expect(sources.map((s) => s.name), ['源A', '源B']);
+      });
+      // 容器自身与成功子地址都记录为订阅（子地址失败不记录）
+      expect(client.requested, containsAll([
+        'https://ex.com/a.json',
+        'https://ex.com/b.json',
+        'https://ex.com/broken.json',
+      ]));
+      final subs = await store.list();
+      expect(subs.single.url, 'https://ex.com/sub.json');
+      expect(subs.single.lastSourceCount, 2);
+    });
+
+    test('订阅子地址返回容器 → 不递归（深度 1，防容器链）', () async {
+      final client = _UrlMapClient(responses: {
+        'https://ex.com/outer.json':
+            '{"sourceUrls":["https://ex.com/inner.json"]}',
+        'https://ex.com/inner.json':
+            '{"sourceUrls":["https://ex.com/a.json"]}',
+        'https://ex.com/a.json':
+            '[{"bookSourceName":"不应拉到","bookSourceUrl":"https://a.com"}]',
+      });
+      final store = SourceSubscriptionStore();
+      final useCase = ImportBookSource(
+        repository: _MockSourceRepo(),
+        parser: ParseBookSourceRule(),
+        client: client,
+        subscriptionStore: store,
+      );
+
+      final result = await useCase.fromUrl('https://ex.com/outer.json');
+      expect(result.isLeft, isTrue,
+          reason: '子容器不递归：inner.json 内容按普通 JSON 解析失败');
+      // 只请求了 outer 与 inner，未沿容器链继续拉取 a.json
+      expect(client.requested, ['https://ex.com/outer.json', 'https://ex.com/inner.json']);
+    });
+
+    test('订阅容器全失败 → 明确错误文案', () async {
+      final client = _UrlMapClient(responses: {
+        'https://ex.com/sub.json':
+            '{"sourceUrls":["https://ex.com/broken.json"]}',
+      }, failing: {
+        'https://ex.com/broken.json',
+      });
+      final useCase = ImportBookSource(
+        repository: _MockSourceRepo(),
+        parser: ParseBookSourceRule(),
+        client: client,
+        subscriptionStore: SourceSubscriptionStore(),
+      );
+
+      final result = await useCase.fromUrl('https://ex.com/sub.json');
+      expect(result.isLeft, isTrue);
+      result.fold((l) => expect(l, contains('拉取失败')), (r) => fail('不应成功'));
+    });
+
+    test('refreshSubscriptions 一键更新：成功记录合并数，失败给出错误', () async {
+      final store = SourceSubscriptionStore();
+      await store.recordChecked('https://ex.com/good.json');
+      await store.recordChecked('https://ex.com/dead.json');
+
+      final client = _UrlMapClient(responses: {
+        'https://ex.com/good.json':
+            '[{"bookSourceName":"更新源","bookSourceUrl":"https://up.com"}]',
+      }, failing: {
+        'https://ex.com/dead.json',
+      });
+      final useCase = ImportBookSource(
+        repository: _MockSourceRepo(),
+        parser: ParseBookSourceRule(),
+        client: client,
+        subscriptionStore: store,
+      );
+
+      final results = await useCase.refreshSubscriptions();
+      expect(results.length, 2);
+      final good = results.firstWhere((r) => r.url == 'https://ex.com/good.json');
+      final dead = results.firstWhere((r) => r.url == 'https://ex.com/dead.json');
+      expect(good.isSuccess, isTrue);
+      expect(good.updated, 1);
+      expect(dead.isSuccess, isFalse);
+      expect(dead.error, isNotNull);
+    });
+
+    test('无订阅时 refreshSubscriptions 返回空列表', () async {
+      final useCase = ImportBookSource(
+        repository: _MockSourceRepo(),
+        parser: ParseBookSourceRule(),
+        client: _UrlMapClient(responses: {}),
+        subscriptionStore: SourceSubscriptionStore(),
+      );
+      expect(await useCase.refreshSubscriptions(), isEmpty);
+    });
+  });
+}
+
+/// 按 URL 返回预设响应的客户端（订阅容器/刷新测试）；
+/// [failing] 中的 URL 抛连接异常，模拟子地址失效。
+class _UrlMapClient extends DioClient {
+  final Map<String, String> responses;
+  final Set<String> failing;
+  final requested = <String>[];
+
+  _UrlMapClient({required this.responses, this.failing = const {}})
+      : super.forTesting(Dio());
+
+  @override
+  Future<String> getStringWithProgress(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    Map<String, dynamic>? extra,
+    void Function(int received, int total)? onProgress,
+    CancelToken? cancelToken,
+  }) async {
+    requested.add(url);
+    if (failing.contains(url)) {
+      throw DioException(
+        requestOptions: RequestOptions(path: url),
+        type: DioExceptionType.connectionError,
+      );
+    }
+    onProgress?.call(1, 1);
+    return responses[url] ?? '';
+  }
 }

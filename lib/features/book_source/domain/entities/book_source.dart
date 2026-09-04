@@ -70,6 +70,10 @@ class BookSource {
     return null;
   }
 
+  /// 更新时间戳（Legado lastUpdateTime，毫秒）：导入冲突判定用
+  /// （新者胜——ImportBookSourceViewModel comparisonSource 语义）
+  int get lastUpdateTime => parseWeight(rules['lastUpdateTime']) ?? 0;
+
   /// 并发率（Legado concurrentRate）：
   /// - `N/M`：M 毫秒内最多 N 次请求（滑动窗口）
   /// - 单数字：相邻请求最小间隔（毫秒）

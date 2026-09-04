@@ -51,6 +51,15 @@ class RuleEngine {
     if (RuleParser.isXPathRule(rule)) {
       return SelectorEngine.xpathElements(parser.parse(html), rule);
     }
+    // Legado：内容为 JSON 且规则无模式前缀时默认按 JSONPath 解析
+    // （AnalyzeRule.kt:533-536 isJSON → getAnalyzeByJSonPath）
+    if (RuleParser.looksLikeJson(html) && RuleParser.isBareRule(rule)) {
+      return [
+        for (final value
+            in JsonPathEngine.queryString(html, RuleParser.normalizeJsonPath(rule)))
+          if (value is List) ...value else value,
+      ];
+    }
     final multi = RuleParser.multiRuleType(rule);
     if (multi != null) {
       final parts = RuleParser.splitRule(rule, multi);
@@ -223,6 +232,12 @@ class RulePipeline {
       final list = SelectorEngine.xpathTextList(html, rule);
       return list.isEmpty ? null : list.first;
     }
+    // Legado：JSON 内容 + 裸规则 → JSONPath（isJSON 分支）
+    if (RuleParser.looksLikeJson(html) && RuleParser.isBareRule(rule)) {
+      final values =
+          JsonPathEngine.queryString(html, RuleParser.normalizeJsonPath(rule));
+      return values.isEmpty ? null : SelectorEngine.jsonToString(values.first);
+    }
     final multi = RuleParser.multiRuleType(rule);
     if (multi != null) {
       return evalMultiString(html, rule, multi);
@@ -268,6 +283,23 @@ class RulePipeline {
     }
     if (RuleParser.isXPathRule(rule)) {
       return SelectorEngine.xpathTextList(html, rule);
+    }
+    // Legado：JSON 内容 + 裸规则 → JSONPath（isJSON 分支）
+    if (RuleParser.looksLikeJson(html) && RuleParser.isBareRule(rule)) {
+      final result = <String>[];
+      for (final value in JsonPathEngine.queryString(
+          html, RuleParser.normalizeJsonPath(rule))) {
+        if (value is List) {
+          for (final item in value) {
+            final text = SelectorEngine.jsonToString(item);
+            if (text != null && text.isNotEmpty) result.add(text);
+          }
+        } else {
+          final text = SelectorEngine.jsonToString(value);
+          if (text != null && text.isNotEmpty) result.add(text);
+        }
+      }
+      return result;
     }
     final multi = RuleParser.multiRuleType(rule);
     if (multi != null) {

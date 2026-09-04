@@ -4,8 +4,51 @@ import 'package:easy_read/features/book_source/domain/entities/book_source.dart'
 import 'package:easy_read/features/book_source/domain/repositories/book_source_repository.dart';
 import 'package:easy_read/features/reader/data/repositories/reader_repository_impl.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'dart:typed_data';
 
 class _CatalogClient implements DioClient {
+  @override
+  Future<String> requestString(
+    String url, {
+    String method = 'GET',
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    int retry = 0,
+    CancelToken? cancelToken,
+  }) async {
+    if (method.toUpperCase() == 'POST' && body != null) {
+      return postForm(
+        url,
+        headers: headers,
+        body: body,
+        sourceId: sourceId,
+        concurrentRate: concurrentRate,
+        charset: charset,
+        cancelToken: cancelToken,
+      );
+    }
+    return getString(
+      url,
+      headers: headers,
+      sourceId: sourceId,
+      concurrentRate: concurrentRate,
+      charset: charset,
+      cancelToken: cancelToken,
+    );
+  }
+
+  @override
+  Future<Uint8List> getBytes(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? concurrentRate,
+    CancelToken? cancelToken,
+  }) async => Uint8List(0);
+
   int catalogCalls = 0;
 
   @override
@@ -23,6 +66,19 @@ class _CatalogClient implements DioClient {
   }) async {
     catalogCalls++;
     return '<ul><li><a href="https://example.com/ch/1">第一章</a></li></ul>';
+  }
+
+  @override
+  @override
+  Future<(String, Map<String, List<String>>, int)> getResponse(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    return ('', const <String, List<String>>{}, 200);
   }
 
   @override
@@ -51,6 +107,20 @@ class _CatalogClient implements DioClient {
   }
 
 @override
+  @override
+  Future<(String, Map<String, List<String>>)> postFormFull(
+    String url, {
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    return ('', const <String, List<String>>{});
+  }
+
+  @override
   Future<String> postForm(
     String url, {
     Map<String, String>? headers,

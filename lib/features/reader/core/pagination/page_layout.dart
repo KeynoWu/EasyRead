@@ -48,7 +48,6 @@ class PageLayout {
   List<PageContent> paginate(List<TextNode> nodes) {
     if (nodes.isEmpty) return [];
 
-    final pages = <PageContent>[];
     final textPainter = TextPainter(
       textDirection: TextDirection.ltr,
     );
@@ -56,58 +55,132 @@ class PageLayout {
     final contentWidth = math.max(0.0, viewWidth - config.horizontalPadding * 2);
     final contentHeight = viewHeight;
 
-    final currentPageNodes = <TextNode>[];
-    var currentPageHeight = 0.0;
-
-    void flushPage() {
-      if (currentPageNodes.isEmpty) return;
-      pages.add(PageContent(
-        nodes: List.from(currentPageNodes),
-        pageIndex: pages.length,
-      ));
-      currentPageNodes.clear();
-      currentPageHeight = 0.0;
-    }
+    final cursor = _PaginationCursor();
 
     for (final node in nodes) {
-      final nodeHeight = _measureNodeHeight(node, textPainter, contentWidth);
-
-      // 当前节点放不下当前页剩余空间 → 翻页
-      if (currentPageHeight + nodeHeight > contentHeight + _epsilon &&
-          currentPageNodes.isNotEmpty) {
-        flushPage();
-      }
-
-      if (nodeHeight <= contentHeight + _epsilon) {
-        currentPageNodes.add(node);
-        currentPageHeight += nodeHeight;
-      } else if (node.type == NodeType.paragraph) {
-        // 单个段落超高：按页高切分为多段，再逐段分配（含当前页剩余空间），保证不溢出
-        // 切分目标高度扣除段落间距，使切出的每段测量高度（含间距）不超过页高
-        final segments = _splitParagraph(
-          node,
-          textPainter,
-          contentWidth,
-          math.max(1.0, contentHeight - config.paragraphSpacing),
-        );
-        for (final segment in segments) {
-          final segHeight = _measureNodeHeight(segment, textPainter, contentWidth);
-          if (currentPageHeight + segHeight > contentHeight + _epsilon &&
-              currentPageNodes.isNotEmpty) {
-            flushPage();
-          }
-          currentPageNodes.add(segment);
-          currentPageHeight += segHeight;
-        }
-      } else {
-        // 非段落超高（罕见）：放入新页顶部，宁可截断视觉也不无限翻页
-        currentPageNodes.add(node);
-        currentPageHeight += nodeHeight;
-      }
+      _processNode(node, cursor, textPainter, contentWidth, contentHeight);
     }
 
-    flushPage();
-    return pages;
+    if (cursor.currentPageNodes.isNotEmpty) {
+      cursor.pages.add(PageContent(
+        nodes: List.from(cursor.currentPageNodes),
+        pageIndex: cursor.pages.length,
+      ));
+    }
+    return cursor.pages;
+  }
+
+  /// 流式分批排版（§三-12）：与 [paginate] 结果完全一致，但按 [batchSize]
+  /// 节点一批处理，批间让渡事件循环（Future.delayed(Duration.zero)）交还
+  /// UI 线程渲染帧——长章节排版不再一次性阻塞主 isolate 数百毫秒。
+  ///
+  /// 引擎约束：TextPainter 依赖 ParagraphBuilder，仅根 isolate 可用
+  /// （实验证实后台 isolate 抛 "UI actions are only available on root
+  /// isolate"），因此无法直接下沉 compute/isolate.run；分批让渡是本引擎
+  /// 版本下的等价方案。
+  ///
+  /// [onPartial]：每批处理完回调已完成页快照（增长前缀，可用于渐进渲染/
+  /// 进度展示）；[isCancelled] 返回真时提前停止并返回部分结果。
+  Future<List<PageContent>> paginateStreaming(
+    List<TextNode> nodes, {
+    void Function(List<PageContent> donePages)? onPartial,
+    int batchSize = 40,
+    bool Function()? isCancelled,
+  }) async {
+    if (nodes.isEmpty) return [];
+
+    final textPainter = TextPainter(
+      textDirection: TextDirection.ltr,
+    );
+    try {
+      final contentWidth =
+          math.max(0.0, viewWidth - config.horizontalPadding * 2);
+      final contentHeight = viewHeight;
+      final cursor = _PaginationCursor();
+
+      var processed = 0;
+      for (final node in nodes) {
+        if (isCancelled?.call() ?? false) break;
+        _processNode(node, cursor, textPainter, contentWidth, contentHeight);
+        processed++;
+        if (processed % batchSize == 0) {
+          // 批间让渡：等一个事件循环轮次，UI 可渲染一帧
+          await Future<void>.delayed(Duration.zero);
+          onPartial?.call(_copyOf(cursor.pages));
+        }
+      }
+
+      if (cursor.currentPageNodes.isNotEmpty) {
+        cursor.pages.add(PageContent(
+          nodes: List.from(cursor.currentPageNodes),
+          pageIndex: cursor.pages.length,
+        ));
+      }
+      onPartial?.call(_copyOf(cursor.pages));
+      return cursor.pages;
+    } finally {
+      // 释放原生段落资源（TextPainter.text 置空以解引用旧段落）
+      textPainter.text = null;
+    }
+  }
+
+  List<PageContent> _copyOf(List<PageContent> pages) =>
+      List.of(pages, growable: false);
+
+  /// 单节点分页核心（同步 [paginate] 与流式 [paginateStreaming] 共用）：
+  /// 放得下则入当前页；段落超高切分多段逐段分配；非段落超高入新页顶部。
+  void _processNode(
+    TextNode node,
+    _PaginationCursor cursor,
+    TextPainter textPainter,
+    double contentWidth,
+    double contentHeight,
+  ) {
+    void flushPage() {
+      if (cursor.currentPageNodes.isEmpty) return;
+      cursor.pages.add(PageContent(
+        nodes: List.from(cursor.currentPageNodes),
+        pageIndex: cursor.pages.length,
+      ));
+      cursor.currentPageNodes.clear();
+      cursor.currentPageHeight = 0.0;
+    }
+
+    final nodeHeight = _measureNodeHeight(node, textPainter, contentWidth);
+
+    // 当前节点放不下当前页剩余空间 → 翻页
+    if (cursor.currentPageHeight + nodeHeight > contentHeight + _epsilon &&
+        cursor.currentPageNodes.isNotEmpty) {
+      flushPage();
+    }
+
+    if (nodeHeight <= contentHeight + _epsilon) {
+      cursor.currentPageNodes.add(node);
+      cursor.currentPageHeight += nodeHeight;
+    } else if (node.type == NodeType.paragraph) {
+      // 单个段落超高：按页高切分为多段，再逐段分配（含当前页剩余空间），保证不溢出
+      // 切分目标高度扣除段落间距，使切出的每段测量高度（含间距）不超过页高
+      final segments = _splitParagraph(
+        node,
+        textPainter,
+        contentWidth,
+        math.max(1.0, contentHeight - config.paragraphSpacing),
+      );
+      for (final segment in segments) {
+        final segHeight =
+            _measureNodeHeight(segment, textPainter, contentWidth);
+        if (cursor.currentPageHeight + segHeight > contentHeight + _epsilon &&
+            cursor.currentPageNodes.isNotEmpty) {
+          flushPage();
+        }
+        cursor.currentPageNodes.add(segment);
+        cursor.currentPageHeight += segHeight;
+      }
+    } else {
+      // 非段落超高（罕见）：放入新页顶部，宁可截断视觉也不无限翻页
+      cursor.currentPageNodes.add(node);
+      cursor.currentPageHeight += nodeHeight;
+    }
   }
 
   double _measureNodeHeight(TextNode node, TextPainter textPainter, double width) {
@@ -198,4 +271,11 @@ class PageLayout {
         fontSize: config.fontSize + 6,
         fontWeight: FontWeight.w700,
       );
+}
+
+/// 分页游标：跨批次累积的页列表与当前页状态（流式与同步排版共用）
+class _PaginationCursor {
+  final List<PageContent> pages = [];
+  final List<TextNode> currentPageNodes = [];
+  double currentPageHeight = 0.0;
 }

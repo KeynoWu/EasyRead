@@ -13,6 +13,7 @@ import 'package:easy_read/features/bookshelf/domain/entities/book.dart';
 import 'package:easy_read/features/reader/data/models/chapter_model.dart';
 import 'package:easy_read/features/reader/data/models/reading_progress_model.dart';
 import 'package:easy_read/features/reader/data/repositories/reader_repository_impl.dart';
+import 'package:easy_read/features/settings/domain/entities/chinese_conversion.dart';
 import 'package:easy_read/features/reader/domain/entities/book_detail.dart' as reader;
 import 'package:easy_read/features/reader/domain/entities/chapter.dart';
 import 'package:easy_read/features/reader/domain/entities/chapter_catalog.dart';
@@ -135,6 +136,7 @@ class _FakeReaderRepo extends ReaderRepositoryImpl {
     required String sourceId,
     String? detailUrl,
     Map<String, String> variables = const {},
+    ChineseConversionMode chineseMode = ChineseConversionMode.original,
   }) async {
     return Chapter(
       id: 'c-$chapterIndex',

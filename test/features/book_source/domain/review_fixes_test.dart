@@ -36,12 +36,14 @@ void main() {
   });
 
   group('RuleTemplate <page,N> 占位符(审查修复)', () {
-    test('page=null 按第 1 页取段,不再残留占位符', () {
+    test('page=null 保留占位符（Legado AnalyzeUrl page?.let 语义）', () {
       final out = RuleTemplate.interpolate(
         'https://a.com/list/<1,50,100>.html',
       );
-      expect(out, 'https://a.com/list/1.html');
-      expect(out.contains('<'), isFalse);
+      // 与 Legado 一致：page 未提供时 <page,N> 占位符原样保留，
+      // 待真实翻页传入 page 后再解析
+      expect(out, 'https://a.com/list/<1,50,100>.html');
+      expect(out.contains('<'), isTrue);
     });
 
     test('page 已知时行为不变:取第 page 段', () {

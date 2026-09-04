@@ -4,8 +4,51 @@ import 'package:easy_read/core/data/cookie_jar_service.dart';
 import 'package:easy_read/features/book_source/domain/entities/book_source.dart';
 import 'package:easy_read/features/search/data/repositories/search_repository_impl.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'dart:typed_data';
 
 class _HeaderCapturingClient implements DioClient {
+  @override
+  Future<Uint8List> getBytes(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? concurrentRate,
+    CancelToken? cancelToken,
+  }) async => Uint8List(0);
+
+  @override
+  Future<String> requestString(
+    String url, {
+    String method = 'GET',
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    int retry = 0,
+    CancelToken? cancelToken,
+  }) async {
+    if (method.toUpperCase() == 'POST' && body != null) {
+      return postForm(
+        url,
+        headers: headers,
+        body: body,
+        sourceId: sourceId,
+        concurrentRate: concurrentRate,
+        charset: charset,
+        cancelToken: cancelToken,
+      );
+    }
+    return getString(
+      url,
+      headers: headers,
+      sourceId: sourceId,
+      concurrentRate: concurrentRate,
+      charset: charset,
+      cancelToken: cancelToken,
+    );
+  }
+
   Map<String, String>? lastHeaders;
   String? lastPostUrl;
   String? lastPostBody;
@@ -41,6 +84,24 @@ class _HeaderCapturingClient implements DioClient {
   }
 
   @override
+  @override
+  Future<(String, Map<String, List<String>>, int)> getResponse(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    return ('', const <String, List<String>>{}, 200);
+  }
+
+  int loginUrlHits = 0;
+
+  /// loginUrl 响应模拟的 Set-Cookie（测试可注入）
+  List<String> loginSetCookies = const [];
+
+  @override
   Future<Map<String, List<String>>> getResponseHeaders(
     String url, {
     Map<String, String>? headers,
@@ -49,6 +110,10 @@ class _HeaderCapturingClient implements DioClient {
     String? concurrentRate,
     CancelToken? cancelToken,
   }) async {
+    if (url.contains('/login')) {
+      loginUrlHits++;
+      if (loginSetCookies.isNotEmpty) return {'set-cookie': loginSetCookies};
+    }
     return {};
   }
 
@@ -66,6 +131,20 @@ class _HeaderCapturingClient implements DioClient {
   }
 
 @override
+  @override
+  Future<(String, Map<String, List<String>>)> postFormFull(
+    String url, {
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    return ('', const <String, List<String>>{});
+  }
+
+  @override
   Future<String> postForm(
     String url, {
     Map<String, String>? headers,
@@ -492,5 +571,128 @@ void main() {
     expect(debug.success, isTrue);
     expect(client.getCallCount, 1);
     expect(debug.results, isNotEmpty);
+  });
+
+  test('全 JS searchUrl：@js: 以 key 绑定生成 URL', () async {
+    final client = _HeaderCapturingClient();
+    final repo = SearchRepositoryImpl(client: client);
+    const source = BookSource(
+      id: 'src-js',
+      name: 'JS源',
+      bookSourceUrl: 'https://example.com',
+      rules: {
+        'searchUrl': '@js:"https://example.com/jssearch?q=" + key',
+        'bookList': 'div.item',
+        'bookName': 'h3.title',
+        'bookDetailUrl': 'a.detail',
+      },
+    );
+
+    final results = await repo.searchWithSource('abc', source);
+    expect(results, isNotEmpty);
+    expect(client.lastGetUrl, 'https://example.com/jssearch?q=abc');
+  });
+
+  test('URL,{json} 选项 headers 覆盖源级并带 retry 透传', () async {
+    final client = _HeaderCapturingClient();
+    final repo = SearchRepositoryImpl(client: client);
+    const source = BookSource(
+      id: 'src-opt',
+      name: '选项源',
+      bookSourceUrl: 'https://example.com',
+      rules: {
+        'searchUrl': 'https://example.com/opt,{"method":"POST",'
+            '"body":"k={{key}}","headers":{"X-Opt":"v","X-Custom":"2"},'
+            '"retry":"2"}',
+        'bookList': 'div.item',
+        'bookName': 'h3.title',
+        'bookDetailUrl': 'a.detail',
+      },
+    );
+
+    final results = await repo.searchWithSource('小说', source);
+    expect(results, isNotEmpty);
+    expect(client.lastPostUrl, 'https://example.com/opt');
+    expect(client.lastPostBody, 'k=%E5%B0%8F%E8%AF%B4');
+    // 选项 headers 覆盖源级同名头
+    expect(client.lastHeaders!['X-Opt'], 'v');
+    expect(client.lastHeaders!['X-Custom'], '2');
+  });
+
+  test('§三-7 loginCheckJs error: 前缀 → 登录失效专用错误', () async {
+    final client = _HeaderCapturingClient();
+    final repo = SearchRepositoryImpl(client: client);
+    const source = BookSource(
+      id: 'login-src',
+      name: '需登录源',
+      bookSourceUrl: 'https://example.com',
+      rules: {
+        'searchUrl': 'https://example.com/search?q={{key}}',
+        'bookList': 'div.item',
+        'bookName': 'h3.title',
+        'bookDetailUrl': 'a.detail',
+        'loginCheckJs': 'error:请先登录',
+      },
+    );
+
+    await expectLater(
+      repo.searchWithSource('测试', source, throwOnError: true),
+      throwsA(
+        isA<SourceLoginExpiredException>()
+            .having((e) => e.message, 'message', contains('请先登录')),
+      ),
+    );
+  });
+
+  test('§三-7 logoutSource 立即失效内存会话缓存（不等 TTL）', () async {
+    final client = _HeaderCapturingClient()
+      ..loginSetCookies = const ['session=old-token; Path=/'];
+    final jar = _FakeCookieJar();
+    final repo = SearchRepositoryImpl(client: client, cookieJar: jar);
+    const source = BookSource(
+      id: 'logout-src',
+      name: '会话源',
+      bookSourceUrl: 'https://example.com',
+      rules: {
+        'searchUrl': 'https://example.com/search?q={{key}}',
+        'bookList': 'div.item',
+        'bookName': 'h3.title',
+        'bookDetailUrl': 'a.detail',
+        'loginUrl': 'https://example.com/login',
+        'enabledCookieJar': true,
+      },
+    );
+
+    // 第一次搜索：loginUrl 抓取 Set-Cookie 并入缓存
+    final first = await repo.searchWithSource('测试', source);
+    expect(first, isNotEmpty);
+    expect(client.loginUrlHits, 1);
+
+    // 登出后再次搜索：内存会话必须失效 → 重新走 loginUrl 拉取
+    await repo.logoutSource('logout-src');
+    await repo.searchWithSource('测试', source);
+    expect(client.loginUrlHits, 2, reason: '登出必须立即使内存会话缓存失效');
+  });
+
+  test('§三-7 startBrowser 校验 JS 且无 Cookie → 登录失效专用错误', () async {
+    final client = _HeaderCapturingClient();
+    final repo = SearchRepositoryImpl(client: client);
+    const source = BookSource(
+      id: 'browser-src',
+      name: '网页登录源',
+      bookSourceUrl: 'https://example.com',
+      rules: {
+        'searchUrl': 'https://example.com/search?q={{key}}',
+        'bookList': 'div.item',
+        'bookName': 'h3.title',
+        'bookDetailUrl': 'a.detail',
+        'loginCheckJs': r'java.startBrowserAwait("https://example.com/login")',
+      },
+    );
+
+    await expectLater(
+      repo.searchWithSource('测试', source, throwOnError: true),
+      throwsA(isA<SourceLoginExpiredException>()),
+    );
   });
 }

@@ -97,8 +97,9 @@ void main() {
     final value = await JsRuleExecutor.execute(html, rule);
     expect(
       value,
+      // md5Encode16 = md5 中段 16 位（Legado MD5Utils.kt substring(8,24)）
       '900150983cd24fb0d6963f7d28e17f72:'
-      'aGVsbG8=:hello:900150983cd24fb0',
+      'aGVsbG8=:hello:3cd24fb0d6963f7d',
     );
   });
 
@@ -154,6 +155,70 @@ java.createSymmetricCrypto(
       '104-101-108-108-111-32-119-111-114-108-100:'
       'hello world:'
       'kKqlous6dJBeu9i8g1UWTw==',
+    );
+  });
+
+  test('createSymmetricCrypto 流式模式对齐 JCE 向量（CTR/CFB/OFB）', () async {
+    // 向量来自 openssl -aes-128-ctr/-cfb/-ofb（key/iv 为 utf8 原文），
+    // 明文 49 字节跨块边界，验证反馈/计数器与尾部不齐块处理。
+    const rule = '''
+@js:var key='0123456789abcdef', iv='1234567890abcdef';
+var pt='hello world, longer text to cross block boundary!';
+var vecs={
+'AES/CTR/NoPadding':'2e7f3391f2d7e61e47e2fa2d57b421c4387a64068da89661ee39221d7424ce3b452b6ce752581b224cbe7e0f3564a4526a',
+'AES/CFB/NoPadding':'2e7f3391f2d7e61e47e2fa2d57b421c42c13df4165e81f11fd38aa3790021ebe93879615390a1938e6057ac3983e5ec31a',
+'AES/OFB/NoPadding':'2e7f3391f2d7e61e47e2fa2d57b421c4534dc8b502c0189f9f1ae6d5f971150d74e58e0c8ef81115fe4601024f7d8d6281'};
+var out=[];
+for (var t in vecs) {
+  var encOk = java.createSymmetricCrypto(t, key, iv).encryptHex(pt) === vecs[t];
+  var decOk = java.createSymmetricCrypto(t, key, iv).decryptStr(vecs[t]) === pt;
+  out.push(t + '=' + (encOk && decOk ? 'ok' : 'mismatch'));
+}
+out.join('|')''';
+    final value = await JsRuleExecutor.execute(html, rule);
+    expect(
+      value,
+      'AES/CTR/NoPadding=ok|AES/CFB/NoPadding=ok|AES/OFB/NoPadding=ok',
+    );
+  });
+
+  test('createSymmetricCrypto GCM 加解密/tag 校验与不支持形态', () async {
+    // GCM 向量来自 python cryptography AESGCM（16 字节 nonce 直通），
+    // 密文尾随 16 字节 tag；解密 tag 被篡改须返回空串。
+    const rule = '''
+@js:var key='0123456789abcdef', iv='1234567890abcdef';
+var gcm = java.createSymmetricCrypto('AES/GCM/NoPadding', key, iv);
+var enc = gcm.encryptHex('hello world');
+var dec = gcm.decryptStr('cd9083789297611c93c07c850d70f744614adc599ac3e65c460bae');
+var tampered = java.createSymmetricCrypto('AES/GCM/NoPadding', key, iv)
+  .decryptStr('cd9083789297611c93c07c850d70f744614adc599ac3e65c460baf');
+var badPadding = java.createSymmetricCrypto('AES/GCM', key, iv).encryptHex('x');
+[enc, dec, tampered, badPadding].join('|')''';
+    final value = await JsRuleExecutor.execute(html, rule);
+    expect(
+      value,
+      'cd9083789297611c93c07c850d70f744614adc599ac3e65c460bae|'
+      'hello world||',
+    );
+  });
+
+  test('createSymmetricCrypto 省略段与默认 padding（JCE 语义）', () async {    // 'AES' 等价 AES/ECB/PKCS5Padding；'AES/CTR' 等价 AES/CTR/PKCS5Padding
+    // （JCE 省略段默认），向量由 python cryptography 独立生成。
+    // 桥为记录-重放两遍模型：crypto 结果作内层参数的链式调用无法回放，
+    // 故这里全部用字面量向量。
+    const rule = '''
+@js:var key='0123456789abcdef', iv='1234567890abcdef';
+var ecbEnc = java.createSymmetricCrypto('AES', key).encryptBase64('hello world');
+var ecbDec = java.createSymmetricCrypto('AES', key).decryptStr('gWm+1O9JqIdFWcWyANqt5w==');
+var ctrEnc = java.createSymmetricCrypto('AES/CTR', key, iv).encryptBase64('hello world');
+var ctrDec = java.createSymmetricCrypto('AES/CTR', key, iv).decryptStr('Ln8zkfLX5h5H4voEct1Lrw==');
+var badLen = java.createSymmetricCrypto('AES/ECB/NoPadding', key).decryptStr('aaaa');
+[ecbEnc, ecbDec, ctrEnc, ctrDec, badLen].join('|')''';
+    final value = await JsRuleExecutor.execute(html, rule);
+    expect(
+      value,
+      'gWm+1O9JqIdFWcWyANqt5w==|hello world|'
+      'Ln8zkfLX5h5H4voEct1Lrw==|hello world|',
     );
   });
 
@@ -267,6 +332,27 @@ java.getElements('li').length + ':' + java.getElements('li').get(1).text()''';
     expect(value, '第一章-第二章');
   });
 
+  test('P1-9 getString isUrl=true 相对 URL 解析为绝对', () async {
+    const rule =
+        "@js:java.getString('a@href', '', true)";
+    final v = await JsRuleExecutor.execute(
+      '<div><a href="/book/1">书</a></div>',
+      rule,
+      baseUrl: 'https://source.example.com/detail?id=1',
+    );
+    expect(v, 'https://source.example.com/book/1');
+  });
+
+  test('P1-9 getString unescape=true HTML 反转义', () async {
+    const rule =
+        "@js:java.getString('h1', true)";
+    final v = await JsRuleExecutor.execute(
+      '<h1>a&amp;b &lt;c&gt;</h1>',
+      rule,
+    );
+    expect(v, 'a&b <c>');
+  });
+
   test('完整 JS 规则支持 java.toNumChapter 中文数字转换', () async {
     const rule = '''
 @js:java.toNumChapter('第一百二十章 风云再起') + '|' +
@@ -281,5 +367,87 @@ java.toNumChapter('第1章 开始')''';
       "@js:java.htmlFormat('<p>a &amp; b</p><script>bad()</script>')",
     );
     expect(value, 'a & b');
+  });
+
+  test('evalUrlJs 绑定 key/page/baseUrl/result（URL JS 段语义）', () async {
+    final value = await JsRuleExecutor.evalUrlJs(
+      "key + ':' + page + ':' + baseUrl + '|' + result",
+      key: '圣墟',
+      page: 2,
+      baseUrl: 'https://example.com',
+      result: 'https://example.com/s',
+    );
+    expect(value, '圣墟:2:https://example.com|https://example.com/s');
+  });
+
+  test('evalUrlJs java 桥取真实值（两遍记录-重放）', () async {
+    final value = await JsRuleExecutor.evalUrlJs(
+      "java.md5Encode('abc')",
+      baseUrl: 'https://example.com',
+    );
+    expect(value, '900150983cd24fb0d6963f7d28e17f72');
+  });
+
+  test('evalUrlJs 表达式结果与黑名单', () async {
+    expect(
+      await JsRuleExecutor.evalUrlJs('"https://a.com/" + (1 + 2)'),
+      'https://a.com/3',
+    );
+    // 黑名单命中不给执行机会，返回空串
+    expect(await JsRuleExecutor.evalUrlJs("var x = '_ffiNotify'; x"), '');
+  });
+
+  test('§三-7 java.getCookie 按二级域名兜底（www 存 m 读）', () async {
+    const rule = r"@js:java.getCookie('https://m.example.com/book')";
+    final cookies = <String, String>{
+      'https://www.example.com/login': 'token=abc; sid=1',
+    };
+    final value = await JsRuleExecutor.execute(
+      html,
+      rule,
+      baseUrl: 'https://m.example.com/',
+      cookies: cookies,
+    );
+    expect(value, 'token=abc; sid=1');
+  });
+
+  test('§三-7 java.getCookie 精确键优先于二级域名兜底', () async {
+    const rule = r"@js:java.getCookie('https://m.example.com/book')";
+    final cookies = <String, String>{
+      'https://www.example.com/login': 'from=www',
+      'https://m.example.com/other': 'from=m',
+    };
+    final value = await JsRuleExecutor.execute(
+      html,
+      rule,
+      baseUrl: 'https://m.example.com/',
+      cookies: cookies,
+    );
+    expect(value, 'from=m');
+  });
+
+  test('§三-7 cookie.getCookie 同样按二级域名兜底；无匹配返回空', () async {
+    final cookies = <String, String>{
+      'https://members.ex.com/': 'k=v',
+    };
+    expect(
+      await JsRuleExecutor.execute(
+        html,
+        r"@js:cookie.getCookie('https://sub.ex.com/page')",
+        baseUrl: 'https://sub.ex.com/',
+        cookies: cookies,
+      ),
+      'k=v',
+    );
+    expect(
+      await JsRuleExecutor.execute(
+        html,
+        r"@js:java.getCookie('https://other.org/x')",
+        baseUrl: 'https://other.org/',
+        cookies: cookies,
+      ) ??
+          '',
+      '',
+    );
   });
 }

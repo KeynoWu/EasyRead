@@ -37,10 +37,30 @@ void main() {
       expect(result, ['缓存1']);
     });
 
-    test('&& 组合前者有结果则优先', () {
+    test('Legado && 组合：全非空顺序拼接（AnalyzeByJSonPath getList）', () {
       final result =
           JsonPathEngine.queryString(json, r'$.data[*].name&&$.book_data[0]');
+      expect(result, ['书籍A', '书籍B', '缓存1']);
+    });
+
+    test('Legado || 组合：首个非空即止', () {
+      final result = JsonPathEngine.queryString(
+          json, r'$.data[*].name||$.book_data[0]');
       expect(result, ['书籍A', '书籍B']);
+      final fallback = JsonPathEngine.queryString(
+          json, r'$.data[*].non_exist||$.book_data[0]');
+      expect(fallback, ['缓存1']);
+    });
+
+    test('P1-3 JSON 内容 + 裸规则默认走 JSONPath（Legado isJSON）', () {
+      // 无 $ 前缀的字段规则在 JSON 内容上按相对 JSONPath 解析
+      final viaEngine =
+          RuleEngine.extractTextList(json, 'data[*].name');
+      expect(viaEngine, ['书籍A', '书籍B']);
+      final single = RuleEngine.extractText(json, 'data[0].name');
+      expect(single, '书籍A');
+      final list = RuleEngine.extractElements(json, 'data[*]');
+      expect(list, isNotEmpty);
     });
 
     test('中文 key 支持', () {

@@ -19,6 +19,11 @@ class PurifyRule {
   /// 单规则执行超时(毫秒);null 用 [kPurifyDefaultTimeoutMs]
   final int? timeoutMs;
 
+  /// replacement 是否按纯字面量替换（isRegex=false 的普通文本规则）。
+  /// 对齐 Legado ContentProcessor：非正则规则走 Kotlin String.replace
+  /// 纯字面替换（不展开 $N），正则规则走 appendReplacement（展开 $N）。
+  final bool literalReplacement;
+
   const PurifyRule({
     this.id = '',
     required this.pattern,
@@ -27,6 +32,7 @@ class PurifyRule {
     this.scope,
     this.excludeScope,
     this.timeoutMs,
+    this.literalReplacement = false,
   });
 
   RegExp get regex => RegExp(pattern, caseSensitive: caseSensitive);
@@ -159,6 +165,35 @@ class RegexPurifier {
     return false;
   }
 
+  /// 展开 replacement 中的捕获组反向引用（对齐 Legado 非 JS 路径的
+  /// Java appendReplacement 语义，RegexExtensions.kt:43；与 JS 路径
+  /// js_purifier._expandCaptures 保持同一套约定，消除双路径不一致）：
+  /// - `$N`：第 N 个捕获组（`$0` = 整个匹配）；组不存在 → 空串
+  ///   （Legado 对不存在的组直接抛错弃整条规则，此处取空更宽容）
+  /// - `$&`：整个匹配（Java 无此语法会抛错，按 JS 习惯统一支持）
+  /// - `$$` / `\$`：字面 `$`（后者兼容 Legado 存量规则的 Java 转义写法）
+  /// - 其余孤立 `$`：保持字面
+  static String expandCaptures(String replacement, Match m) {
+    if (!replacement.contains(r'$') && !replacement.contains(r'\')) {
+      return replacement;
+    }
+    return replacement.replaceAllMapped(
+      RegExp(r'\$\$|\$&|\\\$|\$(\d+)'),
+      (d) {
+        if (d.group(0) == r'$$' || d.group(0) == r'\$') return r'$';
+        if (d.group(0) == r'$&') return m.group(0) ?? '';
+        final index = int.parse(d.group(1)!);
+        if (index == 0) return m.group(0) ?? '';
+        if (index <= m.groupCount) return m.group(index) ?? '';
+        return '';
+      },
+    );
+  }
+
+  /// 单条 replacement 应用：字面规则原样替换，正则规则展开 $N。
+  static String _applyReplacement(PurifyRule rule, Match m) =>
+      rule.literalReplacement ? rule.replacement : expandCaptures(rule.replacement, m);
+
   /// 同步净化:仅 Dart 规则(无超时保护,仅用于测试/短文本)
   String purify(String input) {
     var result = input;
@@ -166,11 +201,9 @@ class RegexPurifier {
       try {
         result = result.replaceAllMapped(
           _compiled(rule),
-          // 字面替换语义:与 JS 路径(js_purifier._expandCaptures)保持一致。
-          // Dart 的 replaceAll 会把 replacement 中的 $ 当模板语法解析
-          // ($1/$&/$$ 会抛错或错误替换),而 Legado 净化规则的
-          // replacement 是纯文本(可含金额等字面 $),必须逐匹配字面替换。
-          (_) => rule.replacement,
+          // 不能用 Dart 自带的 replacement 模板解析（$1/$& 语义不同且
+          // 非法 $ 会抛错），统一走 expandCaptures 自定义展开。
+          (m) => _applyReplacement(rule, m),
         );
       } catch (_) {
         // 单条规则异常(如非法正则):跳过,不影响其他规则
@@ -218,7 +251,14 @@ class RegexPurifier {
     try {
       isolate = await Isolate.spawn(
         _purifyIsolateEntry,
-        [port.sendPort, rule.pattern, rule.replacement, rule.caseSensitive, input],
+        [
+          port.sendPort,
+          rule.pattern,
+          rule.replacement,
+          rule.caseSensitive,
+          input,
+          rule.literalReplacement,
+        ],
         onExit: exitPort.sendPort,
       );
     } catch (_) {
@@ -260,7 +300,7 @@ class RegexPurifier {
   static String _purifySync(PurifyRule rule, String input) {
     return input.replaceAllMapped(
       RegExp(rule.pattern, caseSensitive: rule.caseSensitive),
-      (_) => rule.replacement,
+      (m) => _applyReplacement(rule, m),
     );
   }
 
@@ -273,11 +313,12 @@ class RegexPurifier {
       final replacement = args[2]! as String;
       final caseSensitive = args[3]! as bool;
       final input = args[4]! as String;
+      final literal = args[5] as bool? ?? false;
       sendPort.send([
         true,
         input.replaceAllMapped(
           RegExp(pattern, caseSensitive: caseSensitive),
-          (_) => replacement,
+          (m) => literal ? replacement : expandCaptures(replacement, m),
         ),
       ]);
     } catch (_) {

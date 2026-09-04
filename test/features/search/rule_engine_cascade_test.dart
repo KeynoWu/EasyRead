@@ -128,10 +128,16 @@ void main() {
           <span>a</span><span>b</span><span>c</span><span>d</span>
         </div>
       ''';
-      // 冒号分隔为范围语义（0 到 2 含端点），与 [0:2] 一致
+      // 旧写法 `:` 为离散索引分隔符（AnalyzeByJSoup.kt:283「':'分隔索引」）：
+      // `.0:2` = 取第 0、2 个（非范围）
       expect(
         RuleEngine.extractTextList(html, 'class.list@tag.span.0:2@text'),
-        ['a', 'b', 'c'],
+        ['a', 'c'],
+      );
+      // 旧写法排除模式 `!0:3` = 排除第 0、3 个
+      expect(
+        RuleEngine.extractTextList(html, 'class.list@tag.span!0:3@text'),
+        ['b', 'c'],
       );
       expect(
         RuleEngine.extractTextList(html, 'class.list@tag.span!1@text'),
@@ -145,29 +151,46 @@ void main() {
         RuleEngine.extractTextList(html, 'class.list@tag.span[0:2]@text'),
         ['a', 'b', 'c'],
       );
+      // `[]` 新语法专属：[-1:0] 反向列表
       expect(
         RuleEngine.extractTextList(html, 'class.list@tag.span[-1:0]@text'),
         ['d', 'c', 'b', 'a'],
+      );
+      // 旧写法 `.-1:0` = 离散取倒数第一 + 第一个（无反向语义）
+      expect(
+        RuleEngine.extractTextList(html, 'class.list@tag.span.-1:0@text'),
+        ['d', 'a'],
       );
       expect(
         RuleEngine.extractTextList(html, 'class.list@children.2@text'),
         ['c'],
       );
     });
-    test('旧式索引 step=0 被拒绝（不死循环、按无匹配处理）', () {
+    test('旧式离散索引重复项去重、越界跳过（无死循环风险）', () {
       const html = '''
         <div class="list">
           <span>a</span><span>b</span><span>c</span><span>d</span>
         </div>
       ''';
-      // 修复前：parseLegacyIndexes 不拦 step==0，expandIndexes "i += 0" 死循环
+      // 旧写法无步长概念：1:0:0 = 离散 {1,0,0}，去重后取第 1、0 个；
+      // 离散 int 直接消费，不存在 "i += 0" 死循环（区间/步长只在 [] 语法）
       expect(
         RuleEngine.extractTextList(html, 'class.list@tag.span.1:0:0@text'),
-        isEmpty,
+        ['b', 'a'],
       );
       expect(
         RuleEngine.extractTextList(html, 'class.list@children.1:0:0@text'),
-        isEmpty,
+        ['b', 'a'],
+      );
+      // 负索引 -1 = 倒数第一（Legado it+len 语义）
+      expect(
+        RuleEngine.extractTextList(html, 'class.list@tag.span.2:-1@text'),
+        ['c', 'd'],
+      );
+      // 越界离散索引跳过（5 越界仅取 0）
+      expect(
+        RuleEngine.extractTextList(html, 'class.list@tag.span.5:0@text'),
+        ['a'],
       );
     });
 
@@ -461,6 +484,47 @@ void main() {
       );
     });
 
+    test('P1-2 索引端点省略：[:2] / [1:] / [:]', () {
+      const html = '''
+        <ul>
+          <li>一</li><li>二</li><li>三</li><li>四</li>
+        </ul>
+      ''';
+      expect(
+        RuleEngine.extractTextList(html, r'tag.li[:2]'),
+        ['一', '二', '三'],
+      );
+      expect(
+        RuleEngine.extractTextList(html, r'tag.li[1:]'),
+        ['二', '三', '四'],
+      );
+      expect(
+        RuleEngine.extractTextList(html, r'tag.li[:]'),
+        ['一', '二', '三', '四'],
+      );
+    });
+
+    test('P1-2 索引降序：[3:1] / 负端点 [-2:]（Legado downTo 语义）', () {
+      const html = '''
+        <ul>
+          <li>一</li><li>二</li><li>三</li><li>四</li>
+        </ul>
+      ''';
+      expect(
+        RuleEngine.extractTextList(html, r'tag.li[3:1]'),
+        ['四', '三', '二'],
+      );
+      expect(
+        RuleEngine.extractTextList(html, r'tag.li[-2:]'),
+        ['三', '四'],
+      );
+      // [-1:0] 反向列表（Legado 特殊用法，走降序路径）
+      expect(
+        RuleEngine.extractTextList(html, r'tag.li[-1:0]'),
+        ['四', '三', '二', '一'],
+      );
+    });
+
     test('cascade 排除索引 [!0]', () {
       expect(
         RuleEngine.extractTextList(html, r'tag.li[!0]'),
@@ -476,4 +540,44 @@ void main() {
     });
   });
 
+    test('P1-5 XPath last()/last()-N 取倒数', () {
+      const html = '<ul><li>一</li><li>二</li><li>三</li><li>四</li></ul>';
+      expect(RuleEngine.extractText(html, r'//li[last()]'), '四');
+      expect(RuleEngine.extractText(html, r'//li[last()-1]'), '三');
+      expect(RuleEngine.extractText(html, r'//li[last()-2]'), '二');
+    });
+
+    test('P1-5 XPath != 与 starts-with 与 or 与 not', () {
+      const html = '<ul>'
+          '<li data-x="a" disabled>一</li>'
+          '<li data-x="b">二</li>'
+          '<li data-x="value3">三</li>'
+          '<li data-x="d">四</li>'
+          '</ul>';
+      // !=：排除指定值
+      expect(
+        RuleEngine.extractTextList(html, r'//li[@data-x!="a"]'),
+        ['二', '三', '四'],
+      );
+      // starts-with
+      expect(
+        RuleEngine.extractTextList(html, r'//li[starts-with(@data-x,"v")]'),
+        ['三'],
+      );
+      // or
+      expect(
+        RuleEngine.extractTextList(html, r'//li[@data-x="a" or @data-x="b"]'),
+        ['一', '二'],
+      );
+      // not(属性存在)
+      expect(
+        RuleEngine.extractTextList(html, r'//li[not(@disabled)]'),
+        ['二', '三', '四'],
+      );
+      // not(eq)
+      expect(
+        RuleEngine.extractTextList(html, r'//li[not(@data-x="b")]'),
+        ['一', '三', '四'],
+      );
+    });
 }

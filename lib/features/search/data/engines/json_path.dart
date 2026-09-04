@@ -5,7 +5,9 @@ import 'dart:convert';
 /// - `..key` 递归下降（收集所有层级的 key）
 /// - `[*]` 展开数组、`[N]` 索引
 /// - `[?(expr)]` 过滤：`@` 绑定数组元素，支持比较、&&/||、括号分组
-/// - `expr1&&expr2` 组合：前一个无结果时用后一个（Legado 语义）
+/// - 顶层组合（对齐 Legado AnalyzeByJSonPath getString/getList）：
+///   `&&` 全非空拼接、`||` 首个非空、`%%` 下标交错合并；
+///   混合使用时分隔符类型取最后出现者（RuleAnalyzer.elementsType 语义）
 class JsonPathEngine {
   static final JsonPathEngine instance = JsonPathEngine();
 
@@ -15,13 +17,34 @@ class JsonPathEngine {
   /// 查询 JSON 数据，返回匹配值列表（空 = 无结果）
   List<dynamic> query(dynamic data, String path) {
     if (path.isEmpty) return [];
-    // Legado && 组合：取第一个有结果的表达式（忽略过滤器 [?(...)] 内部的 &&）
-    if (path.contains('&&')) {
-      for (final expr in _splitTopLevelAnd(path)) {
+    final split = _splitTopLevelCombinators(path);
+    if (split.segments.length > 1) {
+      final results = <List<dynamic>>[];
+      for (final expr in split.segments) {
         final result = _querySingle(data, expr.trim());
-        if (result.isNotEmpty) return result;
+        if (result.isNotEmpty) {
+          results.add(result);
+          if (split.type == '||') break; // 首个非空即止
+        }
       }
-      return [];
+      if (results.isEmpty) return [];
+      if (split.type == '||') return results.first;
+      if (split.type == '%%') {
+        // 下标交错合并（Legado getList 的 %% 分支）
+        final merged = <dynamic>[];
+        for (var i = 0; i < results.first.length; i++) {
+          for (final list in results) {
+            if (i < list.length) merged.add(list[i]);
+          }
+        }
+        return merged;
+      }
+      // &&：全非空顺序拼接（Legado getList 的 addAll 分支）
+      final merged = <dynamic>[];
+      for (final list in results) {
+        merged.addAll(list);
+      }
+      return merged;
     }
     return _querySingle(data, path);
   }
@@ -78,8 +101,11 @@ class JsonPathEngine {
 
   /// 按顶层 && 拆分（Legado 组合语义），忽略 [?(...)] 过滤器内部、
   /// ['key'] 属性名与字符串字面量中的 &&，避免误拆过滤表达式
-  List<String> _splitTopLevelAnd(String path) {
+  /// 顶层组合切分：按 `&&`/`||`/`%%` 切分（引号内、`[]` 过滤器内不切），
+  /// [type] 为最后出现的分隔符类型（Legado elementsType 语义）。
+  _CombinatorSplit _splitTopLevelCombinators(String path) {
     final parts = <String>[];
+    var type = '&&';
     var depth = 0; // [ 嵌套深度（过滤器内部为 1+）
     var quote = 0; // 0=无 1=单引号 2=双引号
     var start = 0;
@@ -105,17 +131,18 @@ class JsonPathEngine {
         depth++;
       } else if (c == ']') {
         if (depth > 0) depth--;
-      } else if (c == '&' &&
+      } else if (depth == 0 &&
           i + 1 < path.length &&
-          path[i + 1] == '&' &&
-          depth == 0) {
+          (c == '&' || c == '|' || c == '%') &&
+          path[i + 1] == c) {
         parts.add(path.substring(start, i));
-        i++; // 跳过第二个 &
+        type = c == '&' ? '&&' : (c == '|' ? '||' : '%%');
+        i++; // 跳过分隔符第二个字符
         start = i + 1;
       }
     }
     parts.add(path.substring(start));
-    return parts;
+    return _CombinatorSplit(parts, type);
   }
 
   /// 递归收集所有层级 Map 中 [key] 的值；超过 [JsonPathEngine.maxDepth]
@@ -581,4 +608,12 @@ bool _compareValues(String op, dynamic left, dynamic right) {
       return c != null && c <= 0;
   }
   return false;
+}
+
+/// 顶层组合切分结果：segments + 分隔符类型
+class _CombinatorSplit {
+  final List<String> segments;
+  final String type;
+
+  const _CombinatorSplit(this.segments, this.type);
 }

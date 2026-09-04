@@ -3,6 +3,7 @@ import 'package:easy_read/features/search/data/engines/js_rule_executor.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  const html = '<div>占位</div>';
   group('jsLib 共享作用域（Legado jsLib 语义）', () {
     test('脚本字符串注入后规则内可调用', () async {
       final result = await JsRuleExecutor.execute(
@@ -31,6 +32,33 @@ void main() {
         jsLib: 'throw new Error("broken lib");',
       );
       expect(result, isNull);
+    });
+
+    test('P1-8 jsLib 顶层 const 多次 eval 不重复声明（单次注入）', () async {
+      // 修复前：lib 每次 eval 都拼入，全局词法环境 let/const 重复声明
+      // SyntaxError → 整规则降级 null
+      const rule = '<js>LIB_VERSION + 1</js>';
+      final v = await JsRuleExecutor.execute(
+        html,
+        rule,
+        jsLib: 'const LIB_VERSION = 42;',
+      );
+      expect(v, '43');
+    });
+
+    test('P1-8 jsLib JSON URL 条目：下载并注入（fetcher 桩）', () async {
+      JsRuleExecutor.fetcher = (url) async {
+        expect(url, 'https://lib.example.com/helper.js');
+        return 'function helper() { return "url-lib"; }';
+      };
+      const rule = '<js>helper()</js>';
+      final v = await JsRuleExecutor.execute(
+        html,
+        rule,
+        jsLib: '{"helper": "https://lib.example.com/helper.js"}',
+      );
+      expect(v, 'url-lib');
+      JsRuleExecutor.fetcher = null;
     });
 
     test('jsLib 缺省不注入', () async {

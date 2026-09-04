@@ -81,7 +81,10 @@ void main() {
     );
   });
 
-  test('page 缺省按第 1 页取段,占位符不残留(审查修复)', () {
-    expect(RuleTemplate.interpolate('/a<10,20>.html'), '/a10.html');
+  test('page 缺省占位符原样保留（Legado AnalyzeUrl page?.let 语义）', () {
+    // 旧「审查修复」按第 1 页取段系对 Legado 的误读：
+    // AnalyzeUrl.kt:192 page?.let —— page 为 null 时不替换，占位符保留，
+    // 待真实翻页请求传入 page 后再解析
+    expect(RuleTemplate.interpolate('/a<10,20>.html'), '/a<10,20>.html');
   });
 }

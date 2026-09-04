@@ -11,10 +11,53 @@ import 'package:easy_read/features/reader/data/models/reading_progress_model.dar
 import 'package:easy_read/features/reader/data/repositories/reader_repository_impl.dart';
 import 'package:easy_read/features/search/data/engines/js_rule_executor.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'dart:typed_data';
 import 'package:hive/hive.dart';
 
 /// 可配置的动态 mock：按 URL 返回不同 HTML，并记录调用
 class _DynamicClient implements DioClient {
+  @override
+  Future<String> requestString(
+    String url, {
+    String method = 'GET',
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    int retry = 0,
+    CancelToken? cancelToken,
+  }) async {
+    if (method.toUpperCase() == 'POST' && body != null) {
+      return postForm(
+        url,
+        headers: headers,
+        body: body,
+        sourceId: sourceId,
+        concurrentRate: concurrentRate,
+        charset: charset,
+        cancelToken: cancelToken,
+      );
+    }
+    return getString(
+      url,
+      headers: headers,
+      sourceId: sourceId,
+      concurrentRate: concurrentRate,
+      charset: charset,
+      cancelToken: cancelToken,
+    );
+  }
+
+  @override
+  Future<Uint8List> getBytes(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? concurrentRate,
+    CancelToken? cancelToken,
+  }) async => Uint8List(0);
+
   _DynamicClient(this.responder);
 
   final String Function(String url) responder;
@@ -33,6 +76,19 @@ class _DynamicClient implements DioClient {
     CancelToken? cancelToken,
   }) async {
     return responder(url);
+  }
+
+  @override
+  @override
+  Future<(String, Map<String, List<String>>, int)> getResponse(
+    String url, {
+    Map<String, String>? headers,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    return ('', const <String, List<String>>{}, 200);
   }
 
   @override
@@ -58,6 +114,19 @@ class _DynamicClient implements DioClient {
     CancelToken? cancelToken,
   }) async {
     return {};
+  }
+
+  @override
+  Future<(String, Map<String, List<String>>)> postFormFull(
+    String url, {
+    Map<String, String>? headers,
+    String? body,
+    String? sourceId,
+    String? concurrentRate,
+    String? charset,
+    CancelToken? cancelToken,
+  }) async {
+    return ('', const <String, List<String>>{});
   }
 
   @override

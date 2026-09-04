@@ -7,6 +7,7 @@ import 'package:flutter/services.dart'
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../domain/usecases/auto_switch_source.dart';
+import '../../data/repositories/reader_repository_impl.dart' show ChapterErrorKind;
 import '../providers/reader_provider.dart';
 import '../widgets/page_view_widget.dart';
 import '../../../../core/router/app_router.dart' show ReaderRouteArgs;
@@ -163,7 +164,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
 
   /// 章节加载失败 → 自动换源：设置开启且有可用替代源时，
   /// 尝试一次自动换源；成功后切换书源并重新加载章节。
-  Future<void> _maybeAutoSwitchSource() async {
+  /// [chapterIndex] 为出错章节：替代源将验证「同一章正文可取」
+  /// （对齐 Legado autoChangeSource 的 getContentAwait 验证）。
+  Future<void> _maybeAutoSwitchSource({required int chapterIndex}) async {
     if (_autoSwitchAttempted || !mounted) return;
     final enabled = await AutoSwitchSetting.load();
     if (!enabled || !mounted) return;
@@ -214,6 +217,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
           currentDetailUrl: widget.detailUrl,
           alternatives: usableAlternatives,
           variables: _variables,
+          chapterIndex: chapterIndex,
         );
     if (!mounted) return;
 
@@ -324,7 +328,13 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     // 自动换源后的再次失败（含手动重试）不再触发，需手动换源或重新进入。
     ref.listen<ReaderState>(readerProvider, (previous, next) {
       if (previous?.errorMessage == null && next.errorMessage != null) {
-        unawaited(_maybeAutoSwitchSource());
+        // 仅书源/规则层失败（sourceError）触发；瞬时网络异常
+        // （networkError，对齐 Legado：断网/超时不自动换源）不触发。
+        if (next.errorKind == ChapterErrorKind.sourceError) {
+          unawaited(
+            _maybeAutoSwitchSource(chapterIndex: next.errorChapterIndex ?? 0),
+          );
+        }
       }
     });
 
